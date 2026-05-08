@@ -1147,6 +1147,17 @@ class TempUserAdmissionDataSerializer(serializers.ModelSerializer):
         return AdmissionSectionWiseReadSerializer(sections, many=True).data
 
     # Extract school_class from dynamic fields
+    def get_fee_data(self, obj):
+
+        fee = AdmissionFee.objects.filter(
+            admission_number=obj.admission_number
+        ).first()
+
+        if fee:
+            return AdmissionFeeSerializer(fee).data
+
+        return None
+    
     def get_school_class(self, obj):
         field_value = obj.field_values.filter(
             field__map_to_student_field="school_class"
