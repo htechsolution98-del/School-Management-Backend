@@ -947,7 +947,7 @@ class FormFieldViewSet(RetrieveAPIView):
 
     def get_object(self):
         # Return only one active record (first one)
-        return self.get_queryset().first()
+        return self.get_queryset()
 
 
 # ===================================================
