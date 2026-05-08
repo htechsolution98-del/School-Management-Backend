@@ -1,3 +1,7 @@
+
+from django.shortcuts import redirect, render
+from django.urls import reverse
+
 from rest_framework.permissions import BasePermission
 from .models import UserModuleAccess
 
@@ -580,7 +584,12 @@ class SchoolView(ModelViewSet):
     def create(self, request, *args, **kwargs):
         super().create(request, *args, **kwargs)
         return Response({"message": "School created Successfully"}, status=201)
+    
+from rest_framework import generics
 
+class RazarDataView(generics.CreateAPIView):
+    
+    pass
 
 class StaffView(ModelViewSet):
     queryset = Staff.objects.all()
@@ -898,15 +907,14 @@ class AdmissionFormViewSet(ModelViewSet):
     lookup_field = "unique_link"
     # access form via UUID
 
-    def get_serializer_class(self):
-        return AdmissionFormSerializer
+    # def get_serializer_class(self):
+    #     return AdmissionFormSerializer
 
     def get_queryset(self):
         return AdmissionForm.objects.filter(school=self.request.user.school)
 
     def perform_create(self, serializer):
         serializer.save(school=self.request.user.school)
-        print(self.request.user)
 
     def create(self, request, *args, **kwargs):
         with transaction.atomic():
@@ -919,7 +927,6 @@ class AdmissionFormViewSet(ModelViewSet):
                 "message": "Form created successfully",
             },
             status=status.HTTP_201_CREATED,
-            # headers=headers,
         )
 
 
@@ -933,9 +940,10 @@ class FormFieldViewSet(RetrieveAPIView):
     def get_queryset(self):
 
         school = self.request.user.school
-
+        
         # Only active forms, read-only single record
-        return AdmissionForm.objects.filter(school=school, is_active=True)
+        
+        return AdmissionForm.objects.filter(school=school, is_active=True).first()
 
     def get_object(self):
         # Return only one active record (first one)
@@ -943,7 +951,7 @@ class FormFieldViewSet(RetrieveAPIView):
 
 
 # ===================================================
-# for admission form status change /
+# for admission form status change 
 class FormStatus(ModelViewSet):
     queryset = AdmissionForm.objects.all()
     serializer_class = ChangeFormStatus
@@ -979,6 +987,7 @@ class FormStatus(ModelViewSet):
 
 
 # for send form link
+
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def ShareFormLink(request):
@@ -987,13 +996,11 @@ def ShareFormLink(request):
         is_active=True
     ).first()
     
-    form_link = f"/admission/{form.unique_link}/"
+    form_link = f"api/admission/{form.unique_link}/"
 
     return Response({"form_link": form_link})
 
 
-from django.shortcuts import redirect, render
-from django.urls import reverse
 
 FRONTEND_LOGIN_URL = "https://edunet-one.vercel.app/login"
 
@@ -1174,32 +1181,89 @@ class CheckMobileAPIView(APIView):
             {"status": "new", "message": "Mobile number is available"},
             status=status.HTTP_200_OK,
         )
-
+        
+# import razorpay
 
 class RazorpayOrderView(APIView):
+
     def post(self, request):
-        amount = int(request.data.get("amount")) * 100
+
+        amount = request.data.get("amount")
         admission_number = request.data.get("admission_number")
-        # form_id = request.data.get("form_id")
 
-        admission_fee = AdmissionFee.objects.create(
-            amount=amount / 100,
-            admission_number=admission_number,
-        )
+        # Validation
+        if not amount:
+            return Response(
+                {"error": "Amount is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
+        if not admission_number:
+            return Response(
+                {"error": "Admission number is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            amount = int(amount) * 100
+        except ValueError:
+            return Response(
+                {"error": "Invalid amount"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Save temporary payment record
+        with transaction.atomic():
+            admission_fee = AdmissionFee.objects.create(
+                amount=amount / 100,
+                admission_number=admission_number,
+            )
+        
+#   ============FOR INDIVIDUAL SCHOOL =============
+        
+        # school = self.request.user.school
+        
+        # razorpay_data = RazorPayData.objects.filter(
+        #     school_id=school.id
+        # ).first()
+
+        # if not razorpay_data:
+        #     return Response(
+        #         {"error": "Razorpay configuration not found"},
+        #         status=status.HTTP_400_BAD_REQUEST,
+        #     )
+
+        # # Create dynamic razorpay client
+        # client = razorpay.Client(
+        #     auth=(
+        #         razorpay_data.razorpay_key_id,
+        #         razorpay_data.razorpay_secret_key,
+        #     )
+        # )
+# ----------------------------------------------------
+        # Create Razorpay Order
+        
         razor_order = client.order.create(
-            {"amount": amount, "currency": "INR", "payment_capture": 1}
+            {
+                "amount": amount,
+                "currency": "INR",
+                "payment_capture": 1,
+            }
         )
+
+        # Save order id
         admission_fee.razorpay_order_id = razor_order["id"]
         admission_fee.save()
 
         return Response(
             {
-                "id": razor_order["id"],  # ✅ FIXED
-                "key": settings.RAZOR_PAY_KEY_ID,  # ✅ FIXED
+                "id": razor_order["id"],
+                "key": settings.RAZOR_PAY_KEY_ID, #"key": razorpay_data.razorpay_key_id, FOR INDIVIDUAL SCHOOL
                 "amount": razor_order["amount"],
+                "currency": "INR",
                 "admission_number": admission_number,
-            }
+            },
+            status=status.HTTP_200_OK,
         )
 
 
@@ -1216,6 +1280,7 @@ class VerifyPaymentView(APIView):
         signature = data.get("razorpay_signature")
 
         admission_number = data.get("admission_number")
+        
         # Convert to integer if it's a string
         # student = Student.objects.filter(id =student_id).first()
 
@@ -1259,7 +1324,7 @@ class VerifyPaymentView(APIView):
             payment.razorpay_payment_id = payment_id
             payment.razorpay_signature = signature
             # payment.student = student
-            payment.school = request.user.school  # ✅ correct
+            payment.school = request.user.school  # correct
             payment.payment_mode = "online"
             payment.paid_at = timezone.now()
             payment.save()
@@ -1270,39 +1335,66 @@ class VerifyPaymentView(APIView):
         return Response({"status": "success"})
 
 
+
 class OffilinePaymentView(APIView):
+
     def post(self, request):
-        data = request.data
 
-        amount = int(request.data.get("amount"))
+        amount = request.data.get("amount")
+        admission_number = request.data.get("admission_number")
 
-        form_id = data.get("form_id")
-        student_id = data.get("student_id")
-        school = data.get("school")
-
-        student = Student.objects.filter(id=student_id).first()
-
-        if not student:
-            return Response({"error": "Student not found"}, status=404)
-
-        if student.details_done:
-            return Response({"error": "Payment process are already done"}, status=404)
-
-        school_data = School.objects.filter(id=school).first()
-        student_data = Student.objects.filter(id=student_id).first()
-
-        with transaction.atomic():
-            AdmissionFee.objects.create(
-                amount=amount,
-                school=school_data,
-                student=student_data,
-                payment_mode="offline",
+        # Validation
+        if not amount:
+            return Response(
+                {"error": "Amount is required"},
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
-            student.details_done = True
-            student.save()
+        if not admission_number:
+            return Response(
+                {"error": "Admission number is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-        return Response({"status": "success"})
+        try:
+            amount = int(amount)
+        except ValueError:
+            return Response(
+                {"error": "Invalid amount"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Check existing payment
+        existing_payment = AdmissionFee.objects.filter(
+            admission_number=admission_number,
+            payment_mode="offline",
+        ).first()
+
+        if existing_payment:
+            return Response(
+                {"error": "Offline payment already completed"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        with transaction.atomic():
+
+            payment = AdmissionFee.objects.create(
+                amount=amount,
+                admission_number=admission_number,
+                school=request.user.school,
+                payment_mode="offline",
+                paid_at=timezone.now(),
+            )
+
+        return Response(
+            {
+                "status": "success",
+                "payment_id": payment.id,
+                "admission_number": admission_number,
+                "payment_mode": "offline",
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 def get_receipt(request, student_id, form_id):

@@ -303,6 +303,7 @@ class Admission(models.Model):
     fee_amount = models.DecimalField(
         max_digits=10, decimal_places=2, null=True, blank=True
     )
+    pay_process = models.BooleanField(default=False)
 
     fee_verified = models.BooleanField(default=False)
 
@@ -404,9 +405,7 @@ class DocumentField(models.Model):
 
     school = models.ForeignKey(School, on_delete=models.CASCADE)
 
-    form = models.ForeignKey(
-        AdmissionForm, on_delete=models.CASCADE, related_name="document_fields"
-    )
+    form = models.ForeignKey(AdmissionForm, on_delete=models.CASCADE, related_name="document_fields")
 
     label = models.CharField(max_length=255)
 
@@ -470,7 +469,12 @@ class StudentVerify(models.Model):
     admission_number = models.CharField(max_length=100,null=True, blank=True)
     student = models.ForeignKey(Student,on_delete=models.CASCADE)
     clerk_verify = models.BooleanField(default=False)
-    
+
+
+class RazorPayData(models.Model):
+    school = models.ForeignKey(School, on_delete=models.CASCADE )
+    razorpay_key_id = models.CharField(max_length=255, blank=True, null=True)
+    razorpay_secret_key = models.CharField(max_length=255, blank=True, null=True)
     
 
 # # ======newww addd======

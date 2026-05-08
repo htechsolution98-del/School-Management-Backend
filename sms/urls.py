@@ -88,6 +88,7 @@ router.register(r'updateDocument', AdmissionDocumentViewSet, basename='updateDoc
 
 #AFTER ADMISSION SUDMISSION
 
+
 # =================VERIFY API================= 
 # Add GR Number --create student -create perents -create student,perent user
 
@@ -185,6 +186,7 @@ urlpatterns = [
     
     path('api/razor/order/',RazorpayOrderView.as_view()),
     path('api/payment/verify/',VerifyPaymentView.as_view()),
+    
     path('api/my-fees/', MyStudentFeeView.as_view()),
     path('api/student-fee/razor/order/', StudentFeeRazorpayOrderView.as_view()),
     path('api/student-fee/razor/verify/', StudentFeeRazorpayVerifyView.as_view()),

@@ -22,6 +22,8 @@ from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 import random
 from django.contrib.auth.models import Group
 
+from rest_framework import serializers
+from django.db.models import Q, Sum
 from django.contrib.auth import get_user_model
 
 User = get_user_model()
@@ -46,11 +48,7 @@ class SendOTPSerializer(serializers.Serializer):
         return data
 
 
-import random
 
-# from django.contrib.auth.models import User
-from rest_framework import serializers
-from django.db.models import Q, Sum
 
 
 class VerifyOTPSerializer(serializers.Serializer):
@@ -68,8 +66,8 @@ class VerifyOTPSerializer(serializers.Serializer):
         school_id = data.get("school_id")
         school_slug = data.get("school_slug")
 
-        print(school_id)
-        print(school_slug)
+        # print(school_id)
+        # print(school_slug)
         if not school_id or not school_slug:
             raise serializers.ValidationError(
                 {"message": "Provide school_id or school_slug"}
@@ -294,6 +292,11 @@ class SchoolSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Duplicate features are not allowed.")
 
         return value
+    
+class RazarDataSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = RazorPayData
+        fields = '__all__'
 
 
 class StaffSerializer(serializers.ModelSerializer):
@@ -573,6 +576,7 @@ class AdmissionFormSerializer(serializers.ModelSerializer):
             # ---------------- document fields ----------------
             for label in document_fields:
                 DocumentField.objects.create(form=form, school=school, label=label)
+                print(label)
 
             # ---------------- fee structures ----------------
             if form.fee_type == "individual":
@@ -617,7 +621,7 @@ class ChangeFormStatus(serializers.ModelSerializer):
     class Meta:
         model = AdmissionForm
         fields = ["is_active"]
-
+    
 
 # --------Admission Form submite serializers---------
 # 1class
@@ -1083,8 +1087,20 @@ class AdmissionSectionWiseReadSerializer(serializers.Serializer):
     field_values = AdmissionFieldValueReadSerializer(many=True)
 
 
+class AdmissionFeeSerializer(serializers.ModelSerializer):
+
+    class Meta:
+        model = AdmissionFee
+        fields = [
+            "amount",
+            "currency",
+            "payment_mode",
+            "paid_at",
+        ]
+        
 class TempUserAdmissionDataSerializer(serializers.ModelSerializer):
     sections = serializers.SerializerMethodField()
+    fee_data = serializers.SerializerMethodField()
 
     # school_class = serializers.SerializerMethodField()
 
@@ -1099,6 +1115,7 @@ class TempUserAdmissionDataSerializer(serializers.ModelSerializer):
             # "school_class",
             # "division",
             "sections",
+            "fee_data"
         ]
 
     def get_sections(self, obj):
