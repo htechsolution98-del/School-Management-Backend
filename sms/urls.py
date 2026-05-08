@@ -51,6 +51,8 @@ router.register(r'changefeaturestatus',ChangeFeatureStatusVIew, basename='change
 router.register(r'getmodule',ModuleView,basename='getmodule')
 
 router.register(r'SchoolView',SchoolView, basename='SchoolView') # DONE
+router.register(r'schoollist',SchoolListView,basename='schoollist')
+router.register(r'razardata',RazarDataView,basename='razardata')
 router.register(r'StaffView',StaffView, basename='StaffView') # DONE
 # router.register(r'studentSignUp',StudentSignUpView, basename='studentSignUp') # On Changing
 

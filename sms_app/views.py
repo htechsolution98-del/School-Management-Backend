@@ -587,10 +587,19 @@ class SchoolView(ModelViewSet):
     
 from rest_framework import generics
 
-class RazarDataView(generics.CreateAPIView):
-    
-    pass
+class SchoolListView(generics.ListAPIView):
+    queryset = School.objects.all()
+    serializer_class = SchoolListSerializer
+    permission_classes = [IsAuthenticated,Is_super_admin]
 
+class RazarDataView(generics.CreateAPIView):
+    queryset = RazorPayData.objects.all()
+    serializer_class = RazarDataSerializer
+    permission_classes = [IsAuthenticated,Is_super_admin]
+    
+    
+    
+    
 class StaffView(ModelViewSet):
     queryset = Staff.objects.all()
     serializer_class = StaffSerializer
@@ -815,7 +824,12 @@ class FeeVerifyView(ModelViewSet):
 class ClassView(ModelViewSet):
     queryset = SchoolClass.objects.all()
     serializer_class = SchoolClassSerializer
+    permission_classes = [IsAuthenticated]
     http_method_names = ["get"]
+    
+    def get_queryset(self):
+        school = self.request.user.school
+        return SchoolClass.objects.filter(school = school)
 
 
 from rest_framework.viewsets import ModelViewSet

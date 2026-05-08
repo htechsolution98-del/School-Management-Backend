@@ -293,10 +293,16 @@ class SchoolSerializer(serializers.ModelSerializer):
 
         return value
     
+class SchoolListSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = School
+        fields = ['id','name']
+
 class RazarDataSerializer(serializers.ModelSerializer):
     class Meta:
         model = RazorPayData
         fields = '__all__'
+        read_only_fields = ['school']
 
 
 class StaffSerializer(serializers.ModelSerializer):
@@ -1157,7 +1163,6 @@ class TempUserAdmissionDataSerializer(serializers.ModelSerializer):
             return AdmissionFeeSerializer(fee).data
 
         return None
-    
     def get_school_class(self, obj):
         field_value = obj.field_values.filter(
             field__map_to_student_field="school_class"
