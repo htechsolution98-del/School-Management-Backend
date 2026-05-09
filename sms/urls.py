@@ -194,6 +194,10 @@ urlpatterns = [
     path('api/student-fee/razor/verify/', StudentFeeRazorpayVerifyView.as_view()),
     path('api/offline/payment/',OffilinePaymentView.as_view()),
     path('api/get_receipt/<int:student_id>/<int:form_id>/',get_receipt),
+    
+    path('api/schoollist/',SchoolListView.as_view()),
+    path('api/razardata/',RazarDataView.as_view()),
+    
     path('api/webhook/',RazorpayWebhookView.as_view()),
     
     path('payfee/',TemplateView.as_view(template_name='textfee.html')),

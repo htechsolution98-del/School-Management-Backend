@@ -302,7 +302,7 @@ class RazarDataSerializer(serializers.ModelSerializer):
     class Meta:
         model = RazorPayData
         fields = '__all__'
-        read_only_fields = ['school']
+        # read_only_fields = ['school/']
 
 
 class StaffSerializer(serializers.ModelSerializer):

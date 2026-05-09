@@ -1196,7 +1196,7 @@ class CheckMobileAPIView(APIView):
             status=status.HTTP_200_OK,
         )
         
-# import razorpay
+import razorpay
 
 class RazorpayOrderView(APIView):
 
@@ -1235,25 +1235,25 @@ class RazorpayOrderView(APIView):
         
 #   ============FOR INDIVIDUAL SCHOOL =============
         
-        # school = self.request.user.school
+        school = self.request.user.school
         
-        # razorpay_data = RazorPayData.objects.filter(
-        #     school_id=school.id
-        # ).first()
+        razorpay_data = RazorPayData.objects.filter(
+            school_id=school.id
+        ).first()
 
-        # if not razorpay_data:
-        #     return Response(
-        #         {"error": "Razorpay configuration not found"},
-        #         status=status.HTTP_400_BAD_REQUEST,
-        #     )
+        if not razorpay_data:
+            return Response(
+                {"error": "Razorpay configuration not found"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-        # # Create dynamic razorpay client
-        # client = razorpay.Client(
-        #     auth=(
-        #         razorpay_data.razorpay_key_id,
-        #         razorpay_data.razorpay_secret_key,
-        #     )
-        # )
+        # Create dynamic razorpay client
+        client = razorpay.Client(
+            auth=(
+                razorpay_data.razorpay_key_id,
+                razorpay_data.razorpay_secret_key,
+            )
+        )
 # ----------------------------------------------------
         # Create Razorpay Order
         
