@@ -360,6 +360,21 @@ class GetTeacherSerializer(serializers.ModelSerializer):
 
 
 # ============FEE VERIFY BY FEE DEPARTMENT========
+class AdmissionFeeVerifySerializer(serializers.ModelSerializer):
+
+    class Meta:
+        model = AdmissionFee
+        fields = [
+            "id",
+            "amount",
+            "currency",
+            "payment_mode",
+            "fee_verify",
+            "razorpay_order_id",
+            "razorpay_payment_id",
+            "paid_at",
+            "created_at",
+        ]
 # 1
 class AdmissionFieldValueReadSerializer(serializers.ModelSerializer):
     field_label = serializers.CharField(source="field.label", read_only=True)
@@ -371,12 +386,16 @@ class AdmissionFieldValueReadSerializer(serializers.ModelSerializer):
 
 # 2
 class FeesVerifySerializer(serializers.ModelSerializer):
+    
+    # admission_number = serializers.ModelSerializer()
 
     field_values = AdmissionFieldValueReadSerializer(
         many=True,
         read_only=True,
         # source="field_values"
     )
+    
+    fee_data = serializers.SerializerMethodField()
 
     class Meta:
         model = Admission
@@ -389,6 +408,7 @@ class FeesVerifySerializer(serializers.ModelSerializer):
             "fee_verified",
             "fee_verified_at",
             "field_values",
+            "fee_data"
         ]
 
         read_only_fields = [
@@ -396,7 +416,18 @@ class FeesVerifySerializer(serializers.ModelSerializer):
             "admission_number",
             "fee_amount",
             "field_values",
+            "fee_data"
         ]
+        
+    def get_fee_data(self, obj):
+        
+        fee = AdmissionFee.objects.filter(admission_number = obj.admission_number).first()
+        
+        if fee:
+            return AdmissionFeeVerifySerializer(fee).data
+        
+        return None
+            
 
     #  Fee verification should only update an existing admission.
     def create(self, validated_data):
