@@ -809,7 +809,7 @@ class PrincipleVerifyView(ModelViewSet):
 class FeeVerifyView(ModelViewSet):
     queryset = Admission.objects.all()
     serializer_class = FeesVerifySerializer
-    permission_classes = [IsAuthenticated, IsFeeManager]
+    permission_classes = [IsAuthenticated, IsFeeManager ]
     lookup_field = "admission_number"
 
     def get_queryset(self):
@@ -1127,6 +1127,16 @@ class AdmissionUpdateViewSet(ModelViewSet):
         return AdmissionUpdateSerializer
         # return admissionViewSerializer
 
+    def update(self, request, *args, **kwargs):
+        response = super().update(request, *args, **kwargs)
+        return Response(
+            {
+                "message": "Admission updated successfully",
+                "data": response.data,
+            },
+            status=response.status_code,
+        )
+
 
 # ==================================================================================
 # class FormSubmissionReadView(ModelViewSet):
@@ -1149,6 +1159,17 @@ class AdmissionDocumentViewSet(ModelViewSet):
         if self.action in ["update", "partial_update"]:
             return AdmissionDocumentUpdateSerializer
         return AdmissionDocumentSerializer
+
+    def update(self, request, *args, **kwargs):
+        response = super().update(request, *args, **kwargs)
+        return Response(
+            {
+                "message": "Admission documents updated successfully",
+                "admission_number": kwargs.get("admission_number"),
+                "data": response.data,
+            },
+            status=response.status_code,
+        )
 
 
 # ======================================================
@@ -2240,6 +2261,7 @@ COLUMN_MAPPING = {
 # ----------------------------
 # Main Import Function
 # ----------------------------
+
 @transaction.atomic
 def import_students_from_excel(file, school_id, use_bulk=True):
     df = pd.read_excel(file)

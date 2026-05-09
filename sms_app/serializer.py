@@ -303,7 +303,15 @@ class RazarDataSerializer(serializers.ModelSerializer):
         model = RazorPayData
         fields = '__all__'
         # read_only_fields = ['school/']
-
+    def validate(self, attrs):
+        school = attrs.get('school')
+        
+        if RazorPayData.objects.filter(school = school).exists():
+            raise serializers.ValidationError({
+                "meassage":"This School Razor Pay Data Already Added"
+            })
+        
+        return attrs
 
 class StaffSerializer(serializers.ModelSerializer):
     class Meta:
