@@ -411,7 +411,7 @@ class IsFeeManager(BasePermission):
         return (
             request.user
             and request.user.is_authenticated
-            and request.user.groups.filter(name="FEE MANAGEMENT").exists()
+            and request.user.groups.filter(name="FEES MANAGEMENT").exists()
         )
 
 
@@ -806,6 +806,7 @@ class PrincipleVerifyView(ModelViewSet):
 
 
 # ======Fee Verify View =============
+
 class FeeVerifyView(ModelViewSet):
     queryset = Admission.objects.all()
     serializer_class = FeesVerifySerializer
