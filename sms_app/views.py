@@ -585,7 +585,27 @@ class SchoolView(ModelViewSet):
         super().create(request, *args, **kwargs)
         return Response({"message": "School created Successfully"}, status=201)
     
+    
+class ManualStudentView(ModelViewSet):
+    queryset = Student.objects.all()
+    serializer_class = ManualStudentSerializer
+    http_method_names = ['post']
+    
+    def perform_create(self, serializer):
+
+        return serializer.save(school = self.request.user.school)
+    
+    def create(self, request, *args, **kwargs):
+        response =  super().create(request, *args, **kwargs)
+        
+        return Response({
+            "message":"Student Added Successfully"
+        })
+  
+
+    
 from rest_framework import generics
+
 
 class SchoolListView(generics.ListAPIView):
     queryset = School.objects.all()
@@ -807,6 +827,7 @@ class PrincipleVerifyView(ModelViewSet):
 
 # ======Fee Verify View =============
 
+
 class FeeVerifyView(ModelViewSet):
     queryset = Admission.objects.all()
     serializer_class = FeesVerifySerializer
@@ -814,10 +835,10 @@ class FeeVerifyView(ModelViewSet):
     lookup_field = "admission_number"
 
     def get_queryset(self):
-        return Admission.objects.filter(school=self.request.user.school)
+        return Admission.objects.filter(pay_process = True,school=self.request.user.school)
 
 
-# =================================
+# ========================================
 
 
 # =====serializer for School class=====
@@ -1254,6 +1275,10 @@ class RazorpayOrderView(APIView):
                 amount=amount / 100,
                 admission_number=admission_number,
             )
+            
+            admission = Admission.objects.filter(admission_number = admission_number).first()
+            admission.fee_amount = amount / 100
+            admission.save()
         
 #   ============FOR INDIVIDUAL SCHOOL =============
         
@@ -1364,7 +1389,9 @@ class VerifyPaymentView(APIView):
             payment.payment_mode = "online"
             payment.paid_at = timezone.now()
             payment.save()
-
+            admission = Admission.objects.filter(admission_number = admission_number).first()
+            admission.pay_process = True
+            admission.save()
             # student.details_done = True
             # student.save()
 
@@ -1421,6 +1448,10 @@ class OffilinePaymentView(APIView):
                 payment_mode="offline",
                 paid_at=timezone.now(),
             )
+            
+            admission = Admission.objects.filter(admission_number = admission_number).first()
+            admission.pay_process = True
+            admission.save()
 
         return Response(
             {

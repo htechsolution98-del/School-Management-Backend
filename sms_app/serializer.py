@@ -48,9 +48,6 @@ class SendOTPSerializer(serializers.Serializer):
         return data
 
 
-
-
-
 class VerifyOTPSerializer(serializers.Serializer):
     email = serializers.EmailField(required=False)
     mobile = serializers.CharField(required=False)
@@ -185,9 +182,8 @@ class CustomeLoginSerializer(TokenObtainPairSerializer):
         user = self.user
 
         role = user.groups.values_list("name", flat=True)
-        
+
         data["roles"] = list(role)
-        
 
         return data
 
@@ -225,7 +221,7 @@ class SchoolFeatureSerializer(serializers.ModelSerializer):
 class GetFeatureSerializer(serializers.ModelSerializer):
 
     feature_name = serializers.CharField(source="feature.name", read_only=True)
-    feature_id =  serializers.CharField(source="feature.id", read_only=True)
+    feature_id = serializers.CharField(source="feature.id", read_only=True)
 
     class Meta:
         model = SchoolFeature
@@ -235,12 +231,10 @@ class GetFeatureSerializer(serializers.ModelSerializer):
 from rest_framework import serializers
 
 
-
 class ChangeFeatureStatusSerializer(serializers.ModelSerializer):
     class Meta:
         model = SchoolFeature
         fields = ["is_enabled"]
-
 
 
 class SchoolFeatureSerializer(serializers.ModelSerializer):
@@ -292,26 +286,30 @@ class SchoolSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Duplicate features are not allowed.")
 
         return value
-    
+
+
 class SchoolListSerializer(serializers.ModelSerializer):
     class Meta:
         model = School
-        fields = ['id','name']
+        fields = ["id", "name"]
+
 
 class RazarDataSerializer(serializers.ModelSerializer):
     class Meta:
         model = RazorPayData
-        fields = '__all__'
+        fields = "__all__"
         # read_only_fields = ['school/']
+
     def validate(self, attrs):
-        school = attrs.get('school')
-        
-        if RazorPayData.objects.filter(school = school).exists():
-            raise serializers.ValidationError({
-                "meassage":"This School Razor Pay Data Already Added"
-            })
-        
+        school = attrs.get("school")
+
+        if RazorPayData.objects.filter(school=school).exists():
+            raise serializers.ValidationError(
+                {"meassage": "This School Razor Pay Data Already Added"}
+            )
+
         return attrs
+
 
 class StaffSerializer(serializers.ModelSerializer):
     class Meta:
@@ -336,27 +334,62 @@ class StaffSerializer(serializers.ModelSerializer):
             )
 
         return value
-    
+
+
 class UserListSerialzer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = '__all__'
+        fields = "__all__"
+
 
 class ModuleSerializer(serializers.ModelSerializer):
     class Meta:
         model = Module
-        fields = '__all__'
+        fields = "__all__"
+
 
 class ChangeModuleSerializer(serializers.ModelSerializer):
     class Meta:
         model = UserModuleAccess
-        fields = '__all__'
+        fields = "__all__"
 
 
 class GetTeacherSerializer(serializers.ModelSerializer):
     class Meta:
         model = Staff
         fields = ["id", "name"]
+
+
+# --------FOR MANUAL STUDENT ENRTY-------
+
+
+class StudentExtraSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = StudentExtraData
+        fields = "__all__"
+
+
+class ManualStudentSerializer(serializers.ModelSerializer):
+    extra_data = StudentExtraSerializer(required=False)
+
+    class Meta:
+        model = Student
+        fields = "__all__"
+        read_only_fields = ["school", "user", "admission"]
+
+    def create(self, validated_data):
+
+        extra_data = validated_data.pop("extra_data", None)
+
+        student = Student.objects.create(**validated_data)
+
+        if extra_data:
+            StudentExtraData.objects.create(student=student, **extra_data)
+
+        return student
+
+
+# ===============================================
 
 
 # ============FEE VERIFY BY FEE DEPARTMENT========
@@ -375,6 +408,8 @@ class AdmissionFeeVerifySerializer(serializers.ModelSerializer):
             "paid_at",
             "created_at",
         ]
+
+
 # 1
 class AdmissionFieldValueReadSerializer(serializers.ModelSerializer):
     field_label = serializers.CharField(source="field.label", read_only=True)
@@ -386,7 +421,7 @@ class AdmissionFieldValueReadSerializer(serializers.ModelSerializer):
 
 # 2
 class FeesVerifySerializer(serializers.ModelSerializer):
-    
+
     # admission_number = serializers.ModelSerializer()
 
     field_values = AdmissionFieldValueReadSerializer(
@@ -394,7 +429,7 @@ class FeesVerifySerializer(serializers.ModelSerializer):
         read_only=True,
         # source="field_values"
     )
-    
+
     fee_data = serializers.SerializerMethodField()
 
     class Meta:
@@ -408,7 +443,7 @@ class FeesVerifySerializer(serializers.ModelSerializer):
             "fee_verified",
             "fee_verified_at",
             "field_values",
-            "fee_data"
+            "fee_data",
         ]
 
         read_only_fields = [
@@ -416,18 +451,17 @@ class FeesVerifySerializer(serializers.ModelSerializer):
             "admission_number",
             "fee_amount",
             "field_values",
-            "fee_data"
+            "fee_data",
         ]
-        
+
     def get_fee_data(self, obj):
-        
-        fee = AdmissionFee.objects.filter(admission_number = obj.admission_number).first()
-        
+
+        fee = AdmissionFee.objects.filter(admission_number=obj.admission_number).first()
+
         if fee:
             return AdmissionFeeVerifySerializer(fee).data
-        
+
         return None
-            
 
     #  Fee verification should only update an existing admission.
     def create(self, validated_data):
@@ -666,7 +700,7 @@ class ChangeFormStatus(serializers.ModelSerializer):
     class Meta:
         model = AdmissionForm
         fields = ["is_active"]
-    
+
 
 # --------Admission Form submite serializers---------
 # 1class
@@ -1116,6 +1150,7 @@ class AdmissionDocumentUpdateSerializer(serializers.ModelSerializer):
 
 # =================get submited data for tem user====================
 
+
 class AdmissionFieldValueReadSerializer(serializers.ModelSerializer):
     field_label = serializers.CharField(source="field.label", read_only=True)
     field_order = serializers.IntegerField(source="field.order", read_only=True)
@@ -1142,7 +1177,8 @@ class AdmissionFeeSerializer(serializers.ModelSerializer):
             "payment_mode",
             "paid_at",
         ]
-        
+
+
 class TempUserAdmissionDataSerializer(serializers.ModelSerializer):
     sections = serializers.SerializerMethodField()
     fee_data = serializers.SerializerMethodField()
@@ -1160,7 +1196,7 @@ class TempUserAdmissionDataSerializer(serializers.ModelSerializer):
             # "school_class",
             # "division",
             "sections",
-            "fee_data"
+            "fee_data",
         ]
 
     def get_sections(self, obj):
@@ -1194,14 +1230,13 @@ class TempUserAdmissionDataSerializer(serializers.ModelSerializer):
     # Extract school_class from dynamic fields
     def get_fee_data(self, obj):
 
-        fee = AdmissionFee.objects.filter(
-            admission_number=obj.admission_number
-        ).first()
+        fee = AdmissionFee.objects.filter(admission_number=obj.admission_number).first()
 
         if fee:
             return AdmissionFeeSerializer(fee).data
 
         return None
+
     def get_school_class(self, obj):
         field_value = obj.field_values.filter(
             field__map_to_student_field="school_class"
@@ -1535,7 +1570,7 @@ class AssignClassSerializer(serializers.ModelSerializer):
                 school=school, teacher=teacher, is_class_teacher=True
             ).exists():
                 raise serializers.ValidationError("Teacher already assigned")
-            
+
         return data
 
     def create(self, validated_data):
@@ -1976,15 +2011,16 @@ class AttendanceLocationSerializer(serializers.ModelSerializer):
             "half_day_time",
         ]
         read_only_fields = ["school"]
+
     def validate(self, attrs):
-        request = self.context.get("request")   
+        request = self.context.get("request")
         school = request.user.school
-        
-        if AttendanceLocation.objects.filter(school = school ).exists():
-           raise serializers.ValidationError({
-               "massage":"You already add school attendance location"
-           })
-           
+
+        if AttendanceLocation.objects.filter(school=school).exists():
+            raise serializers.ValidationError(
+                {"massage": "You already add school attendance location"}
+            )
+
         return super().validate(attrs)
 
     def create(self, validated_data):
@@ -2008,8 +2044,6 @@ class AttendanceLocationSerializer(serializers.ModelSerializer):
         )
 
         return AttendanceLocation.objects.create(school=school, **validated_data)
-
-
 
 
 def is_inside_radius(lat1, lon1, lat2, lon2, radius_meters):
@@ -2063,7 +2097,7 @@ class AttendanceSerializer(serializers.ModelSerializer):
             "check_in",
             "check_out",
         ]
-        
+
         read_only_fields = [
             "id",
             "school",
@@ -2140,7 +2174,9 @@ class AttendanceSerializer(serializers.ModelSerializer):
         latitude = validated_data.pop("latitude", None)
         longitude = validated_data.pop("longitude", None)
 
-        attendance_location = AttendanceLocation.objects.filter(school=school.id).first()
+        attendance_location = AttendanceLocation.objects.filter(
+            school=school.id
+        ).first()
 
         loc_latitude = attendance_location.latitude
         loc_longitude = attendance_location.longitude
@@ -2545,12 +2581,11 @@ class FeeTypeSerializer(serializers.ModelSerializer):
         for fee_type in queryset:
             if self.normalize_fee_name(fee_type.name or "") == normalized_name:
                 raise serializers.ValidationError(
-                    {
-                        "name": "This fee type already exists for this billing cycle."
-                    }
+                    {"name": "This fee type already exists for this billing cycle."}
                 )
 
         return attrs
+
 
 class AcademicYearSerializer(serializers.ModelSerializer):
     month_numbers = serializers.SerializerMethodField()
@@ -2662,9 +2697,7 @@ class FeeWiseClassSerializer(serializers.ModelSerializer):
 
         if existing.exists():
             raise serializers.ValidationError(
-                {
-                    "message": "This fee type is already configured for this class."
-                }
+                {"message": "This fee type is already configured for this class."}
             )
 
         late_fee_enabled = attrs.get(
@@ -2871,9 +2904,7 @@ class StaffSalaryPaymentSerializer(serializers.ModelSerializer):
 
     def validate_salary_month(self, value):
         if not re.match(r"^\d{4}-\d{2}$", value):
-            raise serializers.ValidationError(
-                "Salary month must be in YYYY-MM format."
-            )
+            raise serializers.ValidationError("Salary month must be in YYYY-MM format.")
 
         month = int(value.split("-")[1])
         if month < 1 or month > 12:
@@ -2991,9 +3022,7 @@ class GenerateStaffSalaryPaymentSerializer(serializers.ModelSerializer):
 
     def validate_salary_month(self, value):
         if not re.match(r"^\d{4}-\d{2}$", value):
-            raise serializers.ValidationError(
-                "Salary month must be in YYYY-MM format."
-            )
+            raise serializers.ValidationError("Salary month must be in YYYY-MM format.")
 
         month = int(value.split("-")[1])
         if month < 1 or month > 12:
@@ -3060,9 +3089,7 @@ class GenerateStaffSalaryPaymentSerializer(serializers.ModelSerializer):
             attendance_date__gte=month_start,
             attendance_date__lte=month_end,
         )
-        present_count = attendance_qs.filter(
-            is_present=True, is_half_day=False
-        ).count()
+        present_count = attendance_qs.filter(is_present=True, is_half_day=False).count()
         half_days = attendance_qs.filter(is_present=True, is_half_day=True).count()
         absent_days = max(working_days - present_count - half_days, 0)
         present_days = Decimal(present_count) + (Decimal(half_days) / Decimal("2"))
@@ -3254,9 +3281,7 @@ class StudentFeeSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({"student": "Student is required."})
 
         if not feetype:
-            raise serializers.ValidationError(
-                {"feetype": "Fee type is required."}
-            )
+            raise serializers.ValidationError({"feetype": "Fee type is required."})
 
         if school and feetype and feetype.school_id != school.id:
             raise serializers.ValidationError(
@@ -3276,9 +3301,7 @@ class StudentFeeSerializer(serializers.ModelSerializer):
 
         if not fee_wise_class:
             raise serializers.ValidationError(
-                {
-                    "feetype": "This fee type is not configured for the student's class."
-                }
+                {"feetype": "This fee type is not configured for the student's class."}
             )
 
         attrs["fee_wise_class"] = fee_wise_class

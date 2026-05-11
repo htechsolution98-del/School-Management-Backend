@@ -431,6 +431,7 @@ class AdmissionDocument(models.Model):
 
 
 # # ======this is modified======
+
 class Student(models.Model):
 
     school = models.ForeignKey(School, on_delete=models.PROTECT, db_index=True)
@@ -460,6 +461,8 @@ class Student(models.Model):
 
     admission_date = models.DateField(blank=True, null=True)
     gr_no = models.CharField(max_length=100, blank=True, null=True)
+    
+    aadhar_number = models.CharField(max_length = 50, null = True, blank = True )
 
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -470,6 +473,28 @@ class StudentVerify(models.Model):
     student = models.ForeignKey(Student,on_delete=models.CASCADE)
     clerk_verify = models.BooleanField(default=False)
 
+
+class StudentExtraData(models.Model):
+    student = models.ForeignKey(Student, on_delete=models.CASCADE,null=True, blank=True)
+    
+    religion = models.CharField(max_length=100, null=True, blank=True)
+    scheduled_caste = models.CharField(max_length=100, null=True, blank=True)
+
+    place_of_birth = models.CharField(max_length=255, null=True, blank=True)
+    
+    leaving_date = models.DateField(null=True, blank=True)
+    
+    last_school = models.CharField(max_length=255, null=True, blank=True)
+    
+    progress = models.TextField(null=True, blank=True)
+    conduct = models.TextField(null=True, blank=True)
+    
+    remarks = models.TextField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    
 
 class RazorPayData(models.Model):
     school = models.ForeignKey(School, on_delete=models.CASCADE )
@@ -600,7 +625,7 @@ class DocumentFile(models.Model):
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        related_name="document_files",  # ✅ changed
+        related_name="document_files",  # changed
     )
 
     label = models.ForeignKey(

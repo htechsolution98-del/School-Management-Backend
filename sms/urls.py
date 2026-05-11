@@ -71,6 +71,10 @@ router.register(r'forms', AdmissionFormViewSet, basename='forms')
 #  PRINCIPLE PUBLIC UNPUBLIC FORM [POST] Fapi-02
 router.register(r'formstatus', FormStatus, basename='formstatus')
 
+
+# MANUAL PAST STUDENT ENTERTY
+router.register(r'manualstudent',ManualStudentView,basename='manualstudent')
+
 # ADMISSION FORM FILL FIELDS SFapi-01
 router.register(r'submissions', FormSubmissionViewSet, basename='submissions')
 # ADMISSION FORM FILL DOCUMENT FIELDS Fapi-02
