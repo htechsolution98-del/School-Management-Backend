@@ -1157,7 +1157,7 @@ class AdmissionDocumentUpdateSerializer(serializers.ModelSerializer):
                 AdmissionDocument.objects.update_or_create(
                     admission=instance,
                     document_field=document_field,
-                    defaults={"file": file},
+                    defaults={"file": file, "school": instance.school},
                 )
 
         return instance
