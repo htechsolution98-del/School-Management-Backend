@@ -783,7 +783,7 @@ class TempUserAdmissionViewSet(ReadOnlyModelViewSet):
 
 class AdmissionReadOnlyViewSet(ReadOnlyModelViewSet):
     serializer_class = GetAdmissionDataSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsCLerk]
 
     def get_queryset(self):
         user = self.request.user
@@ -793,7 +793,12 @@ class AdmissionReadOnlyViewSet(ReadOnlyModelViewSet):
             "field_values", "documents"
         )
 
+    def get_queryset(self):
+        
+        verified_admission_ids = StudentVerify.objects.filter(clerk_verify=True).values_list("admission_id", flat=True)
 
+        return Admission.objects.exclude(id__in=verified_admission_ids)
+    
 # ==========================================================
 
 

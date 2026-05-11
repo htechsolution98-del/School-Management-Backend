@@ -1663,7 +1663,6 @@ class GetAdmissionDataSerializer(serializers.ModelSerializer):
             "documents",
         ]
 
-
 # =============================================================
 
 
