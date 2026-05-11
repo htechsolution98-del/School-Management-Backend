@@ -1145,7 +1145,7 @@ class AdmissionUpdateViewSet(ModelViewSet):
     queryset = Admission.objects.all()
     serializer_class = AdmissionUpdateSerializer
     lookup_field = "admission_number"
-    permission_classes = [IsAuthenticated, IsFeeManager]
+    permission_classes = [IsAuthenticated, IsCLerk]
 
     def get_queryset(self):
         return Admission.objects.filter(school=self.request.user.school)
@@ -2379,7 +2379,7 @@ def import_students_from_excel(file, school_id, use_bulk=True):
                 "date_of_birth": parse_date(data["date_of_birth"]),
                 "admission_date": parse_date(data["admission_date"]),
                 "school_class": school_class,
-                "remarks": data["remarks"],
+                # "remarks": data["remarks"],
                 "mobile": data["mobile"],
             }
 

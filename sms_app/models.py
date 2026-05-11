@@ -226,6 +226,7 @@ class SchoolClass(models.Model):
         return self.school_class
 
 
+
 class Division(models.Model):
 
     school = models.ForeignKey(
