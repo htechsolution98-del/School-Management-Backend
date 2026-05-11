@@ -795,9 +795,9 @@ class AdmissionReadOnlyViewSet(ReadOnlyModelViewSet):
 
     def get_queryset(self):
         
-        verified_admission_ids = StudentVerify.objects.filter(clerk_verify=True).values_list("admission_id", flat=True)
+        verified_admission_ids = StudentVerify.objects.filter(clerk_verify=True).values_list("admission_number", flat=True)
 
-        return Admission.objects.exclude(id__in=verified_admission_ids)
+        return Admission.objects.exclude(admission_number=verified_admission_ids)
     
 # ==========================================================
 
