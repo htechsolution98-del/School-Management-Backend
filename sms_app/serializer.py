@@ -377,6 +377,21 @@ class ManualStudentSerializer(serializers.ModelSerializer):
         fields = "__all__"
         read_only_fields = ["school", "user", "admission"]
 
+    def validate(self, attrs):
+        gr_no = attrs.get("gr_no")
+        request = self.context.get("request")
+        school = getattr(getattr(request, "user", None), "school", None)
+
+        if gr_no and school:
+            if Student.objects.filter(gr_no=gr_no, school=school).exists():
+                raise serializers.ValidationError(
+                    {
+                        "gr_no": "A student with this gr_no already exists for this school."
+                    }
+                )
+
+        return attrs
+
     def create(self, validated_data):
 
         extra_data = validated_data.pop("extra_data", None)

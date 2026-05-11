@@ -1,4 +1,3 @@
-
 from django.shortcuts import redirect, render
 from django.urls import reverse
 
@@ -518,7 +517,7 @@ from rest_framework import serializers
 class SchoolView(ModelViewSet):
     queryset = School.objects.all()
     serializer_class = SchoolSerializer
-    permission_classes = [IsAuthenticated,Is_super_admin]
+    permission_classes = [IsAuthenticated, Is_super_admin]
 
     # ✅ Cache-safe queryset
     def get_queryset(self):
@@ -584,42 +583,38 @@ class SchoolView(ModelViewSet):
     def create(self, request, *args, **kwargs):
         super().create(request, *args, **kwargs)
         return Response({"message": "School created Successfully"}, status=201)
-    
-    
+
+
 class ManualStudentView(ModelViewSet):
     queryset = Student.objects.all()
     serializer_class = ManualStudentSerializer
-    http_method_names = ['post']
-    
+    http_method_names = ["post"]
+
     def perform_create(self, serializer):
 
-        return serializer.save(school = self.request.user.school)
-    
-    def create(self, request, *args, **kwargs):
-        response =  super().create(request, *args, **kwargs)
-        
-        return Response({
-            "message":"Student Added Successfully"
-        })
-  
+        return serializer.save(school=self.request.user.school)
 
-    
+    def create(self, request, *args, **kwargs):
+        response = super().create(request, *args, **kwargs)
+
+        return Response({"message": "Student Added Successfully"})
+
+
 from rest_framework import generics
 
 
 class SchoolListView(generics.ListAPIView):
     queryset = School.objects.all()
     serializer_class = SchoolListSerializer
-    permission_classes = [IsAuthenticated,Is_super_admin]
+    permission_classes = [IsAuthenticated, Is_super_admin]
+
 
 class RazarDataView(generics.CreateAPIView):
     queryset = RazorPayData.objects.all()
     serializer_class = RazarDataSerializer
-    permission_classes = [IsAuthenticated,Is_super_admin]
-    
-    
-    
-    
+    permission_classes = [IsAuthenticated, Is_super_admin]
+
+
 class StaffView(ModelViewSet):
     queryset = Staff.objects.all()
     serializer_class = StaffSerializer
@@ -822,7 +817,7 @@ class PrincipleVerifyView(ModelViewSet):
 
     def get_queryset(self):
         school = self.request.user.school
-        return Student.objects.filter(clerk_verified=True,school = school)
+        return Student.objects.filter(clerk_verified=True, school=school)
 
 
 # ======Fee Verify View =============
@@ -831,11 +826,23 @@ class PrincipleVerifyView(ModelViewSet):
 class FeeVerifyView(ModelViewSet):
     queryset = Admission.objects.all()
     serializer_class = FeesVerifySerializer
-    permission_classes = [IsAuthenticated, IsFeeManager ]
+    permission_classes = [IsAuthenticated, IsFeeManager]
     lookup_field = "admission_number"
 
     def get_queryset(self):
-        return Admission.objects.filter(pay_process = True,school=self.request.user.school)
+        return Admission.objects.filter(
+            pay_process=True, school=self.request.user.school
+        )
+
+    def update(self, request, *args, **kwargs):
+        response = super().update(request, *args, **kwargs)
+        return Response(
+            {
+                "message": "Fee verified successfully",
+                "admission_number": response.data.get("admission_number"),
+            },
+            status=response.status_code,
+        )
 
 
 # ========================================
@@ -848,10 +855,10 @@ class ClassView(ModelViewSet):
     serializer_class = SchoolClassSerializer
     permission_classes = [IsAuthenticated]
     http_method_names = ["get"]
-    
+
     def get_queryset(self):
         school = self.request.user.school
-        return SchoolClass.objects.filter(school = school)
+        return SchoolClass.objects.filter(school=school)
 
 
 from rest_framework.viewsets import ModelViewSet
@@ -976,9 +983,9 @@ class FormFieldViewSet(RetrieveAPIView):
     def get_queryset(self):
 
         school = self.request.user.school
-        
+
         # Only active forms, read-only single record
-        
+
         return AdmissionForm.objects.filter(school=school, is_active=True).first()
 
     def get_object(self):
@@ -987,7 +994,7 @@ class FormFieldViewSet(RetrieveAPIView):
 
 
 # ===================================================
-# for admission form status change 
+# for admission form status change
 class FormStatus(ModelViewSet):
     queryset = AdmissionForm.objects.all()
     serializer_class = ChangeFormStatus
@@ -1024,18 +1031,17 @@ class FormStatus(ModelViewSet):
 
 # for send form link
 
+
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def ShareFormLink(request):
     form = AdmissionForm.objects.filter(
-        school=request.user.school,
-        is_active=True
+        school=request.user.school, is_active=True
     ).first()
-    
+
     form_link = f"api/admission/{form.unique_link}/"
 
     return Response({"form_link": form_link})
-
 
 
 FRONTEND_LOGIN_URL = "https://edunet-one.vercel.app/login"
@@ -1172,7 +1178,7 @@ class AdmissionUpdateViewSet(ModelViewSet):
 class AdmissionDocumentViewSet(ModelViewSet):
     queryset = Admission.objects.all()
     lookup_field = "admission_number"
-    permission_classes = [IsAuthenticated,IsCLerk]
+    permission_classes = [IsAuthenticated, IsCLerk]
 
     def get_queryset(self):
         return Admission.objects.filter(school=self.request.user.school)
@@ -1238,8 +1244,10 @@ class CheckMobileAPIView(APIView):
             {"status": "new", "message": "Mobile number is available"},
             status=status.HTTP_200_OK,
         )
-        
+
+
 import razorpay
+
 
 class RazorpayOrderView(APIView):
 
@@ -1275,18 +1283,18 @@ class RazorpayOrderView(APIView):
                 amount=amount / 100,
                 admission_number=admission_number,
             )
-            
-            admission = Admission.objects.filter(admission_number = admission_number).first()
+
+            admission = Admission.objects.filter(
+                admission_number=admission_number
+            ).first()
             admission.fee_amount = amount / 100
             admission.save()
-        
-#   ============FOR INDIVIDUAL SCHOOL =============
-        
+
+        #   ============FOR INDIVIDUAL SCHOOL =============
+
         school = self.request.user.school
-        
-        razorpay_data = RazorPayData.objects.filter(
-            school_id=school.id
-        ).first()
+
+        razorpay_data = RazorPayData.objects.filter(school_id=school.id).first()
 
         if not razorpay_data:
             return Response(
@@ -1301,9 +1309,9 @@ class RazorpayOrderView(APIView):
                 razorpay_data.razorpay_secret_key,
             )
         )
-# ----------------------------------------------------
+        # ----------------------------------------------------
         # Create Razorpay Order
-        
+
         razor_order = client.order.create(
             {
                 "amount": amount,
@@ -1319,7 +1327,7 @@ class RazorpayOrderView(APIView):
         return Response(
             {
                 "id": razor_order["id"],
-                "key": settings.RAZOR_PAY_KEY_ID, #"key": razorpay_data.razorpay_key_id, FOR INDIVIDUAL SCHOOL
+                "key": settings.RAZOR_PAY_KEY_ID,  # "key": razorpay_data.razorpay_key_id, FOR INDIVIDUAL SCHOOL
                 "amount": razor_order["amount"],
                 "currency": "INR",
                 "admission_number": admission_number,
@@ -1341,7 +1349,7 @@ class VerifyPaymentView(APIView):
         signature = data.get("razorpay_signature")
 
         admission_number = data.get("admission_number")
-        
+
         # Convert to integer if it's a string
         # student = Student.objects.filter(id =student_id).first()
 
@@ -1389,14 +1397,15 @@ class VerifyPaymentView(APIView):
             payment.payment_mode = "online"
             payment.paid_at = timezone.now()
             payment.save()
-            admission = Admission.objects.filter(admission_number = admission_number).first()
+            admission = Admission.objects.filter(
+                admission_number=admission_number
+            ).first()
             admission.pay_process = True
             admission.save()
             # student.details_done = True
             # student.save()
 
         return Response({"status": "success"})
-
 
 
 class OffilinePaymentView(APIView):
@@ -1448,8 +1457,10 @@ class OffilinePaymentView(APIView):
                 payment_mode="offline",
                 paid_at=timezone.now(),
             )
-            
-            admission = Admission.objects.filter(admission_number = admission_number).first()
+
+            admission = Admission.objects.filter(
+                admission_number=admission_number
+            ).first()
             admission.pay_process = True
             admission.save()
 
@@ -1928,21 +1939,22 @@ class AssignClassView(ModelViewSet):
 class Tt_yearView(ModelViewSet):
     queryset = Tt_year.objects.all()
     serializer_class = Tt_yearSerializer
-    permission_classes  = [IsAuthenticated,IsCLerk]
-    
+    permission_classes = [IsAuthenticated, IsCLerk]
+
     def get_queryset(self):
         school = self.request.user.school
-        return Tt_year.objects.filter(school = school)
+        return Tt_year.objects.filter(school=school)
 
 
 class Time_tableView(ModelViewSet):
     queryset = Tt_year.objects.all()
     serializer_class = Time_tableSerializer
-    permission_classes = [IsAuthenticated,IsCLerk]
-    
+    permission_classes = [IsAuthenticated, IsCLerk]
+
     def get_queryset(self):
         school = self.request.user.school
-        return Tt_year.objects.filter(school = school)
+        return Tt_year.objects.filter(school=school)
+
 
 # class Tt_dayView(ModelViewSet):
 #     queryset = Tt_day.objects.all()
@@ -2086,13 +2098,13 @@ class GetStudentView(ModelViewSet):
 
 
 class GetLocationView(APIView):
-    permission_classes = [IsAuthenticated,IsCLerk]
+    permission_classes = [IsAuthenticated, IsCLerk]
 
     def post(self, request):
         serializer = AttendanceLocationSerializer(
             data=request.data, context={"request": request}
         )
-        
+
         if serializer.is_valid():
             serializer.save()
             return Response(
@@ -2143,7 +2155,6 @@ class GetLeaveRequestView(ModelViewSet):
         queryset = LeaveRequest.objects.filter(school=self.request.user.school)
 
         return queryset
-
 
 
 class ChangeLeaveView(ModelViewSet):
@@ -2256,6 +2267,7 @@ from rest_framework.permissions import IsAuthenticated
 # Helpers
 # ----------------------------
 
+
 def parse_date(value):
     try:
         return pd.to_datetime(value).date() if pd.notna(value) else None
@@ -2271,12 +2283,13 @@ def clean(value):
 # Column Mapping (Excel → Model)
 # ----------------------------
 COLUMN_MAPPING = {
-    "GR No": "gr_no",  # add this
+    "GR No": "gr_no",
     "Surname": "surname",
     "Student Name": "name",
     "Father's Name": "father_name",
     "Mother's Name": "mother_name",
-    "Religion": "raligion_with_Scheduled_Caste",
+    "Religion": "religion",
+    "Scheduled Caste": "scheduled_caste",
     "Place of Birth": "place_of_birth",
     "Date of Birth": "date_of_birth",
     "Admission Date": "admission_date",
@@ -2293,6 +2306,7 @@ COLUMN_MAPPING = {
 # ----------------------------
 # Main Import Function
 # ----------------------------
+
 
 @transaction.atomic
 def import_students_from_excel(file, school_id, use_bulk=True):
@@ -2332,7 +2346,9 @@ def import_students_from_excel(file, school_id, use_bulk=True):
                 continue
 
             if gr_no in existing_gr_nos:
-                errors.append(f"Row {index+2}: GR No '{gr_no}' already exists")
+                errors.append(
+                    f"Row {index+2}: GR No '{gr_no}' already exists for this school"
+                )
                 continue
 
             excel_gr_set.add(gr_no)
@@ -2345,37 +2361,40 @@ def import_students_from_excel(file, school_id, use_bulk=True):
                 class_name = str(data["school_class"]).strip()
 
                 school_class = SchoolClass.objects.filter(
-                    name=class_name, school=school
+                    school_class=class_name,
+                    school=school,
                 ).first()
 
                 if not school_class:
                     errors.append(f"Row {index+2}: Class '{class_name}' not found")
                     continue
 
-            # ----------------------------
-            # Create Student
-            # ----------------------------
-            student = Student(
-                school=school,
-                gr_no=gr_no,  # important
-                surname=data["surname"],
-                name=data["name"],
-                father_name=data["father_name"],
-                mother_name=data["mother_name"],
-                raligion_with_Scheduled_Caste=data["raligion_with_Scheduled_Caste"],
-                place_of_birth=data["place_of_birth"],
-                date_of_birth=parse_date(data["date_of_birth"]),
-                admission_date=parse_date(data["admission_date"]),
-                leaving_date=parse_date(data["leaving_date"]),
-                last_school=data["last_school"],
-                progress=data["progress"],
-                conduct=data["conduct"],
-                school_class=school_class,
-                remarks=data["remarks"],
-                mobile=data["mobile"],
-            )
-            
-            students.append(student)
+            student_data = {
+                "school": school,
+                "gr_no": gr_no,
+                "surname": data["surname"],
+                "name": data["name"],
+                "father_name": data["father_name"],
+                "mother_name": data["mother_name"],
+                "date_of_birth": parse_date(data["date_of_birth"]),
+                "admission_date": parse_date(data["admission_date"]),
+                "school_class": school_class,
+                "remarks": data["remarks"],
+                "mobile": data["mobile"],
+            }
+
+            extra_data = {
+                "religion": data.get("religion"),
+                "scheduled_caste": data.get("scheduled_caste"),
+                "place_of_birth": data.get("place_of_birth"),
+                "leaving_date": parse_date(data.get("leaving_date")),
+                "last_school": data.get("last_school"),
+                "progress": data.get("progress"),
+                "conduct": data.get("conduct"),
+                "remarks": data.get("remarks"),
+            }
+
+            students.append((student_data, extra_data))
 
         except Exception as e:
             errors.append(f"Row {index+2}: {str(e)}")
@@ -2390,13 +2409,36 @@ def import_students_from_excel(file, school_id, use_bulk=True):
     # ----------------------------
     # Save to DB
     # ----------------------------
-    if use_bulk:
-        Student.objects.bulk_create(students)
-    else:
-        for s in students:
-            s.save()
+    created_count = 0
 
-    return {"created": len(students), "errors": []}
+    if use_bulk:
+        student_objects = [Student(**student_data) for student_data, _ in students]
+        Student.objects.bulk_create(student_objects)
+
+        created_students = Student.objects.filter(
+            school=school,
+            gr_no__in=[student_data["gr_no"] for student_data, _ in students],
+        )
+        student_map = {student.gr_no: student for student in created_students}
+
+        extra_objects = []
+        for student_data, extra_data in students:
+            student = student_map.get(student_data["gr_no"])
+            if student and any(extra_data.values()):
+                extra_objects.append(StudentExtraData(student=student, **extra_data))
+
+        if extra_objects:
+            StudentExtraData.objects.bulk_create(extra_objects)
+
+        created_count = len(student_objects)
+    else:
+        for student_data, extra_data in students:
+            student = Student.objects.create(**student_data)
+            if any(extra_data.values()):
+                StudentExtraData.objects.create(student=student, **extra_data)
+            created_count += 1
+
+    return {"created": created_count, "errors": []}
 
 
 # ----------------------------

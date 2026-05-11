@@ -467,6 +467,14 @@ class Student(models.Model):
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["school", "gr_no"],
+                name="unique_school_gr_no",
+            )
+        ]
+
 class StudentVerify(models.Model):
     gr_no = models.CharField(max_length=50)
     admission_number = models.CharField(max_length=100,null=True, blank=True)
