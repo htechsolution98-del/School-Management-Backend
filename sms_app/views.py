@@ -787,7 +787,7 @@ class AdmissionReadOnlyViewSet(ReadOnlyModelViewSet):
         user = self.request.user
 
         # Multi-tenant safety (VERY IMPORTANT for your SaaS)
-        return Admission.objects.filter(school=user.school).prefetch_related(
+        return Admission.objects.filter(fee_verified = True, school=user.school).prefetch_related(
             "field_values", "documents"
         )
 
@@ -800,6 +800,7 @@ class ClerkVerifyView(ModelViewSet):
     serializer_class = ClerkVerifySerializer
     permission_classes = [IsAuthenticated, IsCLerk]
     lookup_field = "admission_number"
+    http_method_names = ['patch']
 
     def get_queryset(self):
         return Admission.objects.filter(school=self.request.user.school)
@@ -874,7 +875,7 @@ from sms_app.models import SchoolClass
 class SchoolClassView(ModelViewSet):
     queryset = SchoolClass.objects.all()
     serializer_class = SchoolClassSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, Isprincipal]
 
     def get_queryset(self):
         #  only show classes of logged-in user's school
@@ -2378,7 +2379,7 @@ def import_students_from_excel(file, school_id, use_bulk=True):
                 "mother_name": data["mother_name"],
                 "date_of_birth": parse_date(data["date_of_birth"]),
                 "admission_date": parse_date(data["admission_date"]),
-                "school_class": school_class,
+                "school_class": school_class.id,
                 # "remarks": data["remarks"],
                 "mobile": data["mobile"],
             }

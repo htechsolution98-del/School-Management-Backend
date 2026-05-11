@@ -1147,8 +1147,11 @@ class AdmissionDocumentUpdateSerializer(serializers.ModelSerializer):
 
         with transaction.atomic():
             for doc in documents_data:
-                document_field = doc["document_field"]
-                file = doc["file"]
+                document_field = doc.get("document_field")
+                file = doc.get("file")
+
+                if not document_field or not file:
+                    continue  # Skip invalid or incomplete documents
 
                 # UPSERT
                 AdmissionDocument.objects.update_or_create(
