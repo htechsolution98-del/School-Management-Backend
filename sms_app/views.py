@@ -779,6 +779,8 @@ class TempUserAdmissionViewSet(ReadOnlyModelViewSet):
 
 
 # ----------TO GET ADMISSION DATA TO TRUSTEE----------------
+
+
 class AdmissionReadOnlyViewSet(ReadOnlyModelViewSet):
     serializer_class = GetAdmissionDataSerializer
     permission_classes = [IsAuthenticated]

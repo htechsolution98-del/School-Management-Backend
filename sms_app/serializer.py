@@ -1405,8 +1405,8 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
 
         request = self.context.get("request")
         gr_no = validated_data.pop("gr_no")
-        g = instance.status
-        print(g)
+        # g = instance.status
+        # print(g)
         with transaction.atomic():
 
             # =========================
@@ -1449,7 +1449,29 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
                 field = field_value.field
                 value = field_value.value
 
-                if field.map_to_student_field:
+                if not field.map_to_student_field:
+                    continue
+
+                if field.map_to_student_field == "school_class":
+                    school_class = None
+                    if value is not None:
+                        value_str = str(value).strip()
+                        if value_str.isdigit():
+                            try:
+                                school_class = SchoolClass.objects.get(
+                                    id=int(value_str), school=student.school
+                                )
+                            except SchoolClass.DoesNotExist:
+                                school_class = None
+                        if school_class is None and value_str:
+                            school_class = SchoolClass.objects.filter(
+                                school=student.school,
+                                school_class=value_str,
+                            ).first()
+
+                    if school_class:
+                        student.school_class = school_class
+                else:
                     setattr(student, field.map_to_student_field, value)
 
             student.save()
