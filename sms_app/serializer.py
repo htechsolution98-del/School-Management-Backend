@@ -1040,6 +1040,7 @@ class AdmissionDocumentSubmissionSerializer(serializers.ModelSerializer):
                 document_field=document_field,
                 defaults={
                     "file": file,
+                    "school": admission.school,
                 },
             )
 
@@ -1133,32 +1134,49 @@ from django.db import transaction
 
 
 class AdmissionDocumentUpdateSerializer(serializers.ModelSerializer):
-    documents = AdmissionDocumentItemSerializer(many=True)
 
     class Meta:
         model = Admission
-        fields = ["documents"]
+        fields = []
 
     def update(self, instance, validated_data):
-        documents_data = validated_data.get("documents", [])
 
-        if instance.status == "completed":
-            raise ValidationError({"message": "Admission already completed"})
+        request = self.context["request"]
 
         with transaction.atomic():
-            for doc in documents_data:
-                document_field = doc.get("document_field")
-                file = doc.get("file")
 
-                if not document_field or not file:
-                    continue  # Skip invalid or incomplete documents
+            i = 0
 
-                # UPSERT
+            while True:
+
+                # documents[0][document_field]
+                document_field = request.data.get(
+                    f"documents[{i}][document_field]"
+                )
+
+                # documents[0][file]
+                file = request.FILES.get(
+                    f"documents[{i}][file]"
+                )
+
+                # stop loop when no more documents
+                if not document_field:
+                    break
+
+                # skip if file missing
+                if not file:
+                    i += 1
+                    continue
+
                 AdmissionDocument.objects.update_or_create(
                     admission=instance,
-                    document_field=document_field,
-                    defaults={"file": file, "school": instance.school},
+                    document_field_id=document_field,
+                    defaults={
+                        "file": file,
+                    },
                 )
+
+                i += 1
 
         return instance
 

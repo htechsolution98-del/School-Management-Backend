@@ -1178,31 +1178,59 @@ class AdmissionUpdateViewSet(ModelViewSet):
 #  =========update document by clerk after submission=====
 
 
+
 class AdmissionDocumentViewSet(ModelViewSet):
+
     queryset = Admission.objects.all()
+
     lookup_field = "admission_number"
+
     permission_classes = [IsAuthenticated, IsCLerk]
 
+    parser_classes = [MultiPartParser, FormParser]
+
     def get_queryset(self):
-        return Admission.objects.filter(school=self.request.user.school)
+        return Admission.objects.filter(
+            school=self.request.user.school
+        )
 
     def get_serializer_class(self):
+
         if self.action in ["update", "partial_update"]:
             return AdmissionDocumentUpdateSerializer
-        return AdmissionDocumentSerializer
+
+        return AdmissionDocumentUpdateSerializer
 
     def update(self, request, *args, **kwargs):
-        response = super().update(request, *args, **kwargs)
+
+        partial = kwargs.pop("partial", False)
+
+        instance = self.get_object()
+
+        serializer = self.get_serializer(
+            instance,
+            data=request.data,
+            partial=partial,
+            context={"request": request},
+        )
+
+        serializer.is_valid(raise_exception=True)
+
+        self.perform_update(serializer)
+
         return Response(
             {
                 "message": "Admission documents updated successfully",
-                "admission_number": kwargs.get("admission_number"),
-                "data": response.data,
+                "admission_number": instance.admission_number,
             },
-            status=response.status_code,
+            status=status.HTTP_200_OK,
         )
 
+    def partial_update(self, request, *args, **kwargs):
 
+        kwargs["partial"] = True
+
+        return self.update(request, *args, **kwargs)
 # ======================================================
 
 
