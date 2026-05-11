@@ -785,19 +785,28 @@ class AdmissionReadOnlyViewSet(ReadOnlyModelViewSet):
     serializer_class = GetAdmissionDataSerializer
     permission_classes = [IsAuthenticated, IsCLerk]
 
+    # def get_queryset(self):
+    #     user = self.request.user
+
+    #     # Multi-tenant safety (VERY IMPORTANT for your SaaS)
+    #     return Admission.objects.filter(fee_verified = True, school=user.school).prefetch_related(
+    #         "field_values", "documents"
+    #     )
+
     def get_queryset(self):
+        verified_admission_ids = StudentVerify.objects.filter(
+            clerk_verify=True
+        ).values_list("admission_number", flat=True)
         user = self.request.user
-
-        # Multi-tenant safety (VERY IMPORTANT for your SaaS)
-        return Admission.objects.filter(fee_verified = True, school=user.school).prefetch_related(
-            "field_values", "documents"
-        )
-
-    def get_queryset(self):
+        verified_admission_ids = list(verified_admission_ids)
+        # print(verified_admission_ids)
+        # verified_admission_ids = [1,2,"141357-jagr-ADM-0022","149928-jagr-ADM-0026"]
         
-        verified_admission_ids = StudentVerify.objects.filter(clerk_verify=True).values_list("admission_number", flat=True)
-
-        return Admission.objects.exclude(admission_number=verified_admission_ids)
+        return (
+            Admission.objects.filter(fee_verified=True, school=user.school)
+            .exclude(admission_number__in=verified_admission_ids)
+            .prefetch_related("field_values", "documents")
+        )
     
 # ==========================================================
 
