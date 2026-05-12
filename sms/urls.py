@@ -130,6 +130,7 @@ router.register(r'get-leave-requests', GetLeaveRequestView, basename='get-leave-
 router.register(r'change-leave-status', ChangeLeaveView, basename='change-leave-status')# For approve leave request for principle METHOD [PUT]
 router.register(r'announcements', AnnouncementView, basename='announcements')# For managing announcements
 router.register(r'get-announcements', GetAnnouncementView, basename='get-announcements')# For get announcement for student,staff with filter [school filter add remainig]   
+router.register(r'razardata', RazarDataView, basename='razardata')# For get announcement for student,staff with filter [school filter add remainig]   
 
 
 router.register(r'academic-year', AcademicYearViewSet, basename='academic-year')
@@ -200,7 +201,7 @@ urlpatterns = [
     path('api/get_receipt/<int:student_id>/<int:form_id>/',get_receipt),
     
     path('api/schoollist/',SchoolListView.as_view()),
-    path('api/razardata/',RazarDataView.as_view()),
+    # path('api/razardata/',RazarDataView.as_view()),
     
     path('api/webhook/',RazorpayWebhookView.as_view()),
     
