@@ -136,6 +136,7 @@ class VerifyOTPSerializer(serializers.Serializer):
 class LoginSerializer(serializers.Serializer):
     email = serializers.EmailField(required=False)
     mobile = serializers.CharField(required=False)
+    username = serializers.CharField(required=False)
     password = serializers.CharField(write_only=True)
 
     def validate(self, data):
@@ -145,25 +146,29 @@ class LoginSerializer(serializers.Serializer):
 
         email = email.lower().strip() if email else None
         mobile = mobile.strip() if mobile else None
+        # username = username.strip() if username else None
 
-        if not email and not mobile:
-            raise serializers.ValidationError({"message": "Provide email or mobile"})
+        provided_credentials = [email, mobile]
+        provided_count = sum(1 for value in provided_credentials if value)
 
-        if email and mobile:
-            raise serializers.ValidationError({"message": "Provide only one"})
+        if provided_count == 0:
+            raise serializers.ValidationError(
+                {"message": "Provide email, mobile, or username"}
+            )
 
-        user = None
+        if provided_count > 1:
+            raise serializers.ValidationError(
+                {"message": "Provide only one of email, mobile, or username"}
+            )
 
-        #  Find user by email
-        user = (
-            CustomUser.objects.filter(
-                email=email.lower().strip() if email else None
-            ).first()
-            if email
-            else CustomUser.objects.filter(mobile=mobile.strip()).first()
-        )
-
-        #  Combined check (important)
+        if email:
+            user = CustomUser.objects.filter(email=email).first()
+            
+        if mobile:
+            user = CustomUser.objects.filter(mobile=mobile).first()
+            if not user:
+                user = CustomUser.objects.filter(username=mobile).first()
+    
 
         if not user or not user.check_password(password):
             raise serializers.ValidationError({"message": "Invalid credentials"})
@@ -307,7 +312,6 @@ class RazarDataSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 {"meassage": "This School Razor Pay Data Already Added"}
             )
-
         return attrs
 
 

@@ -2159,6 +2159,18 @@ class GetLocationView(APIView):
             )
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+    def get(self, request):
+        queryset = AttendanceLocation.objects.filter(
+            school=request.user.school
+        )
+
+        serializer = AttendanceLocationSerializer(
+            queryset,
+            many=True,
+            context={"request": request}
+        )
+
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 class AttendanceView(ModelViewSet):
     queryset = Attendance.objects.all()
