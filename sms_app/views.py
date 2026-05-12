@@ -609,7 +609,7 @@ class SchoolListView(generics.ListAPIView):
     permission_classes = [IsAuthenticated, Is_super_admin]
 
 
-class RazarDataView(generics.CreateAPIView):
+class RazarDataView(generics.ListCreateAPIView):
     queryset = RazorPayData.objects.all()
     serializer_class = RazarDataSerializer
     permission_classes = [IsAuthenticated, Is_super_admin]
