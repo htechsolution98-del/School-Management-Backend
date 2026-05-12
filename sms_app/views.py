@@ -808,7 +808,8 @@ class AdmissionReadOnlyViewSet(ReadOnlyModelViewSet):
             .prefetch_related("field_values", "documents")
         )
     
-# ==========================================================
+    
+# ======================================================================
 
 
 class ClerkVerifyView(ModelViewSet):
@@ -2333,8 +2334,9 @@ COLUMN_MAPPING = {
     "Student Name": "name",
     "Father's Name": "father_name",
     "Mother's Name": "mother_name",
+    "Aadhaar Card No": "aadhar_number",
     "Religion": "religion",
-    "Scheduled Caste": "scheduled_caste",
+    "Caste Category": "scheduled_caste",
     "Place of Birth": "place_of_birth",
     "Date of Birth": "date_of_birth",
     "Admission Date": "admission_date",
@@ -2344,7 +2346,8 @@ COLUMN_MAPPING = {
     "Conduct": "conduct",
     "Remarks": "remarks",
     "Mobile": "mobile",
-    "Class": "school_class",
+    "Standard": "school_class",
+    "Academic Year": "academic_year",
 }
 
 
@@ -2356,7 +2359,7 @@ COLUMN_MAPPING = {
 @transaction.atomic
 def import_students_from_excel(file, school_id, use_bulk=True):
     df = pd.read_excel(file)
-    df.columns = df.columns.str.strip()
+    df.columns = df.columns.astype(str).str.strip().str.replace(r"\s+", " ", regex=True)
 
     school = School.objects.get(id=school_id)
 
@@ -2402,6 +2405,7 @@ def import_students_from_excel(file, school_id, use_bulk=True):
             # Class validation
             # ----------------------------
             school_class = None
+
             if data.get("school_class"):
                 class_name = str(data["school_class"]).strip()
 
@@ -2413,6 +2417,7 @@ def import_students_from_excel(file, school_id, use_bulk=True):
                 if not school_class:
                     errors.append(f"Row {index+2}: Class '{class_name}' not found")
                     continue
+                       
 
             student_data = {
                 "school": school,
@@ -2423,9 +2428,10 @@ def import_students_from_excel(file, school_id, use_bulk=True):
                 "mother_name": data["mother_name"],
                 "date_of_birth": parse_date(data["date_of_birth"]),
                 "admission_date": parse_date(data["admission_date"]),
-                "school_class": school_class.id,
-                # "remarks": data["remarks"],
+                "school_class": school_class,
+                "academic_year": data["academic_year"],
                 "mobile": data["mobile"],
+                "aadhar_number": data["aadhar_number"],
             }
 
             extra_data = {

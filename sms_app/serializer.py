@@ -1150,14 +1150,10 @@ class AdmissionDocumentUpdateSerializer(serializers.ModelSerializer):
             while True:
 
                 # documents[0][document_field]
-                document_field = request.data.get(
-                    f"documents[{i}][document_field]"
-                )
+                document_field = request.data.get(f"documents[{i}][document_field]")
 
                 # documents[0][file]
-                file = request.FILES.get(
-                    f"documents[{i}][file]"
-                )
+                file = request.FILES.get(f"documents[{i}][file]")
 
                 # stop loop when no more documents
                 if not document_field:
@@ -1456,7 +1452,10 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
             )
 
             StudentVerify.objects.create(
-                gr_no=gr_no, student=student, clerk_verify=True
+                admission_number=instance.admission_number,
+                gr_no=gr_no,
+                student=student,
+                clerk_verify=True,
             )
             # =========================
             # 3. MAP FIXED FIELDS
@@ -1662,6 +1661,7 @@ class GetAdmissionDataSerializer(serializers.ModelSerializer):
             "field_values",
             "documents",
         ]
+
 
 # =============================================================
 

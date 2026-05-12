@@ -462,6 +462,8 @@ class Student(models.Model):
 
     admission_date = models.DateField(blank=True, null=True)
     gr_no = models.CharField(max_length=100, blank=True, null=True)
+     
+    academic_year = models.CharField(max_length=30, null=True, blank=True)
     
     aadhar_number = models.CharField(max_length = 50, null = True, blank = True )
 
