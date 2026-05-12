@@ -190,6 +190,8 @@ urlpatterns = [
     # path('in/',TemplateView.as_view(template_name='index.html')),
     path('api/import-students/',upload_students.as_view()),
    
+    path('api/today/',TodayAttendanceStatusView.as_view()),
+   
     
     path('api/razor/order/',RazorpayOrderView.as_view()),
     path('api/payment/verify/',VerifyPaymentView.as_view()),

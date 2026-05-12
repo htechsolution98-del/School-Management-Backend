@@ -2186,6 +2186,54 @@ class AttendanceView(ModelViewSet):
         )
 
 
+class TodayAttendanceStatusView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user=request.user
+        print("USER",user)
+        staff = Staff.objects.filter(user=request.user).first()
+        today = timezone.localdate()
+        print(staff)
+        
+        if not staff:
+            return Response(
+                {"message": "Staff profile not found for current user."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        attendance = Attendance.objects.filter(
+            staff=staff,
+            attendance_date=today,
+        ).first()
+
+        if not attendance:
+            return Response(
+                {
+                    "attendance_date": today,
+                    "checked_in": False,
+                    "checked_out": False,
+                    "check_in": None,
+                    "check_out": None,
+                    "is_present": False,
+                    "is_half_day": False,
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        return Response(
+            {
+                "attendance_date": attendance.attendance_date,
+                "checked_in": bool(attendance.check_in),
+                "checked_out": bool(attendance.check_out),
+                "check_in": attendance.check_in,
+                "check_out": attendance.check_out,
+                "is_present": attendance.is_present,
+                "is_half_day": attendance.is_half_day,
+            },
+            status=status.HTTP_200_OK,
+        )
+
 class LeaveTemplateView(ModelViewSet):
     queryset = LeaveTemplate.objects.all()
     serializer_class = LeaveTemplateSerializer

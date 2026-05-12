@@ -298,6 +298,7 @@ Payload:
   "latitude": "23.123456",
   "longitude": "72.123456"
 }
+
 Second request of the day:
 
 saves check_out
