@@ -132,9 +132,7 @@ router.register(r'announcements', AnnouncementView, basename='announcements')# F
 router.register(r'get-announcements', GetAnnouncementView, basename='get-announcements')# For get announcement for student,staff with filter [school filter add remainig]   
 router.register(r'razardata', RazarDataView, basename='razardata')# For get announcement for student,staff with filter [school filter add remainig]   
 
-
 router.register(r'academic-year', AcademicYearViewSet, basename='academic-year')
-
 
 router.register(r'feetype', FeeTypeViewSet, basename='feetype')
 router.register(r'fee-wise-class', FeeWiseClassViewSet, basename='fee-wise-class')
@@ -217,9 +215,7 @@ urlpatterns = [
     # JSON/YAML schema
     re_path(r'^swagger(?P<format>\.json|\.yaml)$', schema_view.without_ui(cache_timeout=0)),
 
-   
 ]
-
 
 if settings.DEBUG:
     urlpatterns += static(

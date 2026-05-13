@@ -1840,7 +1840,7 @@ class SetSubjectView(ModelViewSet):
 
         return Response({"message": "Data fetched from DB", "data": serializer.data})
 
-    # ✅ UPDATE
+    # UPDATE
     def perform_update(self, serializer):
         instance = serializer.save()
 
@@ -1854,7 +1854,7 @@ class SetSubjectView(ModelViewSet):
         except Exception:
             pass
 
-    # ✅ DELETE
+    # DELETE
     def perform_destroy(self, instance):
         school_id = instance.school.id
 
