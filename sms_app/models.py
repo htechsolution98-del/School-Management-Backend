@@ -1510,3 +1510,133 @@ class Timetable(models.Model):
 
     def __str__(self):
         return f"{self.standard} - {self.academic_year}"
+
+
+
+# =========================================================
+# LECTURE SLOT
+# =========================================================
+
+class LectureSlot(models.Model):
+    school = models.ForeignKey("School", on_delete=models.CASCADE, null = True, blank = True)
+
+
+    timetable = models.ForeignKey(
+        Timetable,
+        on_delete=models.CASCADE,
+        related_name="lecture_slots"
+    )
+
+    lecture_number = models.PositiveIntegerField()
+
+    start_time = models.TimeField()
+
+    end_time = models.TimeField()
+
+    class Meta:
+        ordering = ["lecture_number"]
+
+        unique_together = (
+            "timetable",
+            "lecture_number"
+        )
+
+    def __str__(self):
+        return f"Lecture {self.lecture_number}"
+
+
+
+
+# =========================================================
+# BREAK SLOT
+# =========================================================
+
+class BreakSlot(models.Model):
+    school = models.ForeignKey("School", on_delete=models.CASCADE, null = True, blank = True)
+
+    timetable = models.ForeignKey(
+        Timetable,
+        on_delete=models.CASCADE,
+        related_name="break_slots"
+    )
+
+    break_number = models.PositiveIntegerField()
+
+    start_time = models.TimeField()
+
+    end_time = models.TimeField()
+
+    duration_minutes = models.PositiveIntegerField()
+
+    class Meta:
+        ordering = ["break_number"]
+
+        unique_together = (
+            "timetable",
+            "break_number"
+        )
+
+    def __str__(self):
+        return f"Break {self.break_number}"
+
+
+
+# =========================================================
+# TIMETABLE ENTRY
+# =========================================================
+
+class TimetableEntry(models.Model):
+    school = models.ForeignKey("School", on_delete=models.CASCADE, null = True, blank = True)
+
+    DAY_CHOICES = [
+        ("monday", "Monday"),
+        ("tuesday", "Tuesday"),
+        ("wednesday", "Wednesday"),
+        ("thursday", "Thursday"),
+        ("friday", "Friday"),
+        ("saturday", "Saturday"),
+        ("sunday", "Sunday"),
+    ]
+
+    timetable = models.ForeignKey(
+        Timetable,
+        on_delete=models.CASCADE,
+        related_name="entries"
+    )
+
+    day = models.CharField(
+        max_length=20,
+        choices=DAY_CHOICES
+    )
+
+    lecture_slot = models.ForeignKey(
+        LectureSlot,
+        on_delete=models.CASCADE,
+        related_name="entries"
+    )
+
+    subject = models.ForeignKey(
+        Subject,
+        on_delete=models.CASCADE,
+        related_name="timetable_entries"
+    )
+
+    teacher_staff = models.ForeignKey(
+        Staff,
+        on_delete=models.CASCADE,
+        related_name="timetable_entries"
+    )
+
+    class Meta:
+        unique_together = (
+            "timetable",
+            "day",
+            "lecture_slot"
+        )
+
+    def __str__(self):
+        return (
+            f"{self.day} - "
+            f"{self.subject.name} - "
+            f"{self.teacher_staff.name}"
+        )

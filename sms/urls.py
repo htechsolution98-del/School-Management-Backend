@@ -138,6 +138,7 @@ router.register(r'feetype', FeeTypeViewSet, basename='feetype')
 router.register(r'fee-wise-class', FeeWiseClassViewSet, basename='fee-wise-class')
 
 router.register(r'salary-component', SalaryComponentViewSet, basename='salary-component')
+router.register(r'staff-list', StaffListView, basename='staff-list')
 router.register(r'staff-salary-component', StaffSalaryComponentViewSet, basename='staff-salary-component')
 router.register(r'staff-salary-payment', StaffSalaryPaymentViewSet, basename='staff-salary-payment')
 router.register(r'student-fee', StudentFeeViewSet, basename='student-fee')

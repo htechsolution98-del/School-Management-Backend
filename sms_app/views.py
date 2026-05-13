@@ -2707,7 +2707,7 @@ class FeeWiseClassViewSet(ModelViewSet):
 class SalaryComponentViewSet(ModelViewSet):
     queryset = SalaryComponent.objects.all()
     serializer_class = SalaryComponentSerializer
-    permission_classes = [IsAuthenticated, IsCLerk]
+    permission_classes = [IsAuthenticated, IsFeeManager]
 
     def get_queryset(self):
         queryset = SalaryComponent.objects.filter(school=self.request.user.school)
@@ -2729,7 +2729,7 @@ class SalaryComponentViewSet(ModelViewSet):
 class StaffSalaryComponentViewSet(ModelViewSet):
     queryset = StaffSalaryComponent.objects.all()
     serializer_class = StaffSalaryComponentSerializer
-    permission_classes = [IsAuthenticated, IsCLerk]
+    permission_classes = [IsAuthenticated, IsFeeManager]
 
     def get_queryset(self):
         queryset = StaffSalaryComponent.objects.filter(
@@ -2753,7 +2753,7 @@ class StaffSalaryComponentViewSet(ModelViewSet):
 class StaffSalaryPaymentViewSet(ModelViewSet):
     queryset = StaffSalaryPayment.objects.all()
     serializer_class = StaffSalaryPaymentSerializer
-    permission_classes = [IsAuthenticated, IsCLerk]
+    permission_classes = [IsAuthenticated, IsFeeManager]
 
     def get_serializer_class(self):
         if self.action == "create":
@@ -2794,7 +2794,7 @@ class StaffSalaryPaymentViewSet(ModelViewSet):
 class StudentFeeViewSet(ModelViewSet):
     queryset = StudentFee.objects.all()
     serializer_class = StudentFeeSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsFeeManager]
 
     def get_queryset(self):
         queryset = (
@@ -3124,3 +3124,13 @@ class StudentFeeRazorpayVerifyView(APIView):
                 "student_fee": StudentFeeSerializer(payment.student_fee).data,
             }
         )
+
+
+class StaffListView(ModelViewSet):
+    queryset = Staff.objects.all()
+    
+    serializer_class = StaffListSirializer
+    permission_classes = [IsAuthenticated,IsFeeManager]
+    
+    def get_queryset(self):
+        return Staff.objects.filter(school = self.request.user.school)

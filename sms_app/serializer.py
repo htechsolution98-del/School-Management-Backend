@@ -3625,3 +3625,29 @@ class StudentFeePaymentSerializer(serializers.ModelSerializer):
         payment = super().update(instance, validated_data)
         payment.student_fee.refresh_payment_status()
         return payment
+
+
+class StaffListSirializer(serializers.ModelSerializer):
+    # user_id = serializers.IntegerField(source="user.id", read_only=True)
+    # school_name = serializers.CharField(source="school.name", read_only=True)
+
+    class Meta:
+        model = Staff
+        fields = [
+            "id",
+            # "user_id",
+            # "school",
+            # "school_name",
+            "name",
+            # "email",
+            # "mobile",
+            "category",
+            # "address",
+            # "date_of_birth",
+            # "joining_date",
+            # "salary",
+            # "is_active",
+            # "created_at",
+            # "updated_at",
+        ]
+        read_only_fields = fields
