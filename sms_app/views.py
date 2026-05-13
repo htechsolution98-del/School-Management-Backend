@@ -344,21 +344,14 @@ class LoginView(APIView):
         # =====================================
         # Roles
         # =====================================
-        roles = list(
-            user.groups.values_list(
-                "name",
-                flat=True
-            )
-        )
+        roles = list(user.groups.values_list("name", flat=True))
 
         # =====================================
         # Modules
         # =====================================
         modules = list(
-            UserModuleAccess.objects.filter(user=user)
-            .values_list(
-                "module__code",
-                flat=True
+            UserModuleAccess.objects.filter(user=user).values_list(
+                "module__code", flat=True
             )
         )
 
@@ -368,10 +361,8 @@ class LoginView(APIView):
         response_data = {
             "access": access_token,
             "refresh": refresh_token,
-
             "school_id": user.school.id if user.school else None,
             "school_slug": user.school.slug if user.school else None,
-
             "roles": roles,
             "modules": modules,
         }
@@ -379,10 +370,7 @@ class LoginView(APIView):
         # =====================================
         # Detect Client Type
         # =====================================
-        client_type = request.headers.get(
-            "Client-Type",
-            "web"
-        ).lower()
+        client_type = request.headers.get("Client-Type", "web").lower()
 
         # =====================================
         # MOBILE / ANDROID
@@ -390,10 +378,7 @@ class LoginView(APIView):
         # =====================================
         if client_type in ["mobile", "android"]:
 
-            return Response(
-                response_data,
-                status=status.HTTP_200_OK
-            )
+            return Response(response_data, status=status.HTTP_200_OK)
 
         # =====================================
         # WEB
@@ -406,17 +391,15 @@ class LoginView(APIView):
                 "roles": response_data["roles"],
                 "modules": response_data["modules"],
             },
-            status=status.HTTP_200_OK
+            status=status.HTTP_200_OK,
         )
 
         response.set_cookie(
             key="access_token",
             value=access_token,
-
             httponly=True,
-            secure=not settings.DEBUG,
-            samesite="Lax",
-
+            secure=True,
+            samesite="None",
             max_age=60 * 60,
             path="/",
         )
@@ -424,16 +407,15 @@ class LoginView(APIView):
         response.set_cookie(
             key="refresh_token",
             value=refresh_token,
-
             httponly=True,
-            secure=not settings.DEBUG,
-            samesite="Lax",
-
+            secure=True,
+            samesite="None",
             max_age=7 * 24 * 60 * 60,
             path="/",
         )
 
         return response
+
 
 class UserListView(generics.ListAPIView):
     queryset = User.objects.all()
@@ -894,14 +876,14 @@ class AdmissionReadOnlyViewSet(ReadOnlyModelViewSet):
         verified_admission_ids = list(verified_admission_ids)
         # print(verified_admission_ids)
         # verified_admission_ids = [1,2,"141357-jagr-ADM-0022","149928-jagr-ADM-0026"]
-        
+
         return (
             Admission.objects.filter(fee_verified=True, school=user.school)
             .exclude(admission_number__in=verified_admission_ids)
             .prefetch_related("field_values", "documents")
         )
-    
-    
+
+
 # ======================================================================
 
 
@@ -910,7 +892,7 @@ class ClerkVerifyView(ModelViewSet):
     serializer_class = ClerkVerifySerializer
     permission_classes = [IsAuthenticated, IsCLerk]
     lookup_field = "admission_number"
-    http_method_names = ['patch']
+    http_method_names = ["patch"]
 
     def get_queryset(self):
         return Admission.objects.filter(school=self.request.user.school)
@@ -1286,7 +1268,6 @@ class AdmissionUpdateViewSet(ModelViewSet):
 #  =========update document by clerk after submission=====
 
 
-
 class AdmissionDocumentViewSet(ModelViewSet):
 
     queryset = Admission.objects.all()
@@ -1298,9 +1279,7 @@ class AdmissionDocumentViewSet(ModelViewSet):
     parser_classes = [MultiPartParser, FormParser]
 
     def get_queryset(self):
-        return Admission.objects.filter(
-            school=self.request.user.school
-        )
+        return Admission.objects.filter(school=self.request.user.school)
 
     def get_serializer_class(self):
 
@@ -1339,6 +1318,8 @@ class AdmissionDocumentViewSet(ModelViewSet):
         kwargs["partial"] = True
 
         return self.update(request, *args, **kwargs)
+
+
 # ======================================================
 
 
@@ -2253,17 +2234,14 @@ class GetLocationView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def get(self, request):
-        queryset = AttendanceLocation.objects.filter(
-            school=request.user.school
-        )
+        queryset = AttendanceLocation.objects.filter(school=request.user.school)
 
         serializer = AttendanceLocationSerializer(
-            queryset,
-            many=True,
-            context={"request": request}
+            queryset, many=True, context={"request": request}
         )
 
         return Response(serializer.data, status=status.HTTP_200_OK)
+
 
 class AttendanceView(ModelViewSet):
     queryset = Attendance.objects.all()
@@ -2283,12 +2261,12 @@ class TodayAttendanceStatusView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        user=request.user
-        print("USER",user)
+        user = request.user
+        print("USER", user)
         staff = Staff.objects.filter(user=request.user).first()
         today = timezone.localdate()
         print(staff)
-        
+
         if not staff:
             return Response(
                 {"message": "Staff profile not found for current user."},
@@ -2326,6 +2304,7 @@ class TodayAttendanceStatusView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+
 
 class LeaveTemplateView(ModelViewSet):
     queryset = LeaveTemplate.objects.all()
@@ -2570,7 +2549,6 @@ def import_students_from_excel(file, school_id, use_bulk=True):
                 if not school_class:
                     errors.append(f"Row {index+2}: Class '{class_name}' not found")
                     continue
-                       
 
             student_data = {
                 "school": school,

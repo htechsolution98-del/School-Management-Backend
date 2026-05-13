@@ -1456,3 +1456,57 @@ class Holiday(models.Model):
     def __str__(self):
         return self.name
 
+
+# THIS MODEL ALL REDAY HAVE 
+
+# =========================================================
+# STANDARD / CLASS
+# =========================================================
+
+# =========================================================
+# SUBJECT
+# =========================================================
+
+# =========================================================
+# TEACHER
+# =========================================================
+
+
+
+# =========================================================
+# TIMETABLE
+# =========================================================
+
+class Timetable(models.Model):
+
+    school = models.ForeignKey(
+        School,
+        on_delete=models.CASCADE,
+        related_name="timetables"
+    )
+
+    class_div = models.ForeignKey(
+        Division,
+        on_delete=models.CASCADE,
+        related_name="timetables"
+    )
+
+    academic_year = models.CharField(max_length=20)
+
+    total_lectures = models.PositiveIntegerField(default=0)
+
+    total_breaks = models.PositiveIntegerField(default=0)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = (
+            "school",
+            "class_div",
+            "academic_year"
+        )
+
+    def __str__(self):
+        return f"{self.standard} - {self.academic_year}"

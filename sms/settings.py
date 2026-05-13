@@ -123,6 +123,12 @@ CORS_ALLOWED_ORIGINS = [
     "https://school-management-system-sms-z8kv.onrender.com"
 ]
 
+SESSION_COOKIE_SAMESITE = "None"
+SESSION_COOKIE_SECURE = True
+
+CSRF_COOKIE_SAMESITE = "None"
+CSRF_COOKIE_SECURE = True
+
 WSGI_APPLICATION = "sms.wsgi.application"
 
 
