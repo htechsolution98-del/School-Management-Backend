@@ -1390,3 +1390,69 @@ class StaffSalaryPayment(models.Model):
 
 
 
+#  ITS FOR TIME TABLE
+# =========================================================
+# WORKING DAYS
+# =========================================================
+
+class WorkingDay(models.Model):
+
+    DAY_CHOICES = [
+        ("monday", "Monday"),
+        ("tuesday", "Tuesday"),
+        ("wednesday", "Wednesday"),
+        ("thursday", "Thursday"),
+        ("friday", "Friday"),
+        ("saturday", "Saturday"),
+        ("sunday", "Sunday"),
+    ]
+
+    school = models.ForeignKey(
+        School,
+        on_delete=models.CASCADE,
+        related_name="working_days"
+    )
+
+    day = models.CharField(
+        max_length=20,
+        choices=DAY_CHOICES
+    )
+
+    class Meta:
+        unique_together = ("school", "day")
+
+    def __str__(self):
+        return f"{self.school.name} - {self.day}"
+
+
+
+
+# =========================================================
+# HOLIDAYS
+# =========================================================
+
+class Holiday(models.Model):
+
+    school = models.ForeignKey(
+        School,
+        on_delete=models.CASCADE,
+        related_name="holidays"
+    )
+
+    name = models.CharField(max_length=255)
+
+    start_date = models.DateField()
+
+    end_date = models.DateField(
+        null=True,
+        blank=True
+    )
+
+    description = models.TextField(
+        blank=True,
+        null=True
+    )
+
+    def __str__(self):
+        return self.name
+

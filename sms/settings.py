@@ -118,6 +118,11 @@ SIMPLE_JWT = {
 
 }
 
+CORS_ALLOWED_ORIGINS = [
+    "http://127.0.0.1:8000",
+    "https://school-management-system-sms-z8kv.onrender.com"
+]
+
 WSGI_APPLICATION = "sms.wsgi.application"
 
 
