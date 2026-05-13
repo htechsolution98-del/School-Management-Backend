@@ -39,7 +39,11 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "sms_app",
+    
     "rest_framework",
+    "rest_framework_simplejwt",
+    "rest_framework_simplejwt.token_blacklist",
+    
     "corsheaders",
     "drf_yasg",
 ]
@@ -104,6 +108,12 @@ SIMPLE_JWT = {
 
     # Refresh token lifetime
     "REFRESH_TOKEN_LIFETIME": timedelta(days=1),
+    
+    "ROTATE_REFRESH_TOKENS": True,
+
+    "BLACKLIST_AFTER_ROTATION": True,
+
+    "UPDATE_LAST_LOGIN": True,
 
 
 }
@@ -116,7 +126,8 @@ AUTH_USER_MODEL = 'sms_app.CustomUser' # for custom USer
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES":(
-    "sms_app.authentication.JWTAuthentication",
+    # "sms_app.authentication.JWTAuthentication",
+    "sms_app.authentication.CookieJWTAuthentication",
     ),
 
 }

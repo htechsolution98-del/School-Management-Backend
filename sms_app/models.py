@@ -1386,3 +1386,7 @@ class StaffSalaryPayment(models.Model):
             self.staff_category = self.staff.category
 
         super().save(*args, **kwargs)
+
+
+
+

@@ -309,38 +309,131 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from django.conf import settings
+
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
+
+from rest_framework_simplejwt.tokens import RefreshToken
+
+# from .serializers import LoginSerializer
+from .models import UserModuleAccess
+
 
 class LoginView(APIView):
 
     def post(self, request):
+
+        # =====================================
+        # Validate User
+        # =====================================
         serializer = LoginSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
         user = serializer.validated_data["user"]
 
-        # 🎟 JWT Token
+        # =====================================
+        # Generate JWT Tokens
+        # =====================================
         refresh = RefreshToken.for_user(user)
 
-        # Roles from Groups
-        roles = list(user.groups.values_list("name", flat=True))
-        modules = UserModuleAccess.objects.filter(user=user.id).values_list(
-            "module__code", flat=True
+        access_token = str(refresh.access_token)
+        refresh_token = str(refresh)
+
+        # =====================================
+        # Roles
+        # =====================================
+        roles = list(
+            user.groups.values_list(
+                "name",
+                flat=True
+            )
         )
 
-        user = User.objects.filter(id=user.id).first()
+        # =====================================
+        # Modules
+        # =====================================
+        modules = list(
+            UserModuleAccess.objects.filter(user=user)
+            .values_list(
+                "module__code",
+                flat=True
+            )
+        )
 
-        return Response(
+        # =====================================
+        # Common Payload
+        # =====================================
+        response_data = {
+            "access": access_token,
+            "refresh": refresh_token,
+
+            "school_id": user.school.id if user.school else None,
+            "school_slug": user.school.slug if user.school else None,
+
+            "roles": roles,
+            "modules": modules,
+        }
+
+        # =====================================
+        # Detect Client Type
+        # =====================================
+        client_type = request.headers.get(
+            "Client-Type",
+            "web"
+        ).lower()
+
+        # =====================================
+        # MOBILE / ANDROID
+        # Return Tokens in JSON
+        # =====================================
+        if client_type in ["mobile", "android"]:
+
+            return Response(
+                response_data,
+                status=status.HTTP_200_OK
+            )
+
+        # =====================================
+        # WEB
+        # Store Tokens in HttpOnly Cookies
+        # =====================================
+        response = Response(
             {
-                "access": str(refresh.access_token),
-                "refresh": str(refresh),
-                "school_id": user.school.id if user.school else None,
-                "school_slug": user.school.slug if user.school else None,
-                "roles": roles,
-                "modules": modules,
+                "school_id": response_data["school_id"],
+                "school_slug": response_data["school_slug"],
+                "roles": response_data["roles"],
+                "modules": response_data["modules"],
             },
-            status=status.HTTP_200_OK,
+            status=status.HTTP_200_OK
         )
 
+        response.set_cookie(
+            key="access_token",
+            value=access_token,
+
+            httponly=True,
+            secure=not settings.DEBUG,
+            samesite="Lax",
+
+            max_age=60 * 60,
+            path="/",
+        )
+
+        response.set_cookie(
+            key="refresh_token",
+            value=refresh_token,
+
+            httponly=True,
+            secure=not settings.DEBUG,
+            samesite="Lax",
+
+            max_age=7 * 24 * 60 * 60,
+            path="/",
+        )
+
+        return response
 
 class UserListView(generics.ListAPIView):
     queryset = User.objects.all()
