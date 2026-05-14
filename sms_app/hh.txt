@@ -404,3 +404,102 @@ Clerk assigns components to staff
 Clerk generates salary for month
 System checks attendance and components
 System stores final StaffSalaryPayment
+
+
+
+
+-------------------------------------------------------
+
+
+1. Create Division
+POST /api/divisionSet/
+
+{
+  "SchoolClass": 1,
+  "division": "A",
+  "capacity": 40
+}
+2. Create Subject
+POST /api/setSubject/
+
+{
+  "name": "Mathematics",
+  "division": 1
+}
+3. Get Teachers
+GET /api/getteacher/
+
+No payload.
+
+4. Assign Teacher
+POST /api/assignClass/
+
+{
+  "teacher": 3,
+  "subject": 1,
+  "division": 1,
+  "is_class_teacher": true
+}
+5. Create Timetable
+POST /api/timetables/
+
+{
+  "class_div": 1,
+  "academic_year": "2026-2027",
+
+  "working_days": [
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday"
+  ],
+
+  "lecture_slots": [
+    {
+      "lecture_number": 1,
+      "start_time": "08:00",
+      "end_time": "08:45"
+    },
+    {
+      "lecture_number": 2,
+      "start_time": "08:45",
+      "end_time": "09:30"
+    }
+  ],
+
+  "break_slots": [
+    {
+      "break_number": 1,
+      "start_time": "10:15",
+      "end_time": "10:45",
+      "duration_minutes": 30
+    }
+  ]
+}
+6. Add Lecture Entry
+POST /api/timetable-entries/
+
+{
+  "timetable": 1,
+  "day": "monday",
+  "lecture_slot": 1,
+  "subject": 1,
+  "teacher_staff": 3
+}
+7. Change Teacher
+PATCH /api/timetable-entries/1/
+
+{
+  "teacher_staff": 5
+}
+8. Create Holiday
+POST /api/holidays/
+
+{
+  "name": "Diwali Holiday",
+  "start_date": "2026-11-08",
+  "end_date": "2026-11-10",
+  "description": "Festival holiday"
+}

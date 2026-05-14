@@ -113,10 +113,9 @@ router.register(r'getteacher', GetTeacherView, basename='getteacher') # For teac
 router.register(r'assignClass', AssignClassView, basename='assignClass') # For CLerk assign Class METHOD [GET,POST,PUT,DELETE] ----API Need---  api/divisionSet/ , api/setSubject/ , api/getteacher/  for drop down
 
 # ========= TIME TABLE ROUTER ============
-router.register(r'tt_year', Tt_yearView, basename='tt_year')# For CLerk assign Class METHOD [GET,POST,PUT,DELETE] ----API Need---  api/divisionSet/ , api/setSubject/ , api/getteacher/  for drop down
-router.register(r'time_table', Time_tableView, basename='time_table')# For CLerk assign Class METHOD [GET,POST,PUT,DELETE] ----API Need---  api/divisionSet/ , api/setSubject/ , api/getteacher/  for drop down
-# router.register(r'tt_day', Tt_dayView, basename='tt_day')# For CLerk assign Class METHOD [GET,POST,PUT,DELETE] ----API Need---  api/divisionSet/ , api/setSubject/ , api/getteacher/  for drop down
-router.register(r'tt_daytime', Tt_day_timeView, basename='tt_daytime')# For CLerk assign Class METHOD [GET,POST,PUT,DELETE] ----API Need---  api/divisionSet/ , api/setSubject/ , api/getteacher/  for drop down
+router.register(r'timetables', TimetableViewSet, basename='timetables')
+router.register(r'timetable-entries', TimetableEntryViewSet, basename='timetable-entries')
+router.register(r'holidays', HolidayViewSet, basename='holidays')
 #get student for principle with filter [school filter add remainig]
 router.register(r'get-student',GetStudentView,basename='get-student')# for 
 
@@ -141,6 +140,7 @@ router.register(r'salary-component', SalaryComponentViewSet, basename='salary-co
 router.register(r'staff-list', StaffListView, basename='staff-list')
 router.register(r'staff-salary-component', StaffSalaryComponentViewSet, basename='staff-salary-component')
 router.register(r'staff-salary-payment', StaffSalaryPaymentViewSet, basename='staff-salary-payment')
+
 router.register(r'student-fee', StudentFeeViewSet, basename='student-fee')
 router.register(r'student-fee-payment', StudentFeePaymentViewSet, basename='student-fee-payment')
 

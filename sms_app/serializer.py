@@ -3075,7 +3075,7 @@ class GenerateStaffSalaryPaymentSerializer(serializers.ModelSerializer):
             "salary_month",
             "payment_mode",
             "transaction_id",
-            "receipt_number",
+            # "receipt_number",
             "payment_status",
             "payment_date",
             "note",
@@ -3134,6 +3134,7 @@ class GenerateStaffSalaryPaymentSerializer(serializers.ModelSerializer):
         user = request.user if request and request.user.is_authenticated else None
         staff = validated_data["staff"]
         salary_month = validated_data["salary_month"]
+        print(salary_month)
 
         year, month = [int(part) for part in salary_month.split("-")]
         working_days = calendar.monthrange(year, month)[1]
@@ -3198,7 +3199,11 @@ class GenerateStaffSalaryPaymentSerializer(serializers.ModelSerializer):
 
         if net_salary < 0:
             net_salary = Decimal("0.00")
-
+            
+        receipt_number = f"SAL-{salary_month}-{user.school.id}-{user.school.slug}"
+        print("RECEIPT", receipt_number, flush=True)        
+        # b = None
+        # payment = None
         payment = StaffSalaryPayment.objects.create(
             staff=staff,
             salary_month=salary_month,
@@ -3216,11 +3221,12 @@ class GenerateStaffSalaryPaymentSerializer(serializers.ModelSerializer):
             payment_mode=validated_data["payment_mode"],
             payment_status=validated_data.get("payment_status", "paid"),
             transaction_id=validated_data.get("transaction_id"),
-            receipt_number=validated_data.get("receipt_number"),
+            receipt_number=receipt_number,
             payment_date=validated_data.get("payment_date") or timezone.now(),
             note=validated_data.get("note"),
             paid_by=user,
         )
+    
 
         return payment
 
@@ -3714,6 +3720,11 @@ class TimetableSerializer(serializers.ModelSerializer):
 
     lecture_slots = LectureSlotSerializer(many=True, required=False)
     break_slots = BreakSlotSerializer(many=True, required=False)
+    working_days = serializers.ListField(
+        child=serializers.ChoiceField(choices=WorkingDay.DAY_CHOICES),
+        write_only=True,
+        required=False,
+    )
 
     class Meta:
         model = Timetable
@@ -3726,6 +3737,11 @@ class TimetableSerializer(serializers.ModelSerializer):
 
         lectures = validated_data.pop("lecture_slots", [])
         breaks = validated_data.pop("break_slots", [])
+        working_days = validated_data.pop("working_days", [])
+        validated_data.pop("school", None)
+
+        for day in working_days:
+            WorkingDay.objects.get_or_create(school=school, day=day)
 
         timetable = Timetable.objects.create(
             school=school,
@@ -3752,6 +3768,8 @@ class TimetableSerializer(serializers.ModelSerializer):
 
         lectures = validated_data.pop("lecture_slots", None)
         breaks = validated_data.pop("break_slots", None)
+        working_days = validated_data.pop("working_days", None)
+        validated_data.pop("school", None)
 
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
@@ -3759,6 +3777,10 @@ class TimetableSerializer(serializers.ModelSerializer):
         instance.save()
 
         school = instance.school
+
+        if working_days is not None:
+            for day in working_days:
+                WorkingDay.objects.get_or_create(school=school, day=day)
 
         if lectures is not None:
             instance.lecture_slots.all().delete()
