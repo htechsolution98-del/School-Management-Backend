@@ -2724,7 +2724,20 @@ class SalaryComponentViewSet(ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(school=self.request.user.school)
+        
+    def destroy(self, request, *args, **kwargs):
+        response =  super().destroy(request, *args, **kwargs)
+        
+        return Response({
+            "message":"Salary Component Deleted Successfully"
+        })
+    
+    def update(self, request, *args, **kwargs):
+        response =  super().update(request, *args, **kwargs)
 
+        return Response({
+            "message":"Salary Component Update Successfully"
+        })
 
 class StaffSalaryComponentViewSet(ModelViewSet):
     queryset = StaffSalaryComponent.objects.all()
@@ -2758,7 +2771,6 @@ class StaffSalaryComponentViewSet(ModelViewSet):
             "staff":staff.name,
             "component_type":response.data.get("component_type")
         })
-
 
 class StaffSalaryPaymentViewSet(ModelViewSet):
     queryset = StaffSalaryPayment.objects.all()

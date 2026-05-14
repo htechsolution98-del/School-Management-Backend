@@ -1301,7 +1301,7 @@ class StaffSalaryComponent(models.Model):
     component = models.ForeignKey(SalaryComponent, on_delete=models.CASCADE)
 
     calculation_type = models.CharField(max_length=20, choices=CALCULATION_TYPE)
-    value = models.DecimalField(max_digits=5, decimal_places=2)
+    value = models.DecimalField(max_digits=20, decimal_places=2)
 
     # optional
     is_active = models.BooleanField(default=True)
