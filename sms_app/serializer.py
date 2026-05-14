@@ -3651,3 +3651,131 @@ class StaffListSirializer(serializers.ModelSerializer):
             # "updated_at",
         ]
         read_only_fields = fields
+        
+        
+
+
+# ===================================================
+
+
+class SchoolSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = School
+        fields = "__all__"
+        
+
+class WorkingDaySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = WorkingDay
+        fields = "__all__"
+
+class HolidaySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Holiday
+        fields = "__all__"
+        
+
+class ClassDivSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Division
+        fields = "__all__"
+
+
+class SubjectSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Subject
+        fields = "__all__"
+        
+
+class TeacherStaffSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Staff
+        fields = "__all__"
+
+class LectureSlotSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = LectureSlot
+        fields = "__all__"
+
+class BreakSlotSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = BreakSlot
+        fields = "__all__"
+        
+
+
+class TimetableEntrySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TimetableEntry
+        fields = "__all__"
+        
+
+class TimetableSerializer(serializers.ModelSerializer):
+
+    lecture_slots = LectureSlotSerializer(many=True, required=False)
+    break_slots = BreakSlotSerializer(many=True, required=False)
+
+    class Meta:
+        model = Timetable
+        fields = "__all__"
+        
+    def create(self, validated_data):
+
+        request = self.context["request"]
+        school = request.user.school
+
+        lectures = validated_data.pop("lecture_slots", [])
+        breaks = validated_data.pop("break_slots", [])
+
+        timetable = Timetable.objects.create(
+            school=school,
+            **validated_data
+        )
+
+        for l in lectures:
+            LectureSlot.objects.create(
+                school=school,
+                timetable=timetable,
+                **l
+            )
+
+        for b in breaks:
+            BreakSlot.objects.create(
+                school=school,
+                timetable=timetable,
+                **b
+            )
+
+        return timetable
+
+    def update(self, instance, validated_data):
+
+        lectures = validated_data.pop("lecture_slots", None)
+        breaks = validated_data.pop("break_slots", None)
+
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+
+        instance.save()
+
+        school = instance.school
+
+        if lectures is not None:
+            instance.lecture_slots.all().delete()
+            for l in lectures:
+                LectureSlot.objects.create(
+                    school=school,
+                    timetable=instance,
+                    **l
+                )
+
+        if breaks is not None:
+            instance.break_slots.all().delete()
+            for b in breaks:
+                BreakSlot.objects.create(
+                    school=school,
+                    timetable=instance,
+                    **b
+                )
+
+        return instance

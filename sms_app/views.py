@@ -2748,6 +2748,16 @@ class StaffSalaryComponentViewSet(ModelViewSet):
             queryset = queryset.filter(is_active=is_active == "true")
 
         return queryset.order_by("staff__name", "component__name")
+    
+    def create(self, request, *args, **kwargs):
+        response =  super().create(request, *args, **kwargs)
+        
+        staff = Staff.objects.filter(id = response.data.get("staff")).first()
+        return Response({
+            "message":"Salary Component Created Successfully",
+            "staff":staff.name,
+            "component_type":response.data.get("component_type")
+        })
 
 
 class StaffSalaryPaymentViewSet(ModelViewSet):
@@ -3134,3 +3144,80 @@ class StaffListView(ModelViewSet):
     
     def get_queryset(self):
         return Staff.objects.filter(school = self.request.user.school)
+    
+
+class SchoolQuerySetMixin:
+    def get_queryset(self):
+        return self.queryset.filter(
+            school=self.request.user.school
+        )
+        
+class SchoolViewSet(ModelViewSet):
+    queryset = School.objects.all()
+    serializer_class = SchoolSerializer
+    
+class WorkingDayViewSet(SchoolQuerySetMixin, ModelViewSet):
+    queryset = WorkingDay.objects.all()
+    serializer_class = WorkingDaySerializer
+
+    def perform_create(self, serializer):
+        serializer.save(school=self.request.user.school)
+
+class HolidayViewSet(SchoolQuerySetMixin, ModelViewSet):
+    queryset = Holiday.objects.all()
+    serializer_class = HolidaySerializer
+
+    def perform_create(self, serializer):
+        serializer.save(school=self.request.user.school)
+
+class StandardViewSet(SchoolQuerySetMixin, ModelViewSet):
+    queryset = Division.objects.all()
+    serializer_class = ClassDivSerializer
+    def perform_create(self, serializer):
+        serializer.save(school=self.request.user.school)
+        
+class SubjectViewSet(SchoolQuerySetMixin, ModelViewSet):
+    queryset = Subject.objects.all()
+    serializer_class = SubjectSerializer
+
+    def perform_create(self, serializer):
+        serializer.save(school=self.request.user.school)
+        
+
+class TeacherStaffViewSet(SchoolQuerySetMixin, ModelViewSet):
+    queryset = Staff.objects.all()
+    serializer_class = TeacherStaffSerializer
+
+    def perform_create(self, serializer):
+        serializer.save(school=self.request.user.school)
+        
+
+class TimetableViewSet(SchoolQuerySetMixin, ModelViewSet):
+    queryset = Timetable.objects.all()
+    serializer_class = TimetableSerializer
+
+    def perform_create(self, serializer):
+        serializer.save(school=self.request.user.school)
+        
+
+class LectureSlotViewSet(SchoolQuerySetMixin, ModelViewSet):
+    queryset = LectureSlot.objects.all()
+    serializer_class = LectureSlotSerializer
+
+    def perform_create(self, serializer):
+        serializer.save(school=self.request.user.school)
+        
+
+class BreakSlotViewSet(SchoolQuerySetMixin, ModelViewSet):
+    queryset = BreakSlot.objects.all()
+    serializer_class = BreakSlotSerializer
+
+    def perform_create(self, serializer):
+        serializer.save(school=self.request.user.school)
+
+class TimetableEntryViewSet(SchoolQuerySetMixin, ModelViewSet):
+    queryset = TimetableEntry.objects.all()
+    serializer_class = TimetableEntrySerializer
+
+    def perform_create(self, serializer):
+        serializer.save(school=self.request.user.school)
