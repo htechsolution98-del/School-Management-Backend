@@ -510,7 +510,7 @@ POST /api/holidays/
 
 
 
-----------------api/timetable/--------------------------
+----------------api/timetable/-------------------
 {
   "day": "monday",
 
@@ -675,16 +675,24 @@ for update --PUT /api/timetable/1/--
   "students": [
     {
       "id": 1,
-      "first_name": "Rahul",
+      "name": "Rahul",
       "last_name": "Sharma",
-      "roll_number": 1
+      "gr_no": 1
     },
 
     {
       "id": 2,
       "first_name": "Amit",
       "last_name": "Patel",
-      "roll_number": 2
+      "gr_no": 2
     }
   ]
+}
+
+
+----------------api/student-attendance/--------
+{
+    "student": 1,
+    "is_present": true,
+    "is_absent": false
 }

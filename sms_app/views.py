@@ -774,7 +774,7 @@ class GetTeacherView(ModelViewSet):
 
     def get_queryset(self):
         school = self.request.user.school
-        return Staff.objects.filter(school=school, user__groups__name="Teacher")
+        return Staff.objects.filter(school=school, user__groups__name="TEACHER")
 
 
 # =============TO ask more=========
@@ -3265,3 +3265,108 @@ class TimeTableViewSet(ModelViewSet):
 # ---------------------------------------------
 # ATTENDANCE
 
+
+class AttendanceStudentAPIView(APIView):
+
+    def get(self, request):
+
+        school = request.user.school
+
+        teacher = request.user.staff
+
+        # GET CLASS TEACHER ASSIGNMENT
+        assign_class = AssignClass.objects.select_related(
+            "division"
+        ).filter(
+            school=school,
+            teacher=teacher,
+            is_class_teacher=True
+        ).first()
+
+        # IF TEACHER NOT CLASS TEACHER
+        if not assign_class:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": (
+                        "You are not assigned "
+                        "as class teacher"
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # GET STUDENTS
+        students = Student.objects.filter(
+            school=school,
+            division=assign_class.division
+        ).order_by("gr_no")
+
+        serializer = StudentSerializer(
+            students,
+            many=True
+        )
+
+        return Response(
+            {
+                "success": True,
+
+                "division_id": (
+                    assign_class.division.id
+                ),
+
+                "division_name": (
+                    str(assign_class.division)
+                ),
+
+                "total_students": students.count(),
+
+                "students": serializer.data
+            }
+        )
+        
+
+# views.py
+
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
+
+from .models import StudentAttendance
+# from .serializers import StudentAttendanceSerializer
+
+
+class StudentAttendanceView(APIView):
+
+    def get(self, request):
+
+        queryset = StudentAttendance.objects.filter(
+            school=request.user.school
+        ).select_related(
+            "student",
+            "attendance_by",
+        )
+
+        serializer = StudentAttendanceSerializer(
+            queryset,
+            many=True
+        )
+
+        return Response(serializer.data)
+
+    def post(self, request):
+
+        serializer = StudentAttendanceSerializer(
+            data=request.data,
+            context={"request": request}
+        )
+
+        serializer.is_valid(raise_exception=True)
+
+        serializer.save()
+
+        return Response(
+            serializer.data,
+            status=status.HTTP_201_CREATED
+        )

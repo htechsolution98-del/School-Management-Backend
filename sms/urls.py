@@ -214,11 +214,17 @@ urlpatterns = [
     path('api/schoollist/',SchoolListView.as_view()),
     
     # ITS FOR GET STIDENT FOR ATTENDANSE
-    # path(
-    #     "attendance/students/",
-    #     AttendanceStudentAPIView.as_view(),
-    #     name="attendance-students"
-    # ),
+    path(
+        "api/attendance/students/",
+        AttendanceStudentAPIView.as_view(),
+        name="attendance-students"
+    ),
+    
+    path(
+        "api/student-attendance/",
+        StudentAttendanceView.as_view(),
+        name="student-attendance"
+    ),
     # path('api/razardata/',RazarDataView.as_view()),
     
     path('api/webhook/',RazorpayWebhookView.as_view()),

@@ -729,8 +729,7 @@ class AssignClass(models.Model):
         Subject, on_delete=models.CASCADE, null=True, blank=True
     )
     division = models.ForeignKey(
-        Division, on_delete=models.CASCADE, null=True, blank=True
-    )
+        Division, on_delete=models.CASCADE, null=True, blank=True)
     is_class_teacher = models.BooleanField(default=False)
 
     def __str__(self):
@@ -1717,3 +1716,43 @@ class Slot(models.Model):
             
     def __str__(self):
         return f"Lecture {self.slot_number}"
+    
+
+from django.db import models
+
+
+class StudentAttendance(models.Model):
+
+    school = models.ForeignKey(
+        "School",
+        on_delete=models.CASCADE,
+        related_name="student_attendance",
+    )
+
+    student = models.ForeignKey(
+        "Student",
+        on_delete=models.CASCADE,
+        related_name="attendance_records",
+    )
+
+    attendance_by = models.ForeignKey(
+        "Staff",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="taken_attendance",
+    )
+
+    is_present = models.BooleanField(default=False)
+    
+    is_absent = models.BooleanField(default=False)
+
+    attendance_date = models.DateField(auto_now_add=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("student", "attendance_date")
+
+    def __str__(self):
+        return f"{self.student} - {self.attendance_date}"

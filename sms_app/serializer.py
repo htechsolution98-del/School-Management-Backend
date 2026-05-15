@@ -4032,10 +4032,63 @@ class StudentSerializer(serializers.ModelSerializer):
         model = Student
         fields = [
             "id",
-            "first_name",
-            "last_name",
-            "roll_number"
+            "surname",
+            "name",
+            "gr_no"
         ]
         
         
+# serializers.py
 
+from rest_framework import serializers
+from .models import StudentAttendance
+
+
+class StudentAttendanceSerializer(serializers.ModelSerializer):
+
+    class Meta:
+        model = StudentAttendance
+        fields = [
+            "id",
+            "school",
+            "student",
+            "attendance_by",
+            "is_present",
+            "is_absent",
+            "attendance_date",
+            "created_at",
+        ]
+
+        read_only_fields = [
+            "id",
+            "school",
+            "attendance_by",
+            "attendance_date",
+            "created_at",
+        ]
+
+    def validate(self, attrs):
+
+        is_present = attrs.get("is_present", False)
+        is_absent = attrs.get("is_absent", False)
+
+        if is_present and is_absent:
+            raise serializers.ValidationError(
+                "Student cannot be both present and absent."
+            )
+
+        if not is_present and not is_absent:
+            raise serializers.ValidationError(
+                "Either present or absent must be selected."
+            )
+
+        return attrs
+
+    def create(self, validated_data):
+
+        request = self.context["request"]
+
+        validated_data["school"] = request.user.school
+        validated_data["attendance_by"] = request.user.staff
+
+        return super().create(validated_data)
