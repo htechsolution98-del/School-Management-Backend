@@ -3245,6 +3245,7 @@ from .models import Time_Table_tb
 class TimeTableViewSet(ModelViewSet):
 
     serializer_class = TimeTableSerializer
+    permission_classes = [IsAuthenticated,IsCLerk]
 
     queryset = Time_Table_tb.objects.all()
 
@@ -3260,9 +3261,14 @@ class TimeTableViewSet(ModelViewSet):
             school=self.request.user.school
         )
         
+    def create(self, request, *args, **kwargs):
+        response =  super().create(request, *args, **kwargs)
         
-
-# ---------------------------------------------
+        return Response({
+            "message":"Time Table Created Successfully"
+        })
+        
+# ----------------------------------------------------------
 # ATTENDANCE
 
 

@@ -1677,7 +1677,7 @@ class Time_Table_tb(models.Model):
     class Meta:
         constraints = [
             models.UniqueConstraint(
-                fields=["class_division", "day"],
+                fields=["school","class_division", "day"],
                 name="unique_division_day"
             )
         ]
@@ -1686,7 +1686,7 @@ class Time_Table_tb(models.Model):
 class Slot(models.Model):
     school = models.ForeignKey("School", on_delete=models.CASCADE, null = True, blank = True)
     
-    timetable = models.ForeignKey(Time_Table_tb, on_delete=models.CASCADE)
+    timetable = models.ForeignKey(Time_Table_tb, on_delete=models.CASCADE, related_name="slots")
     
     is_lecture  = models.BooleanField(default=False)
     is_break =  models.BooleanField(default=False)

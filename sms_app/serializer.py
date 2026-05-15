@@ -3935,21 +3935,77 @@ class SlotSerializer(serializers.ModelSerializer):
     
 class TimeTableSerializer(serializers.ModelSerializer):
 
+    # slots = SlotSerializer(many=True)
     slots = SlotSerializer(many=True)
 
     class Meta:
         model = Time_Table_tb
         fields = "__all__"
         read_only_fields = ["school"]
+    # def validate(self, attrs):
+
+    #     start_time = attrs.get("start_time")
+    #     end_time = attrs.get("end_time")
+
+    #     if start_time >= end_time:
+    #         raise serializers.ValidationError(
+    #             "End time must be greater than start time"
+    #         )
+
+    #     return 
     def validate(self, attrs):
 
         start_time = attrs.get("start_time")
         end_time = attrs.get("end_time")
+        slots = self.initial_data.get("slots", [])
 
         if start_time >= end_time:
             raise serializers.ValidationError(
                 "End time must be greater than start time"
             )
+
+        lecture_count = 0
+        previous_end = None
+
+        for slot in slots:
+
+            slot_start = slot.get("slot_start_time")
+            slot_end = slot.get("slot_end_time")
+
+            if previous_end and previous_end != slot_start:
+                raise serializers.ValidationError(
+                    "Slot timings are not continuous"
+                )
+
+            previous_end = slot_end
+
+            if slot.get("is_lecture"):
+                lecture_count += 1
+
+        if lecture_count != attrs.get("total_lecture"):
+            raise serializers.ValidationError(
+                "Total lecture count mismatch"
+            )
+
+        # school = attrs.get("school") or getattr(self.instance, "school", None)
+        school = self.context["request"].user.school
+        class_division = attrs.get(
+            "class_division"
+        ) or getattr(self.instance, "class_division", None)
+        day = attrs.get("day") or getattr(self.instance, "day", None)
+
+        if school and class_division and day:
+            existing = Time_Table_tb.objects.filter(
+                school=school,
+                class_division=class_division,
+                day=day,
+            )
+            if self.instance:
+                existing = existing.exclude(pk=self.instance.pk)
+            if existing.exists():
+                raise serializers.ValidationError(
+                    "A timetable for this class division and day already exists."
+                )
 
         return attrs
 
