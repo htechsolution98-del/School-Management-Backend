@@ -3300,7 +3300,7 @@ class AttendanceStudentAPIView(APIView):
         # GET STUDENTS
         students = Student.objects.filter(
             school=school,
-            division=assign_class.division
+            division=assign_class.division.division
         ).order_by("gr_no")
 
         serializer = StudentSerializer(
@@ -3325,7 +3325,8 @@ class AttendanceStudentAPIView(APIView):
                 "students": serializer.data
             }
         )
-        
+    
+
 
 # views.py
 
@@ -3370,3 +3371,5 @@ class StudentAttendanceView(APIView):
             serializer.data,
             status=status.HTTP_201_CREATED
         )
+
+

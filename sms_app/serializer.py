@@ -3940,7 +3940,7 @@ class TimeTableSerializer(serializers.ModelSerializer):
     class Meta:
         model = Time_Table_tb
         fields = "__all__"
-
+        read_only_fields = ["school"]
     def validate(self, attrs):
 
         start_time = attrs.get("start_time")

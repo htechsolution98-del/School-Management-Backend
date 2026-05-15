@@ -1756,3 +1756,59 @@ class StudentAttendance(models.Model):
 
     def __str__(self):
         return f"{self.student} - {self.attendance_date}"
+
+
+
+class Homework(models.Model):
+
+    school = models.ForeignKey(
+        "School",
+        on_delete=models.CASCADE,
+        related_name="homeworks"
+    )
+
+    division = models.ForeignKey(
+        "Division",
+        on_delete=models.CASCADE,
+        related_name="homeworks"
+    )
+
+    subject = models.ForeignKey(
+        "Subject",
+        on_delete=models.CASCADE,
+        related_name="homeworks"
+    )
+
+    teacher = models.ForeignKey(
+        "Staff",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="assigned_homeworks"
+    )
+
+    title = models.CharField(max_length=255)
+
+    description = models.TextField()
+
+    assigned_date = models.DateField(auto_now_add=True)
+
+    due_date = models.DateField()
+
+    attachment = models.FileField(
+        upload_to="homework/",
+        null=True,
+        blank=True
+    )
+
+    is_active = models.BooleanField(default=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.title} - {self.standard}"
