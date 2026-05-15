@@ -1759,6 +1759,8 @@ class StudentAttendance(models.Model):
 
 
 
+
+
 class Homework(models.Model):
 
     school = models.ForeignKey(
@@ -1769,12 +1771,6 @@ class Homework(models.Model):
 
     division = models.ForeignKey(
         "Division",
-        on_delete=models.CASCADE,
-        related_name="homeworks"
-    )
-
-    subject = models.ForeignKey(
-        "Subject",
         on_delete=models.CASCADE,
         related_name="homeworks"
     )
@@ -1811,4 +1807,5 @@ class Homework(models.Model):
         ordering = ["-created_at"]
 
     def __str__(self):
-        return f"{self.title} - {self.standard}"
+        return f"{self.title}"
+    

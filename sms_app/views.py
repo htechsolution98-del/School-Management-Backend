@@ -3341,7 +3341,6 @@ from rest_framework.response import Response
 from rest_framework import status
 
 from .models import StudentAttendance
-# from .serializers import StudentAttendanceSerializer
 
 
 class StudentAttendanceView(APIView):
