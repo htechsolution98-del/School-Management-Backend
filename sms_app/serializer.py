@@ -1610,11 +1610,31 @@ class SyllabusSerializer(serializers.ModelSerializer):
 
 # NEED VALIDATION OF SAME SUBJECT AS SAME DIVISION
 # --------ASSIGN CLASS-------
+
+from rest_framework import serializers
+
 class AssignClassSerializer(serializers.ModelSerializer):
+    subject_name = serializers.CharField(
+        source="subject.name",
+        read_only=True
+    )
+    class_name = serializers.CharField(source = "division.SchoolClass.school_class", read_only=True)
+    division_name = serializers.CharField(source = "division.division", read_only=True)
+
     class Meta:
         model = AssignClass
-        fields = "__all__"
+        fields = [
+            "teacher",
+            "subject",
+            "subject_name",
+            "division",
+            "division_name",
+            "class_name",
+            "is_class_teacher",
+        ]
 
+        read_only_fields = ["subject_name","division_name","class_name"]
+        
     def validate(self, data):
         school = self.context["request"].user.school
         division = data.get("division")
