@@ -113,10 +113,20 @@ router.register(r'getteacher', GetTeacherView, basename='getteacher') # For teac
 router.register(r'assignClass', AssignClassView, basename='assignClass') # For CLerk assign Class METHOD [GET,POST,PUT,DELETE] ----API Need---  api/divisionSet/ , api/setSubject/ , api/getteacher/  for drop down
 
 # ========= TIME TABLE ROUTER ============
-router.register(r'timetables', TimetableViewSet, basename='timetables')
-router.register(r'timetable-entries', TimetableEntryViewSet, basename='timetable-entries')
-router.register(r'holidays', HolidayViewSet, basename='holidays')
+# router.register(r'timetables', TimetableViewSet, basename='timetables')
+# router.register(r'timetable-entries', TimetableEntryViewSet, basename='timetable-entries')
+# router.register(r'holidays', HolidayViewSet, basename='holidays')
 #get student for principle with filter [school filter add remainig]
+
+# TIME TABLE
+router.register(
+    "timetable",
+    TimeTableViewSet,
+    basename="timetable"
+)
+
+
+
 router.register(r'get-student',GetStudentView,basename='get-student')# for 
 
 router.register(r'attendance', AttendanceView, basename='attendance')# For attendance tracking METHOD [GET,POST,PUT,DELETE]
@@ -202,6 +212,13 @@ urlpatterns = [
     path('api/get_receipt/<int:student_id>/<int:form_id>/',get_receipt),
     
     path('api/schoollist/',SchoolListView.as_view()),
+    
+    # ITS FOR GET STIDENT FOR ATTENDANSE
+    # path(
+    #     "attendance/students/",
+    #     AttendanceStudentAPIView.as_view(),
+    #     name="attendance-students"
+    # ),
     # path('api/razardata/',RazarDataView.as_view()),
     
     path('api/webhook/',RazorpayWebhookView.as_view()),

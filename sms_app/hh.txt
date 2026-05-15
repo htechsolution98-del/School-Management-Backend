@@ -503,3 +503,188 @@ POST /api/holidays/
   "end_date": "2026-11-10",
   "description": "Festival holiday"
 }
+
+
+
+
+
+
+
+----------------api/timetable/--------------------------
+{
+  "day": "monday",
+
+  "class_division": 1,
+
+  "total_lecture": 4,
+
+  "start_time": "08:00:00",
+
+  "end_time": "12:00:00",
+
+  "slots": [
+
+    {
+      "slot_number": 1,
+
+      "is_lecture": true,
+
+      "is_break": false,
+
+      "slot_start_time": "08:00:00",
+
+      "slot_end_time": "08:45:00",
+
+      "subject": 1,
+
+      "teacher": 5
+    },
+
+    {
+      "slot_number": 2,
+
+      "is_lecture": true,
+
+      "is_break": false,
+
+      "slot_start_time": "08:45:00",
+
+      "slot_end_time": "09:30:00",
+
+      "subject": 2,
+
+      "teacher": 8
+    },
+
+    {
+      "slot_number": 3,
+
+      "is_lecture": false,
+
+      "is_break": true,
+
+      "slot_start_time": "09:30:00",
+
+      "slot_end_time": "09:45:00",
+
+      "subject": null,
+
+      "teacher": null
+    }
+  ]
+}
+
+
+
+
+for update --PUT /api/timetable/1/--
+
+
+{
+  "day": "monday",
+
+  "class_division": 1,
+
+  "total_lecture": 5,
+
+  "start_time": "08:00:00",
+
+  "end_time": "01:00:00",
+
+  "slots": [
+
+    {
+      "slot_number": 1,
+
+      "is_lecture": true,
+
+      "is_break": false,
+
+      "slot_start_time": "08:00:00",
+
+      "slot_end_time": "08:45:00",
+
+      "subject": 1,
+
+      "teacher": 5
+    },
+
+    {
+      "slot_number": 2,
+
+      "is_lecture": true,
+
+      "is_break": false,
+
+      "slot_start_time": "08:45:00",
+
+      "slot_end_time": "09:30:00",
+
+      "subject": 2,
+
+      "teacher": 8
+    },
+
+    {
+      "slot_number": 3,
+
+      "is_lecture": false,
+
+      "is_break": true,
+
+      "slot_start_time": "09:30:00",
+
+      "slot_end_time": "09:45:00",
+
+      "subject": null,
+
+      "teacher": null
+    },
+
+    {
+      "slot_number": 4,
+
+      "is_lecture": true,
+
+      "is_break": false,
+
+      "slot_start_time": "09:45:00",
+
+      "slot_end_time": "10:30:00",
+
+      "subject": 3,
+
+      "teacher": 6
+    }
+  ]
+}
+
+
+
+
+-------------------------------------------
+{
+  "success": true,
+
+  "division_id": 1,
+
+  "division_name": "10-A",
+
+  "total_students": 3,
+
+  "students": [
+    {
+      "id": 1,
+      "first_name": "Rahul",
+      "last_name": "Sharma",
+      "roll_number": 1
+    },
+
+    {
+      "id": 2,
+      "first_name": "Amit",
+      "last_name": "Patel",
+      "roll_number": 2
+    }
+  ]
+}

@@ -1691,7 +1691,7 @@ class SetDivisionView(ModelViewSet):
                     {"message": "Data fetched from cache", "data": cached_data}
                 )
         except Exception:
-            pass  # 🚀 Ignore Redis error
+            pass  # Ignore Redis error
 
         queryset = Division.objects.filter(school_id=school_id)
         serializer = self.get_serializer(queryset, many=True)
@@ -1699,7 +1699,7 @@ class SetDivisionView(ModelViewSet):
         try:
             cache.set(cache_key, serializer.data, timeout=60 * 10)
         except Exception:
-            pass  # 🚀 Ignore Redis error
+            pass  # Ignore Redis error
 
         return Response(serializer.data)
 
@@ -3168,68 +3168,100 @@ class SchoolViewSet(ModelViewSet):
     queryset = School.objects.all()
     serializer_class = SchoolSerializer
     
-class WorkingDayViewSet(SchoolQuerySetMixin, ModelViewSet):
-    queryset = WorkingDay.objects.all()
-    serializer_class = WorkingDaySerializer
+# class WorkingDayViewSet(SchoolQuerySetMixin, ModelViewSet):
+#     queryset = WorkingDay.objects.all()
+#     serializer_class = WorkingDaySerializer
 
-    def perform_create(self, serializer):
-        serializer.save(school=self.request.user.school)
+#     def perform_create(self, serializer):
+#         serializer.save(school=self.request.user.school)
 
-class HolidayViewSet(SchoolQuerySetMixin, ModelViewSet):
-    queryset = Holiday.objects.all()
-    serializer_class = HolidaySerializer
+# class HolidayViewSet(SchoolQuerySetMixin, ModelViewSet):
+#     queryset = Holiday.objects.all()
+#     serializer_class = HolidaySerializer
 
-    def perform_create(self, serializer):
-        serializer.save(school=self.request.user.school)
+#     def perform_create(self, serializer):
+#         serializer.save(school=self.request.user.school)
 
-class StandardViewSet(SchoolQuerySetMixin, ModelViewSet):
-    queryset = Division.objects.all()
-    serializer_class = ClassDivSerializer
-    def perform_create(self, serializer):
-        serializer.save(school=self.request.user.school)
+# class StandardViewSet(SchoolQuerySetMixin, ModelViewSet):
+#     queryset = Division.objects.all()
+#     serializer_class = ClassDivSerializer
+#     def perform_create(self, serializer):
+#         serializer.save(school=self.request.user.school)
         
-class SubjectViewSet(SchoolQuerySetMixin, ModelViewSet):
-    queryset = Subject.objects.all()
-    serializer_class = SubjectSerializer
+# class SubjectViewSet(SchoolQuerySetMixin, ModelViewSet):
+#     queryset = Subject.objects.all()
+#     serializer_class = SubjectSerializer
 
-    def perform_create(self, serializer):
-        serializer.save(school=self.request.user.school)
-        
-
-class TeacherStaffViewSet(SchoolQuerySetMixin, ModelViewSet):
-    queryset = Staff.objects.all()
-    serializer_class = TeacherStaffSerializer
-
-    def perform_create(self, serializer):
-        serializer.save(school=self.request.user.school)
+#     def perform_create(self, serializer):
+#         serializer.save(school=self.request.user.school)
         
 
-class TimetableViewSet(SchoolQuerySetMixin, ModelViewSet):
-    queryset = Timetable.objects.all()
-    serializer_class = TimetableSerializer
+# class TeacherStaffViewSet(SchoolQuerySetMixin, ModelViewSet):
+#     queryset = Staff.objects.all()
+#     serializer_class = TeacherStaffSerializer
 
-    def perform_create(self, serializer):
-        serializer.save(school=self.request.user.school)
+#     def perform_create(self, serializer):
+#         serializer.save(school=self.request.user.school)
         
 
-class LectureSlotViewSet(SchoolQuerySetMixin, ModelViewSet):
-    queryset = LectureSlot.objects.all()
-    serializer_class = LectureSlotSerializer
+# class TimetableViewSet(SchoolQuerySetMixin, ModelViewSet):
+#     queryset = Timetable.objects.all()
+#     serializer_class = TimetableSerializer
 
-    def perform_create(self, serializer):
-        serializer.save(school=self.request.user.school)
+#     def perform_create(self, serializer):
+#         serializer.save(school=self.request.user.school)
         
 
-class BreakSlotViewSet(SchoolQuerySetMixin, ModelViewSet):
-    queryset = BreakSlot.objects.all()
-    serializer_class = BreakSlotSerializer
+# class LectureSlotViewSet(SchoolQuerySetMixin, ModelViewSet):
+#     queryset = LectureSlot.objects.all()
+#     serializer_class = LectureSlotSerializer
+
+#     def perform_create(self, serializer):
+#         serializer.save(school=self.request.user.school)
+        
+
+# class BreakSlotViewSet(SchoolQuerySetMixin, ModelViewSet):
+#     queryset = BreakSlot.objects.all()
+#     serializer_class = BreakSlotSerializer
+
+#     def perform_create(self, serializer):
+#         serializer.save(school=self.request.user.school)
+
+# class TimetableEntryViewSet(SchoolQuerySetMixin, ModelViewSet):
+#     queryset = TimetableEntry.objects.all()
+#     serializer_class = TimetableEntrySerializer
+
+#     def perform_create(self, serializer):
+#         serializer.save(school=self.request.user.school)
+
+
+
+
+from rest_framework.viewsets import ModelViewSet
+from .models import Time_Table_tb
+# from .serializers import TimeTableSerializer
+
+
+class TimeTableViewSet(ModelViewSet):
+
+    serializer_class = TimeTableSerializer
+
+    queryset = Time_Table_tb.objects.all()
+
+    def get_queryset(self):
+
+        return self.queryset.filter(
+            school=self.request.user.school
+        )
 
     def perform_create(self, serializer):
-        serializer.save(school=self.request.user.school)
 
-class TimetableEntryViewSet(SchoolQuerySetMixin, ModelViewSet):
-    queryset = TimetableEntry.objects.all()
-    serializer_class = TimetableEntrySerializer
+        serializer.save(
+            school=self.request.user.school
+        )
+        
+        
 
-    def perform_create(self, serializer):
-        serializer.save(school=self.request.user.school)
+# ---------------------------------------------
+# ATTENDANCE
+

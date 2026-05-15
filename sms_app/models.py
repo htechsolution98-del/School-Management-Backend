@@ -1426,7 +1426,6 @@ class WorkingDay(models.Model):
 
 
 
-
 # =========================================================
 # HOLIDAYS
 # =========================================================
@@ -1640,3 +1639,81 @@ class TimetableEntry(models.Model):
             f"{self.subject.name} - "
             f"{self.teacher_staff.name}"
         )
+        
+
+from django.core.exceptions import ValidationError
+
+class Time_Table_tb(models.Model):
+    school = models.ForeignKey("School", on_delete=models.CASCADE)
+
+    DAY_CHOICES = [
+        ("monday", "Monday"),
+        ("tuesday", "Tuesday"),
+        ("wednesday", "Wednesday"),
+        ("thursday", "Thursday"),
+        ("friday", "Friday"),
+        ("saturday", "Saturday"),
+        ("sunday", "Sunday"),
+    ]
+
+    day = models.CharField(
+        max_length=20,
+        choices=DAY_CHOICES
+    )
+    
+    class_division = models.ForeignKey(Division, on_delete=models.CASCADE )
+    
+    total_lecture = models.PositiveIntegerField()
+    
+    start_time = models.TimeField()
+    
+    end_time = models.TimeField()
+    
+    def clean(self):
+        if self.start_time >= self.end_time:
+            raise ValidationError(
+                "End time must be greater than start time"
+            )
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["class_division", "day"],
+                name="unique_division_day"
+            )
+        ]
+
+
+class Slot(models.Model):
+    school = models.ForeignKey("School", on_delete=models.CASCADE, null = True, blank = True)
+    
+    timetable = models.ForeignKey(Time_Table_tb, on_delete=models.CASCADE)
+    
+    is_lecture  = models.BooleanField(default=False)
+    is_break =  models.BooleanField(default=False)
+    slot_number = models.PositiveIntegerField()
+
+    slot_start_time = models.TimeField(null=True, blank= True)
+
+    slot_end_time = models.TimeField(null=True, blank= True)
+
+    subject = models.ForeignKey(Subject, on_delete=models.CASCADE ,null=True, blank= True)
+    
+    teacher = models.ForeignKey(Staff, on_delete=models.CASCADE ,null=True, blank= True)
+    
+    class Meta:
+        ordering = ["slot_number"]
+
+        unique_together = (
+            "timetable",
+            "slot_number"
+        )
+
+    def clean(self):
+        if self.is_lecture == self.is_break:
+            raise ValidationError(
+                "Slot must be either lecture or break"
+            )
+            
+    def __str__(self):
+        return f"Lecture {self.slot_number}"

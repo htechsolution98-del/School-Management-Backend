@@ -1628,7 +1628,7 @@ class AssignClassSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError("Class already has class teacher")
 
             if AssignClass.objects.filter(
-                school=school, teacher=teacher, is_class_teacher=True
+                school=school, teacher=teacher,division = division
             ).exists():
                 raise serializers.ValidationError("Teacher already assigned")
 
@@ -3664,21 +3664,21 @@ class StaffListSirializer(serializers.ModelSerializer):
 # ===================================================
 
 
-class SchoolSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = School
-        fields = "__all__"
+# class SchoolSerializer(serializers.ModelSerializer):
+#     class Meta:
+#         model = School
+#         fields = "__all__"
         
 
-class WorkingDaySerializer(serializers.ModelSerializer):
-    class Meta:
-        model = WorkingDay
-        fields = "__all__"
+# class WorkingDaySerializer(serializers.ModelSerializer):
+#     class Meta:
+#         model = WorkingDay
+#         fields = "__all__"
 
-class HolidaySerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Holiday
-        fields = "__all__"
+# class HolidaySerializer(serializers.ModelSerializer):
+#     class Meta:
+#         model = Holiday
+#         fields = "__all__"
         
 
 class ClassDivSerializer(serializers.ModelSerializer):
@@ -3687,82 +3687,138 @@ class ClassDivSerializer(serializers.ModelSerializer):
         fields = "__all__"
 
 
-class SubjectSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Subject
-        fields = "__all__"
+# class SubjectSerializer(serializers.ModelSerializer):
+#     class Meta:
+#         model = Subject
+#         fields = "__all__"
         
 
-class TeacherStaffSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Staff
-        fields = "__all__"
+# class TeacherStaffSerializer(serializers.ModelSerializer):
+#     class Meta:
+#         model = Staff
+#         fields = "__all__"
 
-class LectureSlotSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = LectureSlot
-        fields = "__all__"
+# class LectureSlotSerializer(serializers.ModelSerializer):
+#     class Meta:
+#         model = LectureSlot
+#         fields = "__all__"
 
-class BreakSlotSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = BreakSlot
-        fields = "__all__"
+# class BreakSlotSerializer(serializers.ModelSerializer):
+#     class Meta:
+#         model = BreakSlot
+#         fields = "__all__"
         
 
 
-class TimetableEntrySerializer(serializers.ModelSerializer):
-    class Meta:
-        model = TimetableEntry
-        fields = "__all__"
+# class TimetableEntrySerializer(serializers.ModelSerializer):
+#     class Meta:
+#         model = TimetableEntry
+#         fields = "__all__"
+
+#     def validate(self, attrs):
+#         request = self.context.get("request")
+#         school = getattr(getattr(request, "user", None), "school", None)
+
+#         timetable = attrs.get("timetable", getattr(self.instance, "timetable", None))
+#         lecture_slot = attrs.get(
+#             "lecture_slot", getattr(self.instance, "lecture_slot", None)
+#         )
+#         subject = attrs.get("subject", getattr(self.instance, "subject", None))
+#         teacher_staff = attrs.get(
+#             "teacher_staff", getattr(self.instance, "teacher_staff", None)
+#         )
+
+#         if not timetable or not lecture_slot or not subject or not teacher_staff:
+#             return attrs
+
+#         if school and timetable.school_id != school.id:
+#             raise serializers.ValidationError(
+#                 {"timetable": "Invalid timetable for this school."}
+#             )
+
+#         if school and lecture_slot.school_id != school.id:
+#             raise serializers.ValidationError(
+#                 {"lecture_slot": "Invalid lecture slot for this school."}
+#             )
+
+#         if lecture_slot.timetable_id != timetable.id:
+#             raise serializers.ValidationError(
+#                 {"lecture_slot": "Lecture slot does not belong to this timetable."}
+#             )
+
+#         assigned_teacher = AssignClass.objects.filter(
+#             school=school,
+#             division=timetable.class_div,
+#             subject=subject,
+#             teacher=teacher_staff,
+#         )
+
+#         if not assigned_teacher.exists():
+#             raise serializers.ValidationError(
+#                 {
+#                     "teacher_staff": (
+#                         "This teacher is not assigned to this subject and division."
+#                     )
+#                 }
+#             )
+
+#         if lecture_slot.lecture_number == 1 and not assigned_teacher.filter(
+#             is_class_teacher=True
+#         ).exists():
+#             raise serializers.ValidationError(
+#                 {"teacher_staff": "First lecture must be assigned to class teacher."}
+#             )
+
+#         return attrs
         
 
-class TimetableSerializer(serializers.ModelSerializer):
+# class TimetableSerializer(serializers.ModelSerializer):
 
-    lecture_slots = LectureSlotSerializer(many=True, required=False)
-    break_slots = BreakSlotSerializer(many=True, required=False)
-    working_days = serializers.ListField(
-        child=serializers.ChoiceField(choices=WorkingDay.DAY_CHOICES),
-        write_only=True,
-        required=False,
-    )
+#     lecture_slots = LectureSlotSerializer(many=True, required=False)
+#     break_slots = BreakSlotSerializer(many=True, required=False)
+#     working_days = serializers.ListField(
+#         child=serializers.ChoiceField(choices=WorkingDay.DAY_CHOICES),
+#         write_only=True,
+#         required=False,
+#     )
 
-    class Meta:
-        model = Timetable
-        fields = "__all__"
+#     class Meta:
+#         model = Timetable
+#         fields = "__all__"
         
-    def create(self, validated_data):
+#     def create(self, validated_data):
 
-        request = self.context["request"]
-        school = request.user.school
+#         request = self.context["request"]
+#         school = request.user.school
 
-        lectures = validated_data.pop("lecture_slots", [])
-        breaks = validated_data.pop("break_slots", [])
-        working_days = validated_data.pop("working_days", [])
-        validated_data.pop("school", None)
+#         lectures = validated_data.pop("lecture_slots", [])
+#         breaks = validated_data.pop("break_slots", [])
+#         working_days = validated_data.pop("working_days", [])
+#         validated_data.pop("school", None)
 
-        for day in working_days:
-            WorkingDay.objects.get_or_create(school=school, day=day)
+#         for day in working_days:
+#             WorkingDay.objects.get_or_create(school=school, day=day)
 
-        timetable = Timetable.objects.create(
-            school=school,
-            **validated_data
-        )
+#         timetable = Timetable.objects.create(
+#             school=school,
+#             **validated_data
+#         )
 
-        for l in lectures:
-            LectureSlot.objects.create(
-                school=school,
-                timetable=timetable,
-                **l
-            )
+#         for l in lectures:
+#             LectureSlot.objects.create(
+#                 school=school,
+#                 timetable=timetable,
+#                 **l
+#             )
 
-        for b in breaks:
-            BreakSlot.objects.create(
-                school=school,
-                timetable=timetable,
-                **b
-            )
+#         for b in breaks:
+#             BreakSlot.objects.create(
+#                 school=school,
+#                 timetable=timetable,
+#                 **b
+#             )
 
-        return timetable
+#         return timetable
 
     def update(self, instance, validated_data):
 
@@ -3801,3 +3857,185 @@ class TimetableSerializer(serializers.ModelSerializer):
                 )
 
         return instance
+
+
+
+
+class SlotSerializer(serializers.ModelSerializer):
+
+    class Meta:
+        model = Slot
+        exclude = ["timetable", "school"]
+
+    def validate(self, attrs):
+
+        is_lecture = attrs.get("is_lecture")
+        is_break = attrs.get("is_break")
+
+        subject = attrs.get("subject")
+        teacher = attrs.get("teacher")
+
+        slot_start_time = attrs.get("slot_start_time")
+        slot_end_time = attrs.get("slot_end_time")
+
+        # both true or both false
+        if is_lecture == is_break:
+            raise serializers.ValidationError(
+                "Slot must be either lecture or break"
+            )
+
+        # time validation
+        if slot_start_time >= slot_end_time:
+            raise serializers.ValidationError(
+                "End time must be greater than start time"
+            )
+
+        # lecture validation
+        if is_lecture:
+
+            if not subject:
+                raise serializers.ValidationError(
+                    "Lecture slot requires subject"
+                )
+
+            if not teacher:
+                raise serializers.ValidationError(
+                    "Lecture slot requires teacher"
+                )
+
+        # break validation
+        if is_break:
+
+            if subject or teacher:
+                raise serializers.ValidationError(
+                    "Break slot cannot have subject or teacher"
+                )
+
+        return attrs
+    
+class TimeTableSerializer(serializers.ModelSerializer):
+
+    slots = SlotSerializer(many=True)
+
+    class Meta:
+        model = Time_Table_tb
+        fields = "__all__"
+
+    def validate(self, attrs):
+
+        start_time = attrs.get("start_time")
+        end_time = attrs.get("end_time")
+
+        if start_time >= end_time:
+            raise serializers.ValidationError(
+                "End time must be greater than start time"
+            )
+
+        return attrs
+
+    @transaction.atomic
+    def create(self, validated_data):
+
+        slots_data = validated_data.pop("slots")
+
+        timetable = Time_Table_tb.objects.create(**validated_data)
+
+        for slot_data in slots_data:
+
+            teacher = slot_data.get("teacher")
+
+            # CHECK CLASS TEACHER LOGIC
+            if teacher and slot_data.get("slot_number") == 1:
+
+                is_class_teacher = AssignClass.objects.filter(
+                    school=timetable.school,
+                    division=timetable.class_division,
+                    teacher=teacher,
+                    is_class_teacher=True
+                ).exists()
+
+                if not is_class_teacher:
+                    raise serializers.ValidationError(
+                        {
+                            "slot_1": (
+                                "First slot teacher must "
+                                "be class teacher"
+                            )
+                        }
+                    )
+
+            Slot.objects.create(
+                timetable=timetable,
+                school=timetable.school,
+                **slot_data
+            )
+
+        return timetable
+    
+    
+    @transaction.atomic
+    def update(self, instance, validated_data):
+
+        slots_data = validated_data.pop("slots", None)
+
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+
+        instance.save()
+
+        if slots_data is not None:
+
+            instance.slot_set.all().delete()
+
+            for slot_data in slots_data:
+
+                teacher = slot_data.get("teacher")
+
+                if teacher and slot_data.get("slot_number") == 1:
+
+                    is_class_teacher = AssignClass.objects.filter(
+                        school=instance.school,
+                        division=instance.class_division,
+                        teacher=teacher,
+                        is_class_teacher=True
+                    ).exists()
+
+                    if not is_class_teacher:
+                        raise serializers.ValidationError(
+                            {
+                                "slot_1": (
+                                    "First slot teacher "
+                                    "must be class teacher"
+                                )
+                            }
+                        )
+
+                Slot.objects.create(
+                    timetable=instance,
+                    school=instance.school,
+                    **slot_data
+                )
+
+        return instance
+    
+
+
+
+# -------------------------
+# Student attendance 
+
+
+
+class StudentSerializer(serializers.ModelSerializer):
+
+    class Meta:
+        model = Student
+        fields = [
+            "id",
+            "first_name",
+            "last_name",
+            "roll_number"
+        ]
+        
+        
+
