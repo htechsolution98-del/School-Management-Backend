@@ -215,9 +215,9 @@ urlpatterns = [
     
     # ITS FOR GET STIDENT FOR ATTENDANSE
     path(
-        "api/attendance/students/",
+        "api/get/attendance/students/",
         AttendanceStudentAPIView.as_view(),
-        name="attendance-students"
+        name="get-attendance-students"
     ),
     
     path(

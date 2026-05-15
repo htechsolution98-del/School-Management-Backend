@@ -1809,3 +1809,83 @@ class Homework(models.Model):
     def __str__(self):
         return f"{self.title}"
     
+
+class HomeworkSubmission(models.Model):
+
+    STATUS_CHOICES = [
+        ("pending", "Pending"),
+        ("submitted", "Submitted"),
+        ("late", "Late Submission"),
+        ("checked", "Checked"),
+    ]
+
+    school = models.ForeignKey(
+        "School",
+        on_delete=models.CASCADE,
+        related_name="homework_submissions"
+    )
+
+    homework = models.ForeignKey(
+        "Homework",
+        on_delete=models.CASCADE,
+        related_name="submissions"
+    )
+
+    student = models.ForeignKey(
+        "Student",
+        on_delete=models.CASCADE,
+        related_name="homework_submissions"
+    )
+
+    attachment = models.FileField(
+        upload_to="homework/submissions/",
+        null=True,
+        blank=True
+    )
+
+    submitted_at = models.DateTimeField(
+        null=True,
+        blank=True
+    )
+
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default="pending"
+    )
+
+    marks = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        null=True,
+        blank=True
+    )
+
+    teacher_remark = models.TextField(
+        null=True,
+        blank=True
+    )
+
+    checked_by = models.ForeignKey(
+        "Staff",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="checked_homeworks"
+    )
+
+    checked_at = models.DateTimeField(
+        null=True,
+        blank=True
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ["homework", "student"]
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.student}"
