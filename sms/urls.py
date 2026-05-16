@@ -168,7 +168,7 @@ urlpatterns = [
     path('api/refresh/',TokenRefreshView.as_view()),
     
     #FOR ATTENDANCE LOCATION
-    path('api/get-location/', GetLocationView.as_view()), 
+    path('api/get-location/', GetLocationView.as_view()),
     
     path('api/api-login/', LoginView.as_view()),
     

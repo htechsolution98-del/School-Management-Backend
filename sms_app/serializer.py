@@ -1567,6 +1567,7 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
             if not parent_user:
                 parent_user = User.objects.create(username=last_six)
                 parent_user.set_password("123456")
+                parent_user.role = "parents"
                 parent_user.save()
 
                 group, _ = Group.objects.get_or_create(name="parents")
@@ -4434,11 +4435,24 @@ class HomeworkSubmissionSerializer(serializers.ModelSerializer):
                 {"student": "Invalid student for this school."}
             )
 
-        # Check if student belongs to the division this homework is for
-        if student.division and homework.division.division != student.division:
+        # Check if student belongs to the class/division this homework is for
+        homework_division = (homework.division.division or "").strip().lower()
+        student_division = (student.division or "").strip()
+
+        if "(" in student_division and ")" in student_division:
+            student_division = (
+                student_division.rsplit("(", 1)[-1].split(")", 1)[0].strip()
+            )
+
+        student_division = student_division.lower()
+
+        if (
+            homework.division.SchoolClass_id != student.school_class_id
+            or homework_division != student_division
+        ):
             raise serializers.ValidationError(
                 {
-                    "student": "This student is not in the division assigned for this homework."
+                    "student": "This student is not in the class/division assigned for this homework."
                 }
             )
 

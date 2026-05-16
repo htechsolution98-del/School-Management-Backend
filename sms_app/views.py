@@ -1747,7 +1747,10 @@ class SetDivisionView(ModelViewSet):
         if division_count <= 0 or division_count > 26:
             return Response({"error": "division must be between 1 and 26"}, status=400)
 
-        existing = Division.objects.filter(SchoolClass_id=school_class).count()
+        existing = Division.objects.filter(
+            school=self.request.user.school,
+            SchoolClass_id=school_class,
+        ).count()
         if existing > 0:
             return Response(
                 {"error": "Divisions already exist for this class"}, status=400
@@ -1806,7 +1809,7 @@ def assign_student_divisions():
     for school_class in classes:
         # Get divisions for this class
         divisions = list(
-            Division.objects.filter(school_class=school_class).order_by("id")
+            Division.objects.filter(SchoolClass=school_class).order_by("id")
         )
 
         # Skip if no divisions exist
@@ -1830,7 +1833,7 @@ def assign_student_divisions():
 
         # Assign divisions (round-robin)
         for index, student in enumerate(students):
-            student.division = divisions[index % division_len]
+            student.division = divisions[index % division_len].division
 
         # Bulk update for performance
         Student.objects.bulk_update(students, ["division"])
@@ -2709,7 +2712,7 @@ class upload_students(APIView):
 class AcademicYearViewSet(ModelViewSet):
     queryset = AcademicYear.objects.all()
     serializer_class = AcademicYearSerializer
-    permission_classes = [IsAuthenticated, IsCLerk]
+    permission_classes = [IsAuthenticated, IsFeeManager]
 
     def get_queryset(self):
         return AcademicYear.objects.filter(school=self.request.user.school)
@@ -2721,7 +2724,7 @@ class AcademicYearViewSet(ModelViewSet):
 class FeeTypeViewSet(ModelViewSet):
     queryset = FeeType.objects.all()
     serializer_class = FeeTypeSerializer
-    permission_classes = [IsAuthenticated, IsCLerk]
+    permission_classes = [IsAuthenticated, IsFeeManager]
 
     def get_queryset(self):
         return FeeType.objects.filter(school=self.request.user.school)
@@ -2734,7 +2737,7 @@ class FeeTypeViewSet(ModelViewSet):
 class FeeWiseClassViewSet(ModelViewSet):
     queryset = FeeWiseClass.objects.all()
     serializer_class = FeeWiseClassSerializer
-    permission_classes = [IsAuthenticated, IsCLerk]
+    permission_classes = [IsAuthenticated, IsFeeManager]
 
     def get_queryset(self):
         queryset = FeeWiseClass.objects.filter(
@@ -2867,7 +2870,7 @@ class StaffSalaryPaymentViewSet(ModelViewSet):
 class StudentFeeViewSet(ModelViewSet):
     queryset = StudentFee.objects.all()
     serializer_class = StudentFeeSerializer
-    permission_classes = [IsAuthenticated, IsFeeManager]
+    permission_classes = [IsAuthenticated, Isstudent]
 
     def get_queryset(self):
         queryset = (
@@ -2958,7 +2961,7 @@ class MyStudentFeeView(APIView):
 class StudentFeePaymentViewSet(ModelViewSet):
     queryset = StudentFeePayment.objects.all()
     serializer_class = StudentFeePaymentSerializer
-    permission_classes = [IsAuthenticated, IsFeeManager]
+    permission_classes = [IsAuthenticated, Isstudent]
 
     def get_queryset(self):
         queryset = StudentFeePayment.objects.filter(
@@ -3458,6 +3461,14 @@ class HomeworkViewSet(ModelViewSet):
     permission_classes = [IsAuthenticated]
     queryset = Homework.objects.all()
 
+    def get_student_division_name(self, student):
+        division_name = (student.division or "").strip()
+
+        # if "(" in division_name and ")" in division_name:
+        #     division_name = division_name.rsplit("(", 1)[-1].split(")", 1)[0].strip()
+
+        return division_name
+
     def get_serializer_class(self):
         """Return appropriate serializer based on action"""
         if self.action == "student_homework":
@@ -3477,7 +3488,16 @@ class HomeworkViewSet(ModelViewSet):
         if self.is_student():
             try:
                 student = self.request.user.student
-                queryset = queryset.filter(division__division=student.division)
+                division_name = self.get_student_division_name(student)
+
+                if not student.school_class_id or not division_name:
+                    return queryset.none()
+
+                queryset = queryset.filter(
+                    division__SchoolClass_id=student.school_class_id,
+                    division__division__iexact=division_name,
+                    is_active=True,
+                )
             except Student.DoesNotExist:
                 queryset = queryset.none()
 
@@ -3531,7 +3551,7 @@ class HomeworkViewSet(ModelViewSet):
 
         return super().destroy(request, *args, **kwargs)
 
-    @action(detail=False, methods=["get"])
+    @action(detail=False, methods=["get"], url_path=r"student[-_]homework")
     def student_homework(self, request):
         """
         Get all homework for the logged-in student's division.
@@ -3549,6 +3569,12 @@ class HomeworkViewSet(ModelViewSet):
             return Response(
                 {"error": "Student profile not found."},
                 status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if not student.school_class_id:
+            return Response(
+                {"error": "Student class not assigned."},
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         if not student.division:

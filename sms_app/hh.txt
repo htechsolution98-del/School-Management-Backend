@@ -316,6 +316,7 @@ Earning example:
   "component_type": "earning",
   "is_active": true
 }
+
 Deduction example:
 
 {
@@ -335,6 +336,7 @@ Fixed earning/deduction:
   "value": "1500.00",
   "is_active": true
 }
+
 Percentage earning/deduction:
 
 {
