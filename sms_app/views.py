@@ -515,6 +515,14 @@ class Isstudent(BasePermission):
             and request.user.is_authenticated
             and request.user.groups.filter(name="student").exists()
         )
+        
+class Isteacher(BasePermission):
+    def has_permission(self, request, view):
+        return (
+            request.user
+            and request.user.is_authenticated
+            and request.user.groups.filter(name="TEACHER").exists()
+        )
 
 
 class IsTempUser(BasePermission):
@@ -1713,7 +1721,7 @@ class SetDivisionView(ModelViewSet):
 
         return Response(serializer.data)
 
-    # ✅ CREATE
+    # CREATE
     def create(self, request, *args, **kwargs):
         division_count = request.data.get("division")
         school_class = request.data.get("SchoolClass")
@@ -1757,7 +1765,7 @@ class SetDivisionView(ModelViewSet):
             )
             divisions.append(obj)
 
-        # ✅ Clear Cache (SAFE)
+        #  Clear Cache (SAFE)
         try:
             cache.delete(f"divisions_school_{request.user.school.id}")
         except Exception:
@@ -1770,7 +1778,7 @@ class SetDivisionView(ModelViewSet):
             status=status.HTTP_201_CREATED,
         )
 
-    # ✅ UPDATE (SAFE cache clear)
+    #  UPDATE (SAFE cache clear)
     def perform_update(self, serializer):
         instance = serializer.save()
 
@@ -1779,7 +1787,7 @@ class SetDivisionView(ModelViewSet):
         except Exception:
             pass
 
-    # ✅ DELETE (SAFE cache clear)
+    #  DELETE (SAFE cache clear)
     def perform_destroy(self, instance):
         try:
             cache.delete(f"divisions_school_{instance.school.id}")
@@ -1828,7 +1836,40 @@ def assign_student_divisions():
         Student.objects.bulk_update(students, ["division"])
 
 
+
 # ==================================================================
+
+
+
+class ListDivisionView(ModelViewSet):
+    queryset = Division.objects.all()
+    serializer_class = SetDivisionSerializer
+    permission_classes = [IsAuthenticated,Isteacher]
+    http_method_names = ["get"]
+
+    # ✅ GET (LIST with safe cache)
+    def list(self, request, *args, **kwargs):
+        school_id = request.user.school.id
+        cache_key = f"divisions_school_{school_id}"
+
+        try:
+            cached_data = cache.get(cache_key)
+            if cached_data:
+                return Response(
+                    {"message": "Data fetched from cache", "data": cached_data}
+                )
+        except Exception:
+            pass  # Ignore Redis error
+
+        queryset = Division.objects.filter(school_id=school_id)
+        serializer = self.get_serializer(queryset, many=True)
+
+        try:
+            cache.set(cache_key, serializer.data, timeout=60 * 10)
+        except Exception:
+            pass  # Ignore Redis error
+
+        return Response(serializer.data)
 
 from django.core.cache import cache
 from rest_framework.viewsets import ModelViewSet

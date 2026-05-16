@@ -1318,6 +1318,15 @@ class SetDivisionSerializer(serializers.ModelSerializer):
     class Meta:
         model = Division
         fields = ["id", "SchoolClass", "class_name", "division", "capacity"]
+        
+class SetDivisionListSerializer(serializers.ModelSerializer):
+    class_name = serializers.CharField(
+        source="SchoolClass.get_school_class_display", read_only=True
+    )
+
+    class Meta:
+        model = Division
+        fields = ["id", "SchoolClass", "class_name", "division", "capacity"]
 
 
 # =========serializers for set division by clerk========

@@ -106,6 +106,7 @@ router.register(r'fee_verify', FeeVerifyView, basename='fee_verify')
 
 router.register(r'setSubject', SetSubjectView, basename='setSubject')# For CLerk add subject METHOD [GET,POST,PUT,DELETE]  ----API Need---  api/schoolclass/ for class drop down
 router.register(r'divisionSet', SetDivisionView, basename='divisionSet') #For Clerk Use METHOD [GET,POST,PUT,DELETE] ----API Need---  api/schoolclass/ for class drop down
+router.register(r'divisionlist', ListDivisionView, basename='divisionlist') #For Clerk Use METHOD [GET,POST,PUT,DELETE] ----API Need---  api/schoolclass/ for class drop down
 
 router.register(r'syllabus', SyllabusView, basename='syllabus') # For CLerk add syllabus METHOD [GET,POST,PUT,DELETE]   ----API Need---  api/schoolclass , setSubject for drop down
 router.register(r'getteacher', GetTeacherView, basename='getteacher') # For teacher dwop down METHOD [GET]
