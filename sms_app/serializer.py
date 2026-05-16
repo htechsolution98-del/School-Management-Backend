@@ -4168,3 +4168,405 @@ class StudentAttendanceSerializer(serializers.ModelSerializer):
         validated_data["attendance_by"] = request.user.staff
 
         return super().create(validated_data)
+
+
+
+
+
+from rest_framework import serializers
+from .models import Homework, HomeworkSubmission
+
+
+# ======================== HOMEWORK SERIALIZERS ========================
+
+
+class HomeworkSerializer(serializers.ModelSerializer):
+    """
+    Serializer for creating and listing homework.
+    Teachers create homework for a division.
+    """
+    
+    division_name = serializers.CharField(source="division.division", read_only=True)
+    school_class_name = serializers.CharField(
+        source="division.SchoolClass.get_school_class_display",
+        read_only=True
+    )
+    teacher_name = serializers.CharField(source="teacher.name", read_only=True)
+    submission_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Homework
+        fields = [
+            "id",
+            "school",
+            "division",
+            "division_name",
+            "school_class_name",
+            "teacher",
+            "teacher_name",
+            "title",
+            "description",
+            "assigned_date",
+            "due_date",
+            "attachment",
+            "is_active",
+            "submission_count",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "id",
+            "school",
+            "teacher",
+            "teacher_name",
+            "division_name",
+            "school_class_name",
+            "submission_count",
+            "assigned_date",
+            "created_at",
+            "updated_at",
+        ]
+
+    def get_submission_count(self, obj):
+        """Return count of total submissions for this homework"""
+        return obj.submissions.count()
+
+    def validate(self, attrs):
+        request = self.context.get("request")
+        school = getattr(request.user, "school", None) if request else None
+        division = attrs.get("division", getattr(self.instance, "division", None))
+
+        if not division:
+            raise serializers.ValidationError(
+                {"division": "Division is required."}
+            )
+
+        if school and division.school_id != school.id:
+            raise serializers.ValidationError(
+                {"division": "Invalid division for this school."}
+            )
+
+        return attrs
+
+    def create(self, validated_data):
+        request = self.context.get("request")
+        user = request.user if request and request.user.is_authenticated else None
+        
+        # Automatically set school and teacher from request
+        validated_data["school"] = user.school
+        validated_data["teacher"] = user.staff if hasattr(user, "staff") else None
+        
+        return super().create(validated_data)
+
+
+class GetHomeworkSerializer(serializers.ModelSerializer):
+    """
+    Serializer for students to view homework for their division.
+    Shows homework details and submission status for the logged-in student.
+    """
+    
+    division_name = serializers.CharField(source="division.division", read_only=True)
+    school_class_name = serializers.CharField(
+        source="division.SchoolClass.get_school_class_display",
+        read_only=True
+    )
+    teacher_name = serializers.CharField(source="teacher.name", read_only=True)
+    
+    # Student's submission for this homework
+    student_submission = serializers.SerializerMethodField()
+    is_submitted = serializers.SerializerMethodField()
+    submission_status = serializers.SerializerMethodField()
+    is_late = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Homework
+        fields = [
+            "id",
+            "division",
+            "division_name",
+            "school_class_name",
+            "teacher_name",
+            "title",
+            "description",
+            "assigned_date",
+            "due_date",
+            "attachment",
+            "is_active",
+            "is_submitted",
+            "submission_status",
+            "student_submission",
+            "is_late",
+        ]
+        read_only_fields = fields
+
+    def get_student_submission(self, obj):
+        """Get the logged-in student's submission for this homework"""
+        request = self.context.get("request")
+        if not request or not hasattr(request.user, "student"):
+            return None
+        
+        submission = obj.submissions.filter(
+            student__user=request.user
+        ).first()
+        
+        if submission:
+            return HomeworkSubmissionDetailSerializer(submission).data
+        return None
+
+    def get_is_submitted(self, obj):
+        """Check if the logged-in student has submitted this homework"""
+        request = self.context.get("request")
+        if not request or not hasattr(request.user, "student"):
+            return False
+        
+        return obj.submissions.filter(student__user=request.user).exists()
+
+    def get_submission_status(self, obj):
+        """Get the logged-in student's submission status"""
+        request = self.context.get("request")
+        if not request or not hasattr(request.user, "student"):
+            return None
+        
+        submission = obj.submissions.filter(
+            student__user=request.user
+        ).first()
+        
+        return submission.status if submission else None
+
+    def get_is_late(self, obj):
+        """Check if due date has passed"""
+        from django.utils import timezone
+        return timezone.now().date() > obj.due_date
+
+
+class HomeworkSubmissionSerializer(serializers.ModelSerializer):
+    """
+    Serializer for students to submit homework and teachers to check submissions.
+    """
+    
+    student_name = serializers.SerializerMethodField()
+    homework_title = serializers.CharField(source="homework.title", read_only=True)
+    submission_date = serializers.SerializerMethodField()
+
+    class Meta:
+        model = HomeworkSubmission
+        fields = [
+            "id",
+            "school",
+            "homework",
+            "homework_title",
+            "student",
+            "student_name",
+            "attachment",
+            "submitted_at",
+            "submission_date",
+            "status",
+            "marks",
+            "teacher_remark",
+            "checked_by",
+            "checked_at",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "id",
+            "school",
+            "student",
+            "student_name",
+            "homework_title",
+            "submitted_at",
+            "submission_date",
+            "checked_by",
+            "checked_at",
+            "created_at",
+            "updated_at",
+        ]
+
+    def get_student_name(self, obj):
+        """Return formatted student name"""
+        return " ".join(
+            filter(
+                None,
+                [
+                    obj.student.surname,
+                    obj.student.name,
+                    obj.student.father_name,
+                ],
+            )
+        )
+
+    def get_submission_date(self, obj):
+        """Format submission date"""
+        return obj.submitted_at.date() if obj.submitted_at else None
+
+    def validate(self, attrs):
+        request = self.context.get("request")
+        school = getattr(request.user, "school", None) if request else None
+        homework = attrs.get("homework", getattr(self.instance, "homework", None))
+        student = attrs.get("student", getattr(self.instance, "student", None))
+
+        if not homework:
+            raise serializers.ValidationError(
+                {"homework": "Homework is required."}
+            )
+
+        if not student:
+            raise serializers.ValidationError(
+                {"student": "Student is required."}
+            )
+
+        if school and homework.school_id != school.id:
+            raise serializers.ValidationError(
+                {"homework": "Invalid homework for this school."}
+            )
+
+        if school and student.school_id != school.id:
+            raise serializers.ValidationError(
+                {"student": "Invalid student for this school."}
+            )
+
+        # Check if student belongs to the division this homework is for
+        if student.division and homework.division.division != student.division:
+            raise serializers.ValidationError(
+                {
+                    "student": "This student is not in the division assigned for this homework."
+                }
+            )
+
+        # Check for duplicate submission (on create only)
+        if not self.instance:
+            if HomeworkSubmission.objects.filter(
+                homework=homework, student=student
+            ).exists():
+                raise serializers.ValidationError(
+                    "This student has already submitted this homework."
+                )
+
+        return attrs
+
+    def create(self, validated_data):
+        request = self.context.get("request")
+        user = request.user if request and request.user.is_authenticated else None
+
+        validated_data["school"] = user.school
+        validated_data["submitted_at"] = timezone.now()
+
+        return super().create(validated_data)
+
+
+class HomeworkSubmissionDetailSerializer(serializers.ModelSerializer):
+    """
+    Detailed serializer for viewing a single submission with all details.
+    """
+    
+    student_name = serializers.SerializerMethodField()
+    homework_title = serializers.CharField(source="homework.title", read_only=True)
+    teacher_name = serializers.CharField(
+        source="checked_by.staff.name", read_only=True
+    )
+
+    class Meta:
+        model = HomeworkSubmission
+        fields = [
+            "id",
+            "homework",
+            "homework_title",
+            "student",
+            "student_name",
+            "attachment",
+            "submitted_at",
+            "status",
+            "marks",
+            "teacher_remark",
+            "checked_by",
+            "teacher_name",
+            "checked_at",
+        ]
+        read_only_fields = fields
+
+    def get_student_name(self, obj):
+        return " ".join(
+            filter(
+                None,
+                [
+                    obj.student.surname,
+                    obj.student.name,
+                    obj.student.father_name,
+                ],
+            )
+        )
+
+
+class CheckHomeworkSubmissionSerializer(serializers.ModelSerializer):
+    """
+    Serializer for teachers to check and grade homework submissions.
+    """
+
+    student_name = serializers.CharField(source="student.name", read_only=True)
+
+    class Meta:
+        model = HomeworkSubmission
+        fields = [
+            "id",
+            "student_name",
+            "status",
+            "marks",
+            "teacher_remark",
+            "checked_at",
+        ]
+        read_only_fields = [
+            "id",
+            "student_name",
+            "checked_at",
+        ]
+
+    def validate_marks(self, value):
+        """Validate marks are between 0 and 100"""
+        if value is not None:
+            if value < 0 or value > 100:
+                raise serializers.ValidationError(
+                    "Marks must be between 0 and 100."
+                )
+        return value
+
+    def validate(self, attrs):
+        status = attrs.get("status", getattr(self.instance, "status", None))
+
+        if status == "checked" and not attrs.get("marks"):
+            raise serializers.ValidationError(
+                {
+                    "marks": "Marks are required when status is marked as 'checked'."
+                }
+            )
+
+        return attrs
+
+    def update(self, instance, validated_data):
+        request = self.context.get("request")
+        user = request.user if request and request.user.is_authenticated else None
+
+        if validated_data.get("status") == "checked" and not instance.checked_by:
+            validated_data["checked_by"] = user
+            validated_data["checked_at"] = timezone.now()
+
+        return super().update(instance, validated_data)
+
+
+class StudentHomeworkListSerializer(serializers.ModelSerializer):
+    """
+    Serializer for students to view all homework for their division.
+    Shows division-wise homework with submission status.
+    """
+    
+    class Meta:
+        model = Homework
+        fields = [
+            "id",
+            "title",
+            "description",
+            "assigned_date",
+            "due_date",
+            "attachment",
+            "is_active",
+        ]
+        read_only_fields = fields

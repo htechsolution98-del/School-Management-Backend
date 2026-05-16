@@ -154,6 +154,10 @@ router.register(r'staff-salary-payment', StaffSalaryPaymentViewSet, basename='st
 router.register(r'student-fee', StudentFeeViewSet, basename='student-fee')
 router.register(r'student-fee-payment', StudentFeePaymentViewSet, basename='student-fee-payment')
 
+
+router.register(r'homework', HomeworkViewSet, basename='homework')
+router.register(r'homework-submission', HomeworkSubmissionViewSet, basename='homework-submission')
+
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('health/', health_check, name='health_check'),

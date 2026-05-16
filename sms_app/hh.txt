@@ -696,3 +696,94 @@ for update --PUT /api/timetable/1/--
     "is_present": true,
     "is_absent": false
 }
+
+
+
+
+
+
+-------------------------------------------------------------------
+
+
+HomeworkViewSet uses HomeworkSerializer for create/update/list, and GetHomeworkSerializer for student homework views.
+
+Create / update homework payload
+Endpoint: POST /homework/ or PATCH /homework/{id}/
+
+{
+  "division": 1,
+  "title": "Chapter 5 Exercise",
+  "description": "Solve questions 1 to 10",
+  "due_date": "2026-05-20",
+  "attachment": "<file optional>",
+  "is_active": true
+}
+Auto/read-only fields: id, school, teacher, assigned_date, created_at, updated_at, division_name, school_class_name, teacher_name, submission_count.
+
+Response includes:
+
+{
+  "id": 1,
+  "school": 1,
+  "division": 1,
+  "division_name": "A",
+  "school_class_name": "Class 10",
+  "teacher": 5,
+  "teacher_name": "Teacher Name",
+  "title": "Chapter 5 Exercise",
+  "description": "Solve questions 1 to 10",
+  "assigned_date": "2026-05-15",
+  "due_date": "2026-05-20",
+  "attachment": null,
+  "is_active": true,
+  "submission_count": 0,
+  "created_at": "...",
+  "updated_at": "..."
+}
+HomeworkSubmissionViewSet submit payload
+Endpoint: POST /homework-submission/
+
+{
+  "homework": 1,
+  "attachment": "<file optional>"
+}
+student, school, and submitted_at are set automatically from logged-in user. Technically status, marks, and teacher_remark are writable in the serializer, but for a normal student submission you should only send homework and optional attachment.
+
+Response includes:
+
+{
+  "id": 1,
+  "school": 1,
+  "homework": 1,
+  "homework_title": "Chapter 5 Exercise",
+  "student": 12,
+  "student_name": "Student Name",
+  "attachment": null,
+  "submitted_at": "...",
+  "submission_date": "2026-05-15",
+  "status": "pending",
+  "marks": null,
+  "teacher_remark": null,
+  "checked_by": null,
+  "checked_at": null,
+  "created_at": "...",
+  "updated_at": "..."
+}
+Teacher check / grade payload
+Endpoint: POST /homework-submission/{id}/check_submission/
+
+{
+  "status": "checked",
+  "marks": 85,
+  "teacher_remark": "Good work"
+}
+Allowed statuses are: pending, submitted, late, checked.
+
+One important note: for grading via normal update, use PATCH /homework-submission/{id}/ with only:
+
+{
+  "status": "checked",
+  "marks": 85,
+  "teacher_remark": "Good work"
+}
+

@@ -1,6 +1,16 @@
 from django.shortcuts import redirect, render
 from django.urls import reverse
 
+from rest_framework.viewsets import ModelViewSet
+from rest_framework.decorators import action
+from rest_framework.response import Response
+from rest_framework import status
+from rest_framework.permissions import IsAuthenticated
+from django.utils import timezone
+from django.db.models import Q
+from .models import Homework, HomeworkSubmission, Student, Division
+from django.db import models
+
 from rest_framework.permissions import BasePermission
 from .models import UserModuleAccess
 
@@ -3378,3 +3388,418 @@ class StudentAttendanceView(APIView):
         )
 
 
+
+
+
+# from .homework_serializer import (
+#     HomeworkSerializer,
+#     GetHomeworkSerializer,
+#     HomeworkSubmissionSerializer,
+#     HomeworkSubmissionDetailSerializer,
+#     CheckHomeworkSubmissionSerializer,
+#     StudentHomeworkListSerializer,
+# )
+
+
+class HomeworkViewSet(ModelViewSet):
+    """
+    ViewSet for managing homework.
+    
+    Actions:
+    - CREATE: Teachers create homework for a division
+    - LIST: Get all homework (teachers see all, students see their division's)
+    - RETRIEVE: Get homework details
+    - UPDATE: Teachers update homework
+    - DESTROY: Teachers delete homework
+    - student-homework: Students view homework for their division
+    """
+    
+    permission_classes = [IsAuthenticated]
+    queryset = Homework.objects.all()
+
+    def get_serializer_class(self):
+        """Return appropriate serializer based on action"""
+        if self.action == "student_homework":
+            return GetHomeworkSerializer
+        elif self.action == "list" and self.is_student():
+            return GetHomeworkSerializer
+        return HomeworkSerializer
+
+    def get_queryset(self):
+        """Filter homework by school"""
+        school = self.request.user.school
+        queryset = Homework.objects.filter(school=school).select_related(
+            "division", "teacher", "division__SchoolClass"
+        )
+
+        # If user is a student, only show homework for their division
+        if self.is_student():
+            try:
+                student = self.request.user.student
+                queryset = queryset.filter(division__division=student.division)
+            except Student.DoesNotExist:
+                queryset = queryset.none()
+
+        return queryset.order_by("-assigned_date")
+
+    def is_student(self):
+        """Check if logged-in user is a student"""
+        try:
+            return hasattr(self.request.user, "student")
+        except:
+            return False
+
+    def is_teacher(self):
+        """Check if logged-in user is a teacher (has staff profile)"""
+        try:
+            return hasattr(self.request.user, "staff")
+        except:
+            return False
+
+    def create(self, request, *args, **kwargs):
+        """Only teachers can create homework"""
+        if not self.is_teacher():
+            return Response(
+                {"error": "Only teachers can create homework."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        return super().create(request, *args, **kwargs)
+
+    def update(self, request, *args, **kwargs):
+        """Only the teacher who created can update homework"""
+        homework = self.get_object()
+        
+        if homework.teacher.user != request.user:
+            return Response(
+                {"error": "You can only update homework you created."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        return super().update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        """Only the teacher who created can delete homework"""
+        homework = self.get_object()
+        
+        if homework.teacher.user != request.user:
+            return Response(
+                {"error": "You can only delete homework you created."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        return super().destroy(request, *args, **kwargs)
+
+    @action(detail=False, methods=["get"])
+    def student_homework(self, request):
+        """
+        Get all homework for the logged-in student's division.
+        Students can use this endpoint to view all homework for their class.
+        """
+        if not self.is_student():
+            return Response(
+                {"error": "Only students can access this endpoint."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        try:
+            student = request.user.student
+        except Student.DoesNotExist:
+            return Response(
+                {"error": "Student profile not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if not student.division:
+            return Response(
+                {"error": "Student division not assigned."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        queryset = self.get_queryset()
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=["get"])
+    def submissions(self, request, pk=None):
+        """
+        Get all submissions for a specific homework.
+        Only the teacher who created the homework can view submissions.
+        """
+        homework = self.get_object()
+
+        if homework.teacher.user != request.user:
+            return Response(
+                {"error": "You can only view submissions for your homework."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        submissions = homework.submissions.select_related("student", "checked_by")
+        serializer = HomeworkSubmissionDetailSerializer(submissions, many=True)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=["get"])
+    def division_details(self, request, pk=None):
+        """Get division details for this homework"""
+        homework = self.get_object()
+        division = homework.division
+        
+        return Response({
+            "division_id": division.id,
+            "division_name": division.division,
+            "school_class": division.SchoolClass.get_school_class_display(),
+            "total_students": Student.objects.filter(school_class=division.SchoolClass, division=division.division, school=request.user.school).count(),
+            "submitted_count": homework.submissions.filter(status__in=["submitted", "checked"]).values("student").distinct().count(),
+        })
+
+
+class HomeworkSubmissionViewSet(ModelViewSet):
+    """
+    ViewSet for managing homework submissions.
+    
+    Actions:
+    - CREATE: Students submit homework
+    - LIST: Get submissions (students see their own, teachers see all for their homework)
+    - RETRIEVE: Get submission details
+    - UPDATE: Update submission (teacher can grade)
+    - check-submission: Teacher grades the submission
+    """
+    
+    permission_classes = [IsAuthenticated]
+    queryset = HomeworkSubmission.objects.all()
+    serializer_class = HomeworkSubmissionSerializer
+
+    def get_serializer_class(self):
+        """Return appropriate serializer based on action"""
+        if self.action == "check_submission":
+            return CheckHomeworkSubmissionSerializer
+        elif self.action == "retrieve":
+            return HomeworkSubmissionDetailSerializer
+        return HomeworkSubmissionSerializer
+
+    def get_queryset(self):
+        """Filter submissions based on user role"""
+        school = self.request.user.school
+        queryset = HomeworkSubmission.objects.filter(school=school).select_related(
+            "homework", "student", "checked_by"
+        )
+
+        # If user is a student, only show their own submissions
+        if self.is_student():
+            try:
+                student = self.request.user.student
+                queryset = queryset.filter(student=student)
+            except:
+                queryset = queryset.none()
+
+        # If user is a teacher, only show submissions for their homework
+        elif self.is_teacher():
+            try:
+                staff = self.request.user.staff
+                queryset = queryset.filter(homework__teacher=staff)
+            except:
+                queryset = queryset.none()
+
+        return queryset.order_by("-submitted_at", "-created_at")
+
+    def is_student(self):
+        """Check if logged-in user is a student"""
+        try:
+            return hasattr(self.request.user, "student")
+        except:
+            return False
+
+    def is_teacher(self):
+        """Check if logged-in user is a teacher"""
+        try:
+            return hasattr(self.request.user, "staff")
+        except:
+            return False
+
+    def create(self, request, *args, **kwargs):
+        """
+        Students submit homework.
+        Automatically sets the student to the logged-in user's student profile.
+        """
+        if not self.is_student():
+            return Response(
+                {"error": "Only students can submit homework."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        # Automatically set student from request user
+        try:
+            student = request.user.student
+        except Student.DoesNotExist:
+            return Response(
+                {"error": "Student profile not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # Add student to request data
+        request.data._mutable = True
+        request.data["student"] = student.id
+        request.data._mutable = False
+
+        return super().create(request, *args, **kwargs)
+
+    def update(self, request, *args, **kwargs):
+        """Teachers can only grade submissions (not modify student's submission)"""
+        submission = self.get_object()
+
+        if not self.is_teacher():
+            return Response(
+                {"error": "Only teachers can grade submissions."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if submission.homework.teacher.user != request.user:
+            return Response(
+                {"error": "You can only grade submissions for your homework."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        # Only allow updating status, marks, and remarks
+        allowed_fields = {"status", "marks", "teacher_remark"}
+        provided_fields = set(request.data.keys())
+        invalid_fields = provided_fields - allowed_fields
+
+        if invalid_fields:
+            return Response(
+                {"error": f"Cannot update fields: {', '.join(invalid_fields)}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return super().update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        """Students can delete their own submissions, teachers cannot delete"""
+        submission = self.get_object()
+
+        if self.is_teacher():
+            return Response(
+                {"error": "Teachers cannot delete submissions."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if self.is_student():
+            try:
+                student = request.user.student
+                if submission.student != student:
+                    return Response(
+                        {"error": "You can only delete your own submissions."},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
+            except Student.DoesNotExist:
+                pass
+
+        return super().destroy(request, *args, **kwargs)
+
+    @action(detail=True, methods=["post"])
+    def check_submission(self, request, pk=None):
+        """
+        Teacher grades a submission.
+        Endpoint to mark a submission as checked with marks and remarks.
+        """
+        submission = self.get_object()
+
+        if not self.is_teacher():
+            return Response(
+                {"error": "Only teachers can grade submissions."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if submission.homework.teacher.user != request.user:
+            return Response(
+                {"error": "You can only grade submissions for your homework."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        serializer = self.get_serializer(submission, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=False, methods=["get"])
+    def pending_submissions(self, request):
+        """Get all pending submissions for the teacher"""
+        if not self.is_teacher():
+            return Response(
+                {"error": "Only teachers can access this endpoint."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        try:
+            staff = request.user.staff
+        except:
+            return Response(
+                {"error": "Staff profile not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        submissions = self.get_queryset().filter(status__in=["pending", "submitted"])
+        serializer = HomeworkSubmissionDetailSerializer(submissions, many=True)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=["get"])
+    def my_submissions(self, request):
+        """Get all submissions from the logged-in student"""
+        if not self.is_student():
+            return Response(
+                {"error": "Only students can access this endpoint."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        try:
+            student = request.user.student
+        except:
+            return Response(
+                {"error": "Student profile not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        submissions = self.get_queryset().filter(student=student)
+        serializer = HomeworkSubmissionDetailSerializer(submissions, many=True)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=["get"])
+    def submission_stats(self, request, **kwargs):
+        """Get submission statistics for a homework"""
+        homework_id = request.query_params.get("homework_id")
+
+        if not homework_id:
+            return Response(
+                {"error": "homework_id query parameter is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            homework = Homework.objects.get(id=homework_id, school=request.user.school)
+        except Homework.DoesNotExist:
+            return Response(
+                {"error": "Homework not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if homework.teacher.user != request.user:
+            return Response(
+                {"error": "You can only view stats for your homework."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        submissions = homework.submissions.all()
+        total_students = Student.objects.filter(school_class=homework.division.SchoolClass, division=homework.division.division, school=request.user.school).count()
+
+        return Response({
+            "homework_id": homework.id,
+            "homework_title": homework.title,
+            "total_students": total_students,
+            "submitted": submissions.filter(status__in=["submitted", "checked"]).count(),
+            "pending": submissions.filter(status="pending").count(),
+            "late": submissions.filter(status="late").count(),
+            "checked": submissions.filter(status="checked").count(),
+            "average_marks": submissions.filter(marks__isnull=False).aggregate(
+                avg=models.Avg("marks")
+            )["avg"] or 0,
+        })
