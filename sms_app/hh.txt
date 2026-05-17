@@ -72,6 +72,7 @@ GET /api/fee-wise-class/
 GET /api/fee-wise-class/?school_class=2
 GET /api/fee-wise-class/?feetype=1
 Create Student Fee
+
 For monthly fee:
 
 POST /api/student-fee/
@@ -81,6 +82,7 @@ POST /api/student-fee/
   "academic_year": 1,
   "fee_wise_class": 1,
   "billing_period": "2026-04",
+  "feetype":1,
   "due_date": "2026-04-10"
 }
 

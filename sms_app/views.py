@@ -94,44 +94,15 @@ from django.contrib.auth import get_user_model
 
 User = get_user_model()
 
-from django.http import JsonResponse
+# from django.http import JsonRespons
 
-
-def health_check(request):
-    return JsonResponse({"status": "ok"})
+# from .views import Isprincipal
 
 def health_check(request):
     return JsonResponse({"status": "ok"})
 
-
-class DashboardCountAPIView(APIView):
-    permission_classes = [IsAuthenticated]
-
-    def get(self, request):
-        school = request.user.school
-
-        if not school:
-            return Response(
-                {"message": "User does not have a school assigned"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        total_student = Student.objects.filter(school=school).count()
-        total_staff = Staff.objects.filter(school=school).exclude(
-            category__iexact="PRINCIPAL"
-        ).count()
-        admission_not_complete = Admission.objects.filter(school=school).exclude(
-            status="completed"
-        ).count()
-
-        return Response(
-            {
-                "total_student": total_student,
-                "total_staff": total_staff,
-                "admission_not_complete": admission_not_complete,
-            },
-            status=status.HTTP_200_OK,
-        )
+def health_check(request):
+    return JsonResponse({"status": "ok"})
 
 # Create your views here.
 # set access and refresh token in cookie
@@ -816,6 +787,37 @@ class StaffView(ModelViewSet):
         cache.delete(f"staff_list_{self.request.user.id}")
 
 
+
+class DashboardCountAPIView(APIView):
+    permission_classes = [IsAuthenticated, Isprincipal]
+
+    def get(self, request):
+        school = request.user.school
+
+        if not school:
+            return Response(
+                {"message": "User does not have a school assigned"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        total_student = Student.objects.filter(school=school).count()
+        total_staff = Staff.objects.filter(school=school).exclude(
+            category__iexact="PRINCIPAL"
+        ).count()
+        admission_not_complete = Admission.objects.filter(school=school).exclude(
+            status="completed"
+        ).count()
+
+        return Response(
+            {
+                "total_student": total_student,
+                "total_staff": total_staff,
+                "admission_not_complete": admission_not_complete,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
 class GetTeacherView(ModelViewSet):
     queryset = Staff.objects.all()
     serializer_class = GetTeacherSerializer
@@ -1419,19 +1421,142 @@ class CheckMobileAPIView(APIView):
 import razorpay
 
 
+# class RazorpayOrderView(APIView):
+
+#     def post(self, request):
+
+#         amount = request.data.get("amount")
+#         admission_number = request.data.get("admission_number")
+
+#         # Validation
+#         if not amount:
+#             return Response(
+#                 {"error": "Amount is required"},
+#                 status=status.HTTP_400_BAD_REQUEST,
+#             )
+
+#         if not admission_number:
+#             return Response(
+#                 {"error": "Admission number is required"},
+#                 status=status.HTTP_400_BAD_REQUEST,
+#             )
+
+#         try:
+#             amount = int(amount) * 100
+#         except ValueError:
+#             return Response(
+#                 {"error": "Invalid amount"},
+#                 status=status.HTTP_400_BAD_REQUEST,
+#             )
+
+#         # Save temporary payment record
+#         with transaction.atomic():
+           
+
+#             admission = Admission.objects.filter(
+#             admission_number=admission_number
+#         ).first()
+
+#         if not admission:
+#             return Response(
+#                 {"error": "Admission not found"},
+#                 status=status.HTTP_404_NOT_FOUND,
+#             )
+
+        
+
+#         # Get class field value
+#         value_obj = AdmissionFieldValue.objects.filter(
+#             admission=admission,
+#             field__section__form=admission.form,
+#             field__map_to_student_field="school_class"
+#         ).first()
+
+#         if not value_obj:
+#             raise serializers.ValidationError({
+#                 "message": "School class not found in admission form."
+#             })
+
+#         try:
+#             class_id = int(value_obj.value)
+#         except (TypeError, ValueError):
+#             raise serializers.ValidationError({
+#                 "message": "Invalid class id."
+#             })
+
+#         # Get fee structure
+#         fee = AdmissionFeeStructure.objects.filter(
+#             admission_form=admission.form,
+#             class_name_id=class_id
+#         ).first()
+        
+        
+
+#         if not fee:
+#             raise serializers.ValidationError({
+#                 "message": "Fee amount is not valid for this class."
+#             })
+#         fee  = float(fee.fee_amount)
+        
+#         admission.fee_amount = fee
+#         admission.save()
+
+#         admission_fee = AdmissionFee.objects.create(
+#                 amount=fee,
+#                 admission_number=admission_number,
+#             )
+#         #   ============FOR INDIVIDUAL SCHOOL =============
+
+#         school = self.request.user.school
+
+#         # razorpay_data = RazorPayData.objects.filter(school_id=school.id).first()
+
+#         # if not razorpay_data:
+#         #     return Response(
+#         #         {"error": "Razorpay configuration not found"},
+#         #         status=status.HTTP_400_BAD_REQUEST,
+#         #     )
+
+#         # # Create dynamic razorpay client
+#         # client = razorpay.Client(
+#         #     auth=(
+#         #         razorpay_data.razorpay_key_id,
+#         #         razorpay_data.razorpay_secret_key,
+#         #     )
+#         # )
+#         # ----------------------------------------------------
+#         # Create Razorpay Order
+#         # print(fee.fee_amount)
+#         razor_order = client.order.create(
+#             {
+#                 "amount": fee,
+#                 "currency": "INR",
+#                 "payment_capture": 1,
+#             }
+#         )
+
+#         # Save order id
+#         admission_fee.razorpay_order_id = razor_order["id"]
+#         admission_fee.save()
+
+#         return Response(
+#             {
+#                 "id": razor_order["id"],
+#                 "key": settings.RAZOR_PAY_KEY_ID,  # "key": razorpay_data.razorpay_key_id, FOR INDIVIDUAL SCHOOL
+#                 "amount": razor_order["amount"],
+#                 "currency": "INR",
+#                 "admission_number": admission_number,
+#             },
+#             status=status.HTTP_200_OK,
+#         )
+
 class RazorpayOrderView(APIView):
 
     def post(self, request):
 
-        amount = request.data.get("amount")
+        admission_number = request.data.get("admission_number")
         admission_number = request.data.get("admission_number")
 
-        # Validation
-        if not amount:
-            return Response(
-                {"error": "Amount is required"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
 
         if not admission_number:
             return Response(
@@ -1440,70 +1565,119 @@ class RazorpayOrderView(APIView):
             )
 
         try:
-            amount = int(amount) * 100
-        except ValueError:
+            with transaction.atomic():
+
+                # Get admission
+                admission = Admission.objects.select_related("form").filter(
+                    admission_number=admission_number
+                ).first()
+
+                if not admission:
+                    return Response(
+                        {"error": "Admission not found"},
+                        status=status.HTTP_404_NOT_FOUND,
+                    )
+
+                # Get class field value
+                value_obj = AdmissionFieldValue.objects.filter(
+                    admission=admission,
+                    field__section__form=admission.form,
+                    field__map_to_student_field="school_class",
+                ).first()
+
+                if not value_obj:
+                    return Response(
+                        {"error": "School class not found in admission form"},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+                # Convert class id
+                try:
+                    class_id = int(value_obj.value)
+                except (TypeError, ValueError):
+                    return Response(
+                        {"error": "Invalid class id"},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+                # Get fee structure
+                fee_structure = AdmissionFeeStructure.objects.filter(
+                    admission_form=admission.form,
+                    class_name_id=class_id,
+                ).first()
+
+                if not fee_structure:
+                    return Response(
+                        {"error": "Fee structure not found"},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+                # Actual fee amount
+                fee_amount = float(fee_structure.fee_amount)
+
+                # Convert to paise for Razorpay
+                razorpay_amount = int(fee_amount * 100)
+
+                # Save fee in admission
+                admission.fee_amount = fee_amount
+                admission.save()
+
+                # Create fee record
+                admission_fee = AdmissionFee.objects.create(
+                    amount=fee_amount,
+                    admission_number=admission_number,
+                )
+                
+                
+                #   ============FOR INDIVIDUAL SCHOOL =============
+
+                school = self.request.user.school
+
+                # razorpay_data = RazorPayData.objects.filter(school_id=school.id).first()
+
+                # if not razorpay_data:
+                #     return Response(
+                #         {"error": "Razorpay configuration not found"},
+                #         status=status.HTTP_400_BAD_REQUEST,
+                #     )
+
+                # # Create dynamic razorpay client
+                # client = razorpay.Client(
+                #     auth=(
+                #         razorpay_data.razorpay_key_id,
+                #         razorpay_data.razorpay_secret_key,
+                #     )
+                # )
+                # ----------------------------------------------------
+
+                # Create Razorpay Order
+                razor_order = client.order.create(
+                    {
+                        "amount": razorpay_amount,
+                        "currency": "INR",
+                    }
+                )
+
+                # Save razorpay order id
+                admission_fee.razorpay_order_id = razor_order["id"]
+                admission_fee.save()
+
+                return Response(
+                    {
+                        "id": razor_order["id"],
+                        "key": settings.RAZOR_PAY_KEY_ID,
+                        "amount": razor_order["amount"],
+                        "currency": "INR",
+                        "admission_number": admission_number,
+                    },
+                    status=status.HTTP_200_OK,
+                )
+
+        except Exception as e:
             return Response(
-                {"error": "Invalid amount"},
-                status=status.HTTP_400_BAD_REQUEST,
+                {"error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
-
-        # Save temporary payment record
-        with transaction.atomic():
-            admission_fee = AdmissionFee.objects.create(
-                amount=amount / 100,
-                admission_number=admission_number,
-            )
-
-            admission = Admission.objects.filter(
-                admission_number=admission_number
-            ).first()
-            admission.fee_amount = amount / 100
-            admission.save()
-
-        #   ============FOR INDIVIDUAL SCHOOL =============
-
-        school = self.request.user.school
-
-        razorpay_data = RazorPayData.objects.filter(school_id=school.id).first()
-
-        if not razorpay_data:
-            return Response(
-                {"error": "Razorpay configuration not found"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        # Create dynamic razorpay client
-        client = razorpay.Client(
-            auth=(
-                razorpay_data.razorpay_key_id,
-                razorpay_data.razorpay_secret_key,
-            )
-        )
-        # ----------------------------------------------------
-        # Create Razorpay Order
-
-        razor_order = client.order.create(
-            {
-                "amount": amount,
-                "currency": "INR",
-                "payment_capture": 1,
-            }
-        )
-
-        # Save order id
-        admission_fee.razorpay_order_id = razor_order["id"]
-        admission_fee.save()
-
-        return Response(
-            {
-                "id": razor_order["id"],
-                "key": settings.RAZOR_PAY_KEY_ID,  # "key": razorpay_data.razorpay_key_id, FOR INDIVIDUAL SCHOOL
-                "amount": razor_order["amount"],
-                "currency": "INR",
-                "admission_number": admission_number,
-            },
-            status=status.HTTP_200_OK,
-        )
 
 
 from django.utils import timezone
