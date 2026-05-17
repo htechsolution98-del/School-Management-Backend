@@ -3870,3 +3870,19 @@ class HomeworkSubmissionViewSet(ModelViewSet):
                 avg=models.Avg("marks")
             )["avg"] or 0,
         })
+
+
+
+
+# ------------------------------------GET STUDENT ----------------------------
+
+
+
+class StudentGetView(ModelViewSet):
+    
+    queryset = Student.objects.all()
+    
+    serializer_class = StudentGetSerializer
+    
+    def get_queryset(self):
+        return Student.objects.filter(school = self.request.user.school)

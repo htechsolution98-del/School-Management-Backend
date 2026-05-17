@@ -163,12 +163,11 @@ class LoginSerializer(serializers.Serializer):
 
         if email:
             user = CustomUser.objects.filter(email=email).first()
-            
+
         if mobile:
             user = CustomUser.objects.filter(mobile=mobile).first()
             if not user:
                 user = CustomUser.objects.filter(username=mobile).first()
-    
 
         if not user or not user.check_password(password):
             raise serializers.ValidationError({"message": "Invalid credentials"})
@@ -1318,7 +1317,8 @@ class SetDivisionSerializer(serializers.ModelSerializer):
     class Meta:
         model = Division
         fields = ["id", "SchoolClass", "class_name", "division", "capacity"]
-        
+
+
 class SetDivisionListSerializer(serializers.ModelSerializer):
     class_name = serializers.CharField(
         source="SchoolClass.get_school_class_display", read_only=True
@@ -1623,13 +1623,13 @@ class SyllabusSerializer(serializers.ModelSerializer):
 
 from rest_framework import serializers
 
+
 class AssignClassSerializer(serializers.ModelSerializer):
-    subject_name = serializers.CharField(
-        source="subject.name",
-        read_only=True
+    subject_name = serializers.CharField(source="subject.name", read_only=True)
+    class_name = serializers.CharField(
+        source="division.SchoolClass.school_class", read_only=True
     )
-    class_name = serializers.CharField(source = "division.SchoolClass.school_class", read_only=True)
-    division_name = serializers.CharField(source = "division.division", read_only=True)
+    division_name = serializers.CharField(source="division.division", read_only=True)
 
     class Meta:
         model = AssignClass
@@ -1643,8 +1643,8 @@ class AssignClassSerializer(serializers.ModelSerializer):
             "is_class_teacher",
         ]
 
-        read_only_fields = ["subject_name","division_name","class_name"]
-        
+        read_only_fields = ["subject_name", "division_name", "class_name"]
+
     def validate(self, data):
         school = self.context["request"].user.school
         division = data.get("division")
@@ -1658,7 +1658,7 @@ class AssignClassSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError("Class already has class teacher")
 
             if AssignClass.objects.filter(
-                school=school, teacher=teacher,division = division
+                school=school, teacher=teacher, division=division
             ).exists():
                 raise serializers.ValidationError("Teacher already assigned")
 
@@ -3229,9 +3229,9 @@ class GenerateStaffSalaryPaymentSerializer(serializers.ModelSerializer):
 
         if net_salary < 0:
             net_salary = Decimal("0.00")
-            
+
         receipt_number = f"SAL-{salary_month}-{user.school.id}-{user.school.slug}"
-        print("RECEIPT", receipt_number, flush=True)        
+        print("RECEIPT", receipt_number, flush=True)
         # b = None
         # payment = None
         payment = StaffSalaryPayment.objects.create(
@@ -3256,7 +3256,6 @@ class GenerateStaffSalaryPaymentSerializer(serializers.ModelSerializer):
             note=validated_data.get("note"),
             paid_by=user,
         )
-    
 
         return payment
 
@@ -3687,8 +3686,6 @@ class StaffListSirializer(serializers.ModelSerializer):
             # "updated_at",
         ]
         read_only_fields = fields
-        
-        
 
 
 # ===================================================
@@ -3698,7 +3695,7 @@ class StaffListSirializer(serializers.ModelSerializer):
 #     class Meta:
 #         model = School
 #         fields = "__all__"
-        
+
 
 # class WorkingDaySerializer(serializers.ModelSerializer):
 #     class Meta:
@@ -3709,146 +3706,141 @@ class StaffListSirializer(serializers.ModelSerializer):
 #     class Meta:
 #         model = Holiday
 #         fields = "__all__"
-        
+
 
 class ClassDivSerializer(serializers.ModelSerializer):
     class Meta:
         model = Division
         fields = "__all__"
 
+    # class SubjectSerializer(serializers.ModelSerializer):
+    #     class Meta:
+    #         model = Subject
+    #         fields = "__all__"
 
-# class SubjectSerializer(serializers.ModelSerializer):
-#     class Meta:
-#         model = Subject
-#         fields = "__all__"
-        
+    # class TeacherStaffSerializer(serializers.ModelSerializer):
+    #     class Meta:
+    #         model = Staff
+    #         fields = "__all__"
 
-# class TeacherStaffSerializer(serializers.ModelSerializer):
-#     class Meta:
-#         model = Staff
-#         fields = "__all__"
+    # class LectureSlotSerializer(serializers.ModelSerializer):
+    #     class Meta:
+    #         model = LectureSlot
+    #         fields = "__all__"
 
-# class LectureSlotSerializer(serializers.ModelSerializer):
-#     class Meta:
-#         model = LectureSlot
-#         fields = "__all__"
+    # class BreakSlotSerializer(serializers.ModelSerializer):
+    #     class Meta:
+    #         model = BreakSlot
+    #         fields = "__all__"
 
-# class BreakSlotSerializer(serializers.ModelSerializer):
-#     class Meta:
-#         model = BreakSlot
-#         fields = "__all__"
-        
+    # class TimetableEntrySerializer(serializers.ModelSerializer):
+    #     class Meta:
+    #         model = TimetableEntry
+    #         fields = "__all__"
 
+    #     def validate(self, attrs):
+    #         request = self.context.get("request")
+    #         school = getattr(getattr(request, "user", None), "school", None)
 
-# class TimetableEntrySerializer(serializers.ModelSerializer):
-#     class Meta:
-#         model = TimetableEntry
-#         fields = "__all__"
+    #         timetable = attrs.get("timetable", getattr(self.instance, "timetable", None))
+    #         lecture_slot = attrs.get(
+    #             "lecture_slot", getattr(self.instance, "lecture_slot", None)
+    #         )
+    #         subject = attrs.get("subject", getattr(self.instance, "subject", None))
+    #         teacher_staff = attrs.get(
+    #             "teacher_staff", getattr(self.instance, "teacher_staff", None)
+    #         )
 
-#     def validate(self, attrs):
-#         request = self.context.get("request")
-#         school = getattr(getattr(request, "user", None), "school", None)
+    #         if not timetable or not lecture_slot or not subject or not teacher_staff:
+    #             return attrs
 
-#         timetable = attrs.get("timetable", getattr(self.instance, "timetable", None))
-#         lecture_slot = attrs.get(
-#             "lecture_slot", getattr(self.instance, "lecture_slot", None)
-#         )
-#         subject = attrs.get("subject", getattr(self.instance, "subject", None))
-#         teacher_staff = attrs.get(
-#             "teacher_staff", getattr(self.instance, "teacher_staff", None)
-#         )
+    #         if school and timetable.school_id != school.id:
+    #             raise serializers.ValidationError(
+    #                 {"timetable": "Invalid timetable for this school."}
+    #             )
 
-#         if not timetable or not lecture_slot or not subject or not teacher_staff:
-#             return attrs
+    #         if school and lecture_slot.school_id != school.id:
+    #             raise serializers.ValidationError(
+    #                 {"lecture_slot": "Invalid lecture slot for this school."}
+    #             )
 
-#         if school and timetable.school_id != school.id:
-#             raise serializers.ValidationError(
-#                 {"timetable": "Invalid timetable for this school."}
-#             )
+    #         if lecture_slot.timetable_id != timetable.id:
+    #             raise serializers.ValidationError(
+    #                 {"lecture_slot": "Lecture slot does not belong to this timetable."}
+    #             )
 
-#         if school and lecture_slot.school_id != school.id:
-#             raise serializers.ValidationError(
-#                 {"lecture_slot": "Invalid lecture slot for this school."}
-#             )
+    #         assigned_teacher = AssignClass.objects.filter(
+    #             school=school,
+    #             division=timetable.class_div,
+    #             subject=subject,
+    #             teacher=teacher_staff,
+    #         )
 
-#         if lecture_slot.timetable_id != timetable.id:
-#             raise serializers.ValidationError(
-#                 {"lecture_slot": "Lecture slot does not belong to this timetable."}
-#             )
+    #         if not assigned_teacher.exists():
+    #             raise serializers.ValidationError(
+    #                 {
+    #                     "teacher_staff": (
+    #                         "This teacher is not assigned to this subject and division."
+    #                     )
+    #                 }
+    #             )
 
-#         assigned_teacher = AssignClass.objects.filter(
-#             school=school,
-#             division=timetable.class_div,
-#             subject=subject,
-#             teacher=teacher_staff,
-#         )
+    #         if lecture_slot.lecture_number == 1 and not assigned_teacher.filter(
+    #             is_class_teacher=True
+    #         ).exists():
+    #             raise serializers.ValidationError(
+    #                 {"teacher_staff": "First lecture must be assigned to class teacher."}
+    #             )
 
-#         if not assigned_teacher.exists():
-#             raise serializers.ValidationError(
-#                 {
-#                     "teacher_staff": (
-#                         "This teacher is not assigned to this subject and division."
-#                     )
-#                 }
-#             )
+    #         return attrs
 
-#         if lecture_slot.lecture_number == 1 and not assigned_teacher.filter(
-#             is_class_teacher=True
-#         ).exists():
-#             raise serializers.ValidationError(
-#                 {"teacher_staff": "First lecture must be assigned to class teacher."}
-#             )
+    # class TimetableSerializer(serializers.ModelSerializer):
 
-#         return attrs
-        
+    #     lecture_slots = LectureSlotSerializer(many=True, required=False)
+    #     break_slots = BreakSlotSerializer(many=True, required=False)
+    #     working_days = serializers.ListField(
+    #         child=serializers.ChoiceField(choices=WorkingDay.DAY_CHOICES),
+    #         write_only=True,
+    #         required=False,
+    #     )
 
-# class TimetableSerializer(serializers.ModelSerializer):
+    #     class Meta:
+    #         model = Timetable
+    #         fields = "__all__"
 
-#     lecture_slots = LectureSlotSerializer(many=True, required=False)
-#     break_slots = BreakSlotSerializer(many=True, required=False)
-#     working_days = serializers.ListField(
-#         child=serializers.ChoiceField(choices=WorkingDay.DAY_CHOICES),
-#         write_only=True,
-#         required=False,
-#     )
+    #     def create(self, validated_data):
 
-#     class Meta:
-#         model = Timetable
-#         fields = "__all__"
-        
-#     def create(self, validated_data):
+    #         request = self.context["request"]
+    #         school = request.user.school
 
-#         request = self.context["request"]
-#         school = request.user.school
+    #         lectures = validated_data.pop("lecture_slots", [])
+    #         breaks = validated_data.pop("break_slots", [])
+    #         working_days = validated_data.pop("working_days", [])
+    #         validated_data.pop("school", None)
 
-#         lectures = validated_data.pop("lecture_slots", [])
-#         breaks = validated_data.pop("break_slots", [])
-#         working_days = validated_data.pop("working_days", [])
-#         validated_data.pop("school", None)
+    #         for day in working_days:
+    #             WorkingDay.objects.get_or_create(school=school, day=day)
 
-#         for day in working_days:
-#             WorkingDay.objects.get_or_create(school=school, day=day)
+    #         timetable = Timetable.objects.create(
+    #             school=school,
+    #             **validated_data
+    #         )
 
-#         timetable = Timetable.objects.create(
-#             school=school,
-#             **validated_data
-#         )
+    #         for l in lectures:
+    #             LectureSlot.objects.create(
+    #                 school=school,
+    #                 timetable=timetable,
+    #                 **l
+    #             )
 
-#         for l in lectures:
-#             LectureSlot.objects.create(
-#                 school=school,
-#                 timetable=timetable,
-#                 **l
-#             )
+    #         for b in breaks:
+    #             BreakSlot.objects.create(
+    #                 school=school,
+    #                 timetable=timetable,
+    #                 **b
+    #             )
 
-#         for b in breaks:
-#             BreakSlot.objects.create(
-#                 school=school,
-#                 timetable=timetable,
-#                 **b
-#             )
-
-#         return timetable
+    #         return timetable
 
     def update(self, instance, validated_data):
 
@@ -3871,24 +3863,14 @@ class ClassDivSerializer(serializers.ModelSerializer):
         if lectures is not None:
             instance.lecture_slots.all().delete()
             for l in lectures:
-                LectureSlot.objects.create(
-                    school=school,
-                    timetable=instance,
-                    **l
-                )
+                LectureSlot.objects.create(school=school, timetable=instance, **l)
 
         if breaks is not None:
             instance.break_slots.all().delete()
             for b in breaks:
-                BreakSlot.objects.create(
-                    school=school,
-                    timetable=instance,
-                    **b
-                )
+                BreakSlot.objects.create(school=school, timetable=instance, **b)
 
         return instance
-
-
 
 
 class SlotSerializer(serializers.ModelSerializer):
@@ -3910,9 +3892,7 @@ class SlotSerializer(serializers.ModelSerializer):
 
         # both true or both false
         if is_lecture == is_break:
-            raise serializers.ValidationError(
-                "Slot must be either lecture or break"
-            )
+            raise serializers.ValidationError("Slot must be either lecture or break")
 
         # time validation
         if slot_start_time >= slot_end_time:
@@ -3924,14 +3904,10 @@ class SlotSerializer(serializers.ModelSerializer):
         if is_lecture:
 
             if not subject:
-                raise serializers.ValidationError(
-                    "Lecture slot requires subject"
-                )
+                raise serializers.ValidationError("Lecture slot requires subject")
 
             if not teacher:
-                raise serializers.ValidationError(
-                    "Lecture slot requires teacher"
-                )
+                raise serializers.ValidationError("Lecture slot requires teacher")
 
         # break validation
         if is_break:
@@ -3942,7 +3918,8 @@ class SlotSerializer(serializers.ModelSerializer):
                 )
 
         return attrs
-    
+
+
 class TimeTableSerializer(serializers.ModelSerializer):
 
     # slots = SlotSerializer(many=True)
@@ -3952,6 +3929,7 @@ class TimeTableSerializer(serializers.ModelSerializer):
         model = Time_Table_tb
         fields = "__all__"
         read_only_fields = ["school"]
+
     # def validate(self, attrs):
 
     #     start_time = attrs.get("start_time")
@@ -3962,7 +3940,7 @@ class TimeTableSerializer(serializers.ModelSerializer):
     #             "End time must be greater than start time"
     #         )
 
-    #     return 
+    #     return
     def validate(self, attrs):
 
         start_time = attrs.get("start_time")
@@ -3983,9 +3961,7 @@ class TimeTableSerializer(serializers.ModelSerializer):
             slot_end = slot.get("slot_end_time")
 
             if previous_end and previous_end != slot_start:
-                raise serializers.ValidationError(
-                    "Slot timings are not continuous"
-                )
+                raise serializers.ValidationError("Slot timings are not continuous")
 
             previous_end = slot_end
 
@@ -3993,15 +3969,13 @@ class TimeTableSerializer(serializers.ModelSerializer):
                 lecture_count += 1
 
         if lecture_count != attrs.get("total_lecture"):
-            raise serializers.ValidationError(
-                "Total lecture count mismatch"
-            )
+            raise serializers.ValidationError("Total lecture count mismatch")
 
         # school = attrs.get("school") or getattr(self.instance, "school", None)
         school = self.context["request"].user.school
-        class_division = attrs.get(
-            "class_division"
-        ) or getattr(self.instance, "class_division", None)
+        class_division = attrs.get("class_division") or getattr(
+            self.instance, "class_division", None
+        )
         day = attrs.get("day") or getattr(self.instance, "day", None)
 
         if school and class_division and day:
@@ -4037,28 +4011,20 @@ class TimeTableSerializer(serializers.ModelSerializer):
                     school=timetable.school,
                     division=timetable.class_division,
                     teacher=teacher,
-                    is_class_teacher=True
+                    is_class_teacher=True,
                 ).exists()
 
                 if not is_class_teacher:
                     raise serializers.ValidationError(
-                        {
-                            "slot_1": (
-                                "First slot teacher must "
-                                "be class teacher"
-                            )
-                        }
+                        {"slot_1": ("First slot teacher must " "be class teacher")}
                     )
 
             Slot.objects.create(
-                timetable=timetable,
-                school=timetable.school,
-                **slot_data
+                timetable=timetable, school=timetable.school, **slot_data
             )
 
         return timetable
-    
-    
+
     @transaction.atomic
     def update(self, instance, validated_data):
 
@@ -4083,47 +4049,32 @@ class TimeTableSerializer(serializers.ModelSerializer):
                         school=instance.school,
                         division=instance.class_division,
                         teacher=teacher,
-                        is_class_teacher=True
+                        is_class_teacher=True,
                     ).exists()
 
                     if not is_class_teacher:
                         raise serializers.ValidationError(
-                            {
-                                "slot_1": (
-                                    "First slot teacher "
-                                    "must be class teacher"
-                                )
-                            }
+                            {"slot_1": ("First slot teacher " "must be class teacher")}
                         )
 
                 Slot.objects.create(
-                    timetable=instance,
-                    school=instance.school,
-                    **slot_data
+                    timetable=instance, school=instance.school, **slot_data
                 )
 
         return instance
-    
-
 
 
 # -------------------------
-# Student attendance 
-
+# Student attendance
 
 
 class StudentSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Student
-        fields = [
-            "id",
-            "surname",
-            "name",
-            "gr_no"
-        ]
-        
-        
+        fields = ["id", "surname", "name", "gr_no"]
+
+
 # serializers.py
 
 from rest_framework import serializers
@@ -4180,12 +4131,8 @@ class StudentAttendanceSerializer(serializers.ModelSerializer):
         return super().create(validated_data)
 
 
-
-
-
 from rest_framework import serializers
 from .models import Homework, HomeworkSubmission
-
 
 # ======================== HOMEWORK SERIALIZERS ========================
 
@@ -4195,11 +4142,10 @@ class HomeworkSerializer(serializers.ModelSerializer):
     Serializer for creating and listing homework.
     Teachers create homework for a division.
     """
-    
+
     division_name = serializers.CharField(source="division.division", read_only=True)
     school_class_name = serializers.CharField(
-        source="division.SchoolClass.get_school_class_display",
-        read_only=True
+        source="division.SchoolClass.get_school_class_display", read_only=True
     )
     teacher_name = serializers.CharField(source="teacher.name", read_only=True)
     submission_count = serializers.SerializerMethodField()
@@ -4247,9 +4193,7 @@ class HomeworkSerializer(serializers.ModelSerializer):
         division = attrs.get("division", getattr(self.instance, "division", None))
 
         if not division:
-            raise serializers.ValidationError(
-                {"division": "Division is required."}
-            )
+            raise serializers.ValidationError({"division": "Division is required."})
 
         if school and division.school_id != school.id:
             raise serializers.ValidationError(
@@ -4261,11 +4205,11 @@ class HomeworkSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         request = self.context.get("request")
         user = request.user if request and request.user.is_authenticated else None
-        
+
         # Automatically set school and teacher from request
         validated_data["school"] = user.school
         validated_data["teacher"] = user.staff if hasattr(user, "staff") else None
-        
+
         return super().create(validated_data)
 
 
@@ -4274,14 +4218,13 @@ class GetHomeworkSerializer(serializers.ModelSerializer):
     Serializer for students to view homework for their division.
     Shows homework details and submission status for the logged-in student.
     """
-    
+
     division_name = serializers.CharField(source="division.division", read_only=True)
     school_class_name = serializers.CharField(
-        source="division.SchoolClass.get_school_class_display",
-        read_only=True
+        source="division.SchoolClass.get_school_class_display", read_only=True
     )
     teacher_name = serializers.CharField(source="teacher.name", read_only=True)
-    
+
     # Student's submission for this homework
     student_submission = serializers.SerializerMethodField()
     is_submitted = serializers.SerializerMethodField()
@@ -4314,11 +4257,9 @@ class GetHomeworkSerializer(serializers.ModelSerializer):
         request = self.context.get("request")
         if not request or not hasattr(request.user, "student"):
             return None
-        
-        submission = obj.submissions.filter(
-            student__user=request.user
-        ).first()
-        
+
+        submission = obj.submissions.filter(student__user=request.user).first()
+
         if submission:
             return HomeworkSubmissionDetailSerializer(submission).data
         return None
@@ -4328,7 +4269,7 @@ class GetHomeworkSerializer(serializers.ModelSerializer):
         request = self.context.get("request")
         if not request or not hasattr(request.user, "student"):
             return False
-        
+
         return obj.submissions.filter(student__user=request.user).exists()
 
     def get_submission_status(self, obj):
@@ -4336,16 +4277,15 @@ class GetHomeworkSerializer(serializers.ModelSerializer):
         request = self.context.get("request")
         if not request or not hasattr(request.user, "student"):
             return None
-        
-        submission = obj.submissions.filter(
-            student__user=request.user
-        ).first()
-        
+
+        submission = obj.submissions.filter(student__user=request.user).first()
+
         return submission.status if submission else None
 
     def get_is_late(self, obj):
         """Check if due date has passed"""
         from django.utils import timezone
+
         return timezone.now().date() > obj.due_date
 
 
@@ -4353,7 +4293,7 @@ class HomeworkSubmissionSerializer(serializers.ModelSerializer):
     """
     Serializer for students to submit homework and teachers to check submissions.
     """
-    
+
     student_name = serializers.SerializerMethodField()
     homework_title = serializers.CharField(source="homework.title", read_only=True)
     submission_date = serializers.SerializerMethodField()
@@ -4416,14 +4356,10 @@ class HomeworkSubmissionSerializer(serializers.ModelSerializer):
         student = attrs.get("student", getattr(self.instance, "student", None))
 
         if not homework:
-            raise serializers.ValidationError(
-                {"homework": "Homework is required."}
-            )
+            raise serializers.ValidationError({"homework": "Homework is required."})
 
         if not student:
-            raise serializers.ValidationError(
-                {"student": "Student is required."}
-            )
+            raise serializers.ValidationError({"student": "Student is required."})
 
         if school and homework.school_id != school.id:
             raise serializers.ValidationError(
@@ -4481,12 +4417,10 @@ class HomeworkSubmissionDetailSerializer(serializers.ModelSerializer):
     """
     Detailed serializer for viewing a single submission with all details.
     """
-    
+
     student_name = serializers.SerializerMethodField()
     homework_title = serializers.CharField(source="homework.title", read_only=True)
-    teacher_name = serializers.CharField(
-        source="checked_by.staff.name", read_only=True
-    )
+    teacher_name = serializers.CharField(source="checked_by.staff.name", read_only=True)
 
     class Meta:
         model = HomeworkSubmission
@@ -4547,9 +4481,7 @@ class CheckHomeworkSubmissionSerializer(serializers.ModelSerializer):
         """Validate marks are between 0 and 100"""
         if value is not None:
             if value < 0 or value > 100:
-                raise serializers.ValidationError(
-                    "Marks must be between 0 and 100."
-                )
+                raise serializers.ValidationError("Marks must be between 0 and 100.")
         return value
 
     def validate(self, attrs):
@@ -4557,9 +4489,7 @@ class CheckHomeworkSubmissionSerializer(serializers.ModelSerializer):
 
         if status == "checked" and not attrs.get("marks"):
             raise serializers.ValidationError(
-                {
-                    "marks": "Marks are required when status is marked as 'checked'."
-                }
+                {"marks": "Marks are required when status is marked as 'checked'."}
             )
 
         return attrs
@@ -4580,7 +4510,7 @@ class StudentHomeworkListSerializer(serializers.ModelSerializer):
     Serializer for students to view all homework for their division.
     Shows division-wise homework with submission status.
     """
-    
+
     class Meta:
         model = Homework
         fields = [
@@ -4593,3 +4523,13 @@ class StudentHomeworkListSerializer(serializers.ModelSerializer):
             "is_active",
         ]
         read_only_fields = fields
+
+
+# --------------------------------GET STUDENT DATA----------------------------
+
+
+class StudentGetSerializer(serializers.ModelSerializer):
+    class_name = serializers.CharField(source = "school_class.school_class",read_only = True)
+    class Meta:
+        model = Student
+        fields = ["id","surname", "name", "father_name", "mother_name", "school_class","class_name"]

@@ -75,6 +75,7 @@ Create Student Fee
 For monthly fee:
 
 POST /api/student-fee/
+
 {
   "student": 5,
   "academic_year": 1,
@@ -82,6 +83,7 @@ POST /api/student-fee/
   "billing_period": "2026-04",
   "due_date": "2026-04-10"
 }
+
 For single fee:
 
 {

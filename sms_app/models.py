@@ -114,7 +114,7 @@ class UserModuleAccess(models.Model):
 
     class Meta:
         db_table = "user_module_access"
-        unique_together = ("user", "module")  # prevents duplicate entries
+        unique_together = ("user", "module")
         indexes = [
             models.Index(fields=["user"]),
             models.Index(fields=["module"]),
@@ -134,16 +134,6 @@ class CustomUser(AbstractUser):
 
     USERNAME_FIELD = "username"  # important change
     REQUIRED_FIELDS = []  #
-
-    # ROLE_CHOICES = [
-    #     ("TEACHER", "Teacher"),
-    #     ("CLERK", "Clerk"),
-    #     ("LIBRARIAN", "Librarian"),
-    #     ("FEE MANAGEMENT", "Fee Management "),
-    #     ("PRINCIPAL", "Principal"),
-    #     ("TRANSOPORTATION", "Transportation "),
-    #     ("INVENTORY", "Inventory "),
-    # ]
 
     role = models.CharField(max_length=100, blank=True, null=True)
 
