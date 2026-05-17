@@ -100,6 +100,38 @@ from django.http import JsonResponse
 def health_check(request):
     return JsonResponse({"status": "ok"})
 
+def health_check(request):
+    return JsonResponse({"status": "ok"})
+
+
+class DashboardCountAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        school = request.user.school
+
+        if not school:
+            return Response(
+                {"message": "User does not have a school assigned"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        total_student = Student.objects.filter(school=school).count()
+        total_staff = Staff.objects.filter(school=school).exclude(
+            category__iexact="PRINCIPAL"
+        ).count()
+        admission_not_complete = Admission.objects.filter(school=school).exclude(
+            status="completed"
+        ).count()
+
+        return Response(
+            {
+                "total_student": total_student,
+                "total_staff": total_staff,
+                "admission_not_complete": admission_not_complete,
+            },
+            status=status.HTTP_200_OK,
+        )
 
 # Create your views here.
 # set access and refresh token in cookie
@@ -2870,7 +2902,7 @@ class StaffSalaryPaymentViewSet(ModelViewSet):
 class StudentFeeViewSet(ModelViewSet):
     queryset = StudentFee.objects.all()
     serializer_class = StudentFeeSerializer
-    permission_classes = [IsAuthenticated, Isstudent]
+    permission_classes = [IsAuthenticated, IsFeeManager]
 
     def get_queryset(self):
         queryset = (

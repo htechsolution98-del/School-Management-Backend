@@ -168,6 +168,7 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     path('health/', health_check, name='health_check'),
     path('api/',include(router.urls)),
+    path('api/dashboard-count/', DashboardCountAPIView.as_view(), name='dashboard-count'),
     path('api/access/',CustomLoginView.as_view()),  
         
     path('api/refresh/',TokenRefreshView.as_view()),
