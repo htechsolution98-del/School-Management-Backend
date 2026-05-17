@@ -214,6 +214,7 @@ urlpatterns = [
    
     
     path('api/razor/order/',RazorpayOrderView.as_view()),
+    
     path('api/payment/verify/',VerifyPaymentView.as_view()),
     
     path('api/my-fees/', MyStudentFeeView.as_view()),

@@ -1577,43 +1577,49 @@ class RazorpayOrderView(APIView):
                         {"error": "Admission not found"},
                         status=status.HTTP_404_NOT_FOUND,
                     )
+                # print(admission.form.fee_type)
+                if admission.form.fee_type == 'general':
+                    fee_amount = admission.form.fees
+                    fee_amount = float(fee_amount)
 
+                    
+                else:
                 # Get class field value
-                value_obj = AdmissionFieldValue.objects.filter(
-                    admission=admission,
-                    field__section__form=admission.form,
-                    field__map_to_student_field="school_class",
-                ).first()
+                    value_obj = AdmissionFieldValue.objects.filter(
+                        admission=admission,
+                        field__section__form=admission.form,
+                        field__map_to_student_field="school_class",
+                    ).first()
 
-                if not value_obj:
-                    return Response(
-                        {"error": "School class not found in admission form"},
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
+                    if not value_obj:
+                        return Response(
+                            {"error": "School class not found in admission form"},
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
 
-                # Convert class id
-                try:
-                    class_id = int(value_obj.value)
-                except (TypeError, ValueError):
-                    return Response(
-                        {"error": "Invalid class id"},
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
+                    # Convert class id
+                    try:
+                        class_id = int(value_obj.value)
+                    except (TypeError, ValueError):
+                        return Response(
+                            {"error": "Invalid class id"},
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
 
-                # Get fee structure
-                fee_structure = AdmissionFeeStructure.objects.filter(
-                    admission_form=admission.form,
-                    class_name_id=class_id,
-                ).first()
+                    # Get fee structure
+                    fee_structure = AdmissionFeeStructure.objects.filter(
+                        admission_form=admission.form,
+                        class_name_id=class_id,
+                    ).first()
 
-                if not fee_structure:
-                    return Response(
-                        {"error": "Fee structure not found"},
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
+                    if not fee_structure:
+                        return Response(
+                            {"error": "Fee structure not found"},
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
 
-                # Actual fee amount
-                fee_amount = float(fee_structure.fee_amount)
+                    # Actual fee amount
+                    fee_amount = float(fee_structure.fee_amount)
 
                 # Convert to paise for Razorpay
                 razorpay_amount = int(fee_amount * 100)
@@ -1737,7 +1743,7 @@ class VerifyPaymentView(APIView):
             payment.razorpay_payment_id = payment_id
             payment.razorpay_signature = signature
             # payment.student = student
-            payment.school = request.user.school  # correct
+            payment.school = request.user.school # correct
             payment.payment_mode = "online"
             payment.paid_at = timezone.now()
             payment.save()

@@ -1230,6 +1230,7 @@ class TempUserAdmissionDataSerializer(serializers.ModelSerializer):
             "status",
             # "school_class",
             # "division",
+            "pay_process",
             "sections",
             "fee_data",
         ]
