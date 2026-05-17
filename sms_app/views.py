@@ -1555,7 +1555,7 @@ class RazorpayOrderView(APIView):
     def post(self, request):
 
         admission_number = request.data.get("admission_number")
-        admission_number = request.data.get("admission_number")
+        amount = request.data.get("amount")
 
 
         if not admission_number:
