@@ -197,7 +197,7 @@ urlpatterns = [
      # To get remaining leave for staff when click on apply leave button for show remaining leave
      path('api/get-remaining-leaves/',GetRemainingLeaveView.as_view()),
      
-    # path('form_page/', TemplateView.as_view(template_name = 'add_form.html')),
+    # path('form_page/', TemplateView.as_vi ew(template_name = 'add_form.html')),
     # path('fill_form/',TemplateView.as_view(template_name='form_fill.html')),
     # # path('fillform/<int:id>/submit/',SubmitFormView.as_view()),
     

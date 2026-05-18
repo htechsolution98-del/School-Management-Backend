@@ -3604,7 +3604,7 @@ class TimeTableViewSet(ModelViewSet):
 
         return self.queryset.filter(
             school=self.request.user.school
-        )
+        ).select_related("class_division", "class_division__SchoolClass")
 
     def perform_create(self, serializer):
 
@@ -3618,6 +3618,43 @@ class TimeTableViewSet(ModelViewSet):
         return Response({
             "message":"Time Table Created Successfully"
         })
+
+    @action(detail=False, methods=["get"], url_path="creatable-divisions")
+    def creatable_divisions(self, request):
+        school = request.user.school
+        all_days = [day for day, _ in Time_Table_tb.DAY_CHOICES]
+
+        divisions = Division.objects.filter(
+            school=school
+        ).select_related("SchoolClass").order_by("SchoolClass_id", "division")
+
+        existing_rows = Time_Table_tb.objects.filter(
+            school=school,
+            class_division__in=divisions,
+        ).values_list("class_division_id", "day")
+
+        used_days_by_division = {}
+        for division_id, day in existing_rows:
+            used_days_by_division.setdefault(division_id, set()).add(day)
+
+        data = []
+        for division in divisions:
+            used_days = used_days_by_division.get(division.id, set())
+            creatable_days = [day for day in all_days if day not in used_days]
+
+            data.append(
+                {
+                    "division_id": division.id,
+                    "school_class": division.SchoolClass_id,
+                    "school_class_name": division.SchoolClass.get_school_class_display(),
+                    "division": division.division,
+                    "creatable_days": creatable_days,
+                    "created_days": [day for day in all_days if day in used_days],
+                    "can_create": bool(creatable_days),
+                }
+            )
+
+        return Response(data)
         
 # ----------------------------------------------------------
 # ATTENDANCE

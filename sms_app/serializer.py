@@ -4037,11 +4037,13 @@ class TimeTableSerializer(serializers.ModelSerializer):
     #     return
     def validate(self, attrs):
 
-        start_time = attrs.get("start_time")
-        end_time = attrs.get("end_time")
+        start_time = attrs.get("start_time") or getattr(
+            self.instance, "start_time", None
+        )
+        end_time = attrs.get("end_time") or getattr(self.instance, "end_time", None)
         slots = self.initial_data.get("slots", [])
 
-        if start_time >= end_time:
+        if start_time and end_time and start_time >= end_time:
             raise serializers.ValidationError(
                 "End time must be greater than start time"
             )
@@ -4065,12 +4067,17 @@ class TimeTableSerializer(serializers.ModelSerializer):
         if lecture_count != attrs.get("total_lecture"):
             raise serializers.ValidationError("Total lecture count mismatch")
 
-        # school = attrs.get("school") or getattr(self.instance, "school", None)
-        school = self.context["request"].user.school
+        request = self.context.get("request")
+        school = getattr(getattr(request, "user", None), "school", None)
         class_division = attrs.get("class_division") or getattr(
             self.instance, "class_division", None
         )
         day = attrs.get("day") or getattr(self.instance, "day", None)
+
+        if school and class_division and class_division.school_id != school.id:
+            raise serializers.ValidationError(
+                {"class_division": "Invalid division for this school."}
+            )
 
         if school and class_division and day:
             existing = Time_Table_tb.objects.filter(
@@ -4082,7 +4089,12 @@ class TimeTableSerializer(serializers.ModelSerializer):
                 existing = existing.exclude(pk=self.instance.pk)
             if existing.exists():
                 raise serializers.ValidationError(
-                    "A timetable for this class division and day already exists."
+                    {
+                        "day": (
+                            "A timetable for this class division and day "
+                            "already exists."
+                        )
+                    }
                 )
 
         return attrs
