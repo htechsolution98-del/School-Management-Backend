@@ -431,6 +431,7 @@ class Student(models.Model):
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE, null=True, blank=True
     )
 
+
     admission = models.OneToOneField(  # VERY IMPORTANT
         "Admission", on_delete=models.SET_NULL, null=True, blank=True
     )
@@ -448,6 +449,7 @@ class Student(models.Model):
     school_class = models.ForeignKey(
         SchoolClass, on_delete=models.CASCADE, null=True, blank=True
     )
+    
     division = models.CharField(max_length=20, null=True, blank=True)
 
     admission_date = models.DateField(blank=True, null=True)
@@ -494,6 +496,25 @@ class StudentExtraData(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+
+class TempUser(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    # username = models.CharField(max_length=150, unique=True)
+    # mobile_number = models.CharField(max_length=15, unique=True)
+    email = models.EmailField(blank=True, null=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    
+class Parent(models.Model):
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="parent_profile"
+    )
+
+    
 
     
 

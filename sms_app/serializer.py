@@ -122,6 +122,8 @@ class VerifyOTPSerializer(serializers.Serializer):
             password=password,
             school=school,
         )
+        
+        TempUser.objects.create(user = user ) #-----------------------CREATE TEMP USER
 
         # Assign group (optional)
         group, _ = Group.objects.get_or_create(name="temp_user")
