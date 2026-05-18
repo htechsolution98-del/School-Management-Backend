@@ -936,6 +936,25 @@ class AdmissionReadOnlyViewSet(ReadOnlyModelViewSet):
         )
 
 
+class AdmissionReceiptViewSet(ReadOnlyModelViewSet):
+    serializer_class = AdmissionReceiptDataSerializer
+    permission_classes = [IsAuthenticated]
+    lookup_field = "admission_number"
+
+    def get_queryset(self):
+        return (
+            Admission.objects.filter(
+                school=self.request.user.school,
+                pay_process=True,
+            )
+            .select_related("form", "temp_user", "school")
+            .prefetch_related(
+                "field_values__field__section",
+                "documents__document_field",
+            )
+        )
+
+
 # ======================================================================
 
 

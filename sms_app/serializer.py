@@ -1698,6 +1698,97 @@ class GetAdmissionDataSerializer(serializers.ModelSerializer):
         ]
 
 
+class ReceiptFieldValueSerializer(serializers.ModelSerializer):
+    field_name = serializers.CharField(source="field.label", read_only=True)
+    section_name = serializers.CharField(source="field.section.title", read_only=True)
+
+    class Meta:
+        model = AdmissionFieldValue
+        fields = ["id", "field", "field_name", "section_name", "value"]
+
+
+class ReceiptDocumentSerializer(serializers.ModelSerializer):
+    document_name = serializers.CharField(
+        source="document_field.label", read_only=True
+    )
+
+    class Meta:
+        model = AdmissionDocument
+        fields = ["id", "document_field", "document_name", "file", "uploaded_at"]
+
+
+class ReceiptPaymentSerializer(serializers.ModelSerializer):
+    payment_type = serializers.SerializerMethodField()
+
+    class Meta:
+        model = AdmissionFee
+        fields = [
+            "id",
+            "amount",
+            "currency",
+            "payment_mode",
+            "payment_type",
+            "razorpay_order_id",
+            "razorpay_payment_id",
+            "fee_verify",
+            "created_at",
+            "paid_at",
+        ]
+
+    def get_payment_type(self, obj):
+        if obj.payment_mode == "offline":
+            return "cash"
+        return obj.payment_mode
+
+
+class AdmissionReceiptDataSerializer(serializers.ModelSerializer):
+    temp_user_data = serializers.SerializerMethodField()
+    field_values = ReceiptFieldValueSerializer(many=True, read_only=True)
+    documents = ReceiptDocumentSerializer(many=True, read_only=True)
+    payment_detail = serializers.SerializerMethodField()
+    form_title = serializers.CharField(source="form.title", read_only=True)
+
+    class Meta:
+        model = Admission
+        fields = [
+            "id",
+            "admission_number",
+            "status",
+            "pay_process",
+            "fee_amount",
+            "submitted_at",
+            "form",
+            "form_title",
+            "temp_user_data",
+            "field_values",
+            "documents",
+            "payment_detail",
+        ]
+
+    def get_temp_user_data(self, obj):
+        if not obj.temp_user:
+            return None
+
+        return {
+            "id": obj.temp_user.id,
+            "username": obj.temp_user.username,
+            "email": obj.temp_user.email,
+            "mobile": obj.temp_user.mobile,
+        }
+
+    def get_payment_detail(self, obj):
+        payment = (
+            AdmissionFee.objects.filter(admission_number=obj.admission_number)
+            .order_by("-paid_at", "-created_at")
+            .first()
+        )
+
+        if not payment:
+            return None
+
+        return ReceiptPaymentSerializer(payment).data
+
+
 # =============================================================
 
 

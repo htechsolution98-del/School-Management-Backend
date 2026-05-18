@@ -86,6 +86,7 @@ router.register(r'gettempuserdata', TempUserAdmissionViewSet, basename='gettempu
 
 #GET SUBMITED DATA
 router.register(r'admissionview', AdmissionReadOnlyViewSet, basename='admissionview')
+router.register(r'admission-receipt', AdmissionReceiptViewSet, basename='admission-receipt')
 #UPDATE FIELD VALUE BY CLARK
 router.register(r'updatesubmition', AdmissionUpdateViewSet, basename='updatesubmition')
 #UPDATE DOCUMENT VALUE BY CLARK

@@ -793,3 +793,57 @@ One important note: for grading via normal update, use PATCH /homework-submissio
   "teacher_remark": "Good work"
 }
 
+
+
+
+
+-----------------/api/admission-receipt/<admission_number>/------------------
+
+[
+  {
+    "id": 1,
+    "admission_number": "11234-school-ADM-0001",
+    "status": "pending",
+    "pay_process": true,
+    "fee_amount": "5000.00",
+    "submitted_at": "2026-05-17T10:30:00Z",
+    "form": 2,
+    "form_title": "Admission Form 2026",
+    "temp_user_data": {
+      "id": 10,
+      "username": "test123",
+      "email": "student@example.com",
+      "mobile": "9876543210"
+    },
+    "field_values": [
+      {
+        "id": 5,
+        "field": 1,
+        "field_name": "Student Name",
+        "section_name": "Personal Details",
+        "value": "Rahul Sharma"
+      }
+    ],
+    "documents": [
+      {
+        "id": 3,
+        "document_field": 1,
+        "document_name": "Birth Certificate",
+        "file": "/media/admission_documents/file.pdf",
+        "uploaded_at": "2026-05-17T10:40:00Z"
+      }
+    ],
+    "payment_detail": {
+      "id": 7,
+      "amount": 5000,
+      "currency": "INR",
+      "payment_mode": "online",
+      "payment_type": "online",
+      "razorpay_order_id": "order_xxx",
+      "razorpay_payment_id": "pay_xxx",
+      "fee_verify": false,
+      "created_at": "2026-05-17T10:35:00Z",
+      "paid_at": "2026-05-17T10:36:00Z"
+    }
+  }
+]
