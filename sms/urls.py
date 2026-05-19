@@ -164,7 +164,6 @@ router.register(r'studentget', StudentGetView, basename='studentget')
 
 
 
-
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('health/', health_check, name='health_check'),
