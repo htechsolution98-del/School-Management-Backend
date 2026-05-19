@@ -1287,14 +1287,14 @@ class DocumentSubmissionView(ModelViewSet):
             )
             i += 1
 
-            final_data = {
-                "admission_number": data.get("admission_number"),
-                "documents": documents,
-            }
+        final_data = {
+            "admission_number": data.get("admission_number"),
+            "documents": documents,
+        }
 
-            serializer = self.get_serializer(data=final_data)
-            serializer.is_valid(raise_exception=True)
-            self.perform_create(serializer)
+        serializer = self.get_serializer(data=final_data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
     # --------------------------------------------------------
         admission_number = data.get("admission_number")
         
