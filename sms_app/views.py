@@ -1265,25 +1265,53 @@ class DocumentSubmissionView(ModelViewSet):
     parser_classes = [MultiPartParser, FormParser]
     permission_classes = [IsTempUser]
 
-    def create(self, request, *args, **kwargs):
+    def _get_uploaded_documents(self, request):
         data = request.data
+        files = request.FILES
+
+        # New simple payload for one document:
+        # document_field=<id>, file=<uploaded file>
+        if data.get("document_field") is not None or files.get("file") is not None:
+            return [
+                {
+                    "document_field": data.get("document_field"),
+                    "file": files.get("file") or data.get("file"),
+                }
+            ]
 
         documents = []
         i = 0
 
         while True:
-            document_field = data.get(f"documents[{i}][document_field]")
-            file = data.get(f"documents[{i}][file]")
+            document_field = (
+                data.get(f"documents[{i}][document_field]")
+                or data.get(f"documents.{i}.document_field")
+            )
+            file = (
+                files.get(f"documents[{i}][file]")
+                or data.get(f"documents[{i}][file]")
+                or files.get(f"documents.{i}.file")
+                or data.get(f"documents.{i}.file")
+            )
 
             if document_field is None and file is None:
                 break
 
-            documents.append({
-                "document_field": document_field,
-                "file": file,
-            })
+            documents.append(
+                {
+                    "document_field": document_field,
+                    "file": file,
+                }
+            )
 
             i += 1
+
+        return documents
+
+    def create(self, request, *args, **kwargs):
+        data = request.data
+
+        documents = self._get_uploaded_documents(request)
 
         final_data = {
             "admission_number": data.get("admission_number"),

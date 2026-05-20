@@ -990,10 +990,21 @@ class AdmissionDocumentSubmissionSerializer(serializers.ModelSerializer):
 
     def validate(self, data):
         admission_number = data.get("admission_number")
+        documents = data.get("documents") or []
 
         if not admission_number:
             raise serializers.ValidationError(
                 {"message": "Admission number is required"}
+            )
+
+        if not documents:
+            raise serializers.ValidationError(
+                {
+                    "message": (
+                        "At least one document is required. Send document_field and "
+                        "file, or send documents[0][document_field] and documents[0][file]."
+                    )
+                }
             )
 
         temp_user = self.context["request"].user
