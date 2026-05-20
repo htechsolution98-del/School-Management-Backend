@@ -98,11 +98,14 @@ User = get_user_model()
 
 # from .views import Isprincipal
 
-def health_check(request):
-    return JsonResponse({"status": "ok"})
 
 def health_check(request):
     return JsonResponse({"status": "ok"})
+
+
+def health_check(request):
+    return JsonResponse({"status": "ok"})
+
 
 # Create your views here.
 # set access and refresh token in cookie
@@ -518,7 +521,8 @@ class Isstudent(BasePermission):
             and request.user.is_authenticated
             and request.user.groups.filter(name="student").exists()
         )
-        
+
+
 class Isteacher(BasePermission):
     def has_permission(self, request, view):
         return (
@@ -757,7 +761,9 @@ class StaffView(ModelViewSet):
         with transaction.atomic():
             user = User(username=username)
             user.school = self.request.user.school
-            user.role = cat.name #---------------------------------- THIS IS CHANGE ===category
+            user.role = (
+                cat.name
+            )  # ---------------------------------- THIS IS CHANGE ===category
             user.email = email if email else None
             user.mobile = mobile if mobile else None
 
@@ -787,7 +793,6 @@ class StaffView(ModelViewSet):
         cache.delete(f"staff_list_{self.request.user.id}")
 
 
-
 class DashboardCountAPIView(APIView):
     permission_classes = [IsAuthenticated, Isprincipal]
 
@@ -801,12 +806,14 @@ class DashboardCountAPIView(APIView):
             )
 
         total_student = Student.objects.filter(school=school).count()
-        total_staff = Staff.objects.filter(school=school).exclude(
-            category__iexact="PRINCIPAL"
-        ).count()
-        admission_not_complete = Admission.objects.filter(school=school).exclude(
-            status="completed"
-        ).count()
+        total_staff = (
+            Staff.objects.filter(school=school)
+            .exclude(category__iexact="PRINCIPAL")
+            .count()
+        )
+        admission_not_complete = (
+            Admission.objects.filter(school=school).exclude(status="completed").count()
+        )
 
         return Response(
             {
@@ -1259,6 +1266,7 @@ class FormSubmissionViewSet(ModelViewSet):
     # def perform_create(self, serializer):
     #     serializer.save(user=self.request.user)
 
+
 class DocumentSubmissionView(ModelViewSet):
     queryset = AdmissionDocument.objects.all()
     serializer_class = AdmissionDocumentSubmissionSerializer
@@ -1290,7 +1298,9 @@ class DocumentSubmissionView(ModelViewSet):
                     "document_field": (
                         document_fields[index] if index < len(document_fields) else None
                     ),
-                    "file": uploaded_files[index] if index < len(uploaded_files) else None,
+                    "file": (
+                        uploaded_files[index] if index < len(uploaded_files) else None
+                    ),
                 }
                 for index in range(max_count)
             ]
@@ -1299,9 +1309,8 @@ class DocumentSubmissionView(ModelViewSet):
         i = 0
 
         while True:
-            document_field = (
-                data.get(f"documents[{i}][document_field]")
-                or data.get(f"documents.{i}.document_field")
+            document_field = data.get(f"documents[{i}][document_field]") or data.get(
+                f"documents.{i}.document_field"
             )
             file = (
                 files.get(f"documents[{i}][file]")
@@ -1319,7 +1328,7 @@ class DocumentSubmissionView(ModelViewSet):
                     "file": file,
                 }
             )
-    
+
             i += 1
 
         return documents
@@ -1345,9 +1354,11 @@ class DocumentSubmissionView(ModelViewSet):
 
         if admission_number:
 
-            admission = Admission.objects.select_related("form").filter(
-                admission_number=admission_number
-            ).first()
+            admission = (
+                Admission.objects.select_related("form")
+                .filter(admission_number=admission_number)
+                .first()
+            )
 
             if not admission:
                 return Response(
@@ -1403,6 +1414,7 @@ class DocumentSubmissionView(ModelViewSet):
             },
             status=status.HTTP_201_CREATED,
         )
+
 
 # ==================UPDATE SUBMITED DATA BY CLERK===================
 class AdmissionUpdateViewSet(ModelViewSet):
@@ -1539,7 +1551,6 @@ class CheckMobileAPIView(APIView):
 
 import razorpay
 
-
 # class RazorpayOrderView(APIView):
 
 #     def post(self, request):
@@ -1570,7 +1581,7 @@ import razorpay
 
 #         # Save temporary payment record
 #         with transaction.atomic():
-           
+
 
 #             admission = Admission.objects.filter(
 #             admission_number=admission_number
@@ -1582,7 +1593,6 @@ import razorpay
 #                 status=status.HTTP_404_NOT_FOUND,
 #             )
 
-        
 
 #         # Get class field value
 #         value_obj = AdmissionFieldValue.objects.filter(
@@ -1608,15 +1618,14 @@ import razorpay
 #             admission_form=admission.form,
 #             class_name_id=class_id
 #         ).first()
-        
-        
+
 
 #         if not fee:
 #             raise serializers.ValidationError({
 #                 "message": "Fee amount is not valid for this class."
 #             })
 #         fee  = float(fee.fee_amount)
-        
+
 #         admission.fee_amount = fee
 #         admission.save()
 
@@ -1669,13 +1678,13 @@ import razorpay
 #             status=status.HTTP_200_OK,
 #         )
 
+
 class RazorpayOrderView(APIView):
 
     def post(self, request):
 
         admission_number = request.data.get("admission_number")
         amount = request.data.get("amount")
-
 
         if not admission_number:
             return Response(
@@ -1684,18 +1693,17 @@ class RazorpayOrderView(APIView):
             )
 
         if AdmissionFee.objects.filter(admission_number=admission_number).exists():
-            raise serializers.ValidationError({
-                "message": "You already paid"
-            })
-                    
+            raise serializers.ValidationError({"message": "You already paid"})
 
         try:
             with transaction.atomic():
 
                 # Get admission
-                admission = Admission.objects.select_related("form").filter(
-                    admission_number=admission_number
-                ).first()
+                admission = (
+                    Admission.objects.select_related("form")
+                    .filter(admission_number=admission_number)
+                    .first()
+                )
 
                 if not admission:
                     return Response(
@@ -1703,13 +1711,12 @@ class RazorpayOrderView(APIView):
                         status=status.HTTP_404_NOT_FOUND,
                     )
                 # print(admission.form.fee_type)
-                if admission.form.fee_type == 'general':
+                if admission.form.fee_type == "general":
                     fee_amount = admission.form.fees
                     fee_amount = float(fee_amount)
 
-                    
                 else:
-                # Get class field value
+                    # Get class field value
                     value_obj = AdmissionFieldValue.objects.filter(
                         admission=admission,
                         field__section__form=admission.form,
@@ -1758,8 +1765,7 @@ class RazorpayOrderView(APIView):
                     amount=fee_amount,
                     admission_number=admission_number,
                 )
-                
-                
+
                 #   ============FOR INDIVIDUAL SCHOOL =============
 
                 school = self.request.user.school
@@ -1868,7 +1874,7 @@ class VerifyPaymentView(APIView):
             payment.razorpay_payment_id = payment_id
             payment.razorpay_signature = signature
             # payment.student = student
-            payment.school = request.user.school # correct
+            payment.school = request.user.school  # correct
             payment.payment_mode = "online"
             payment.paid_at = timezone.now()
             payment.save()
@@ -2176,15 +2182,13 @@ def assign_student_divisions():
         Student.objects.bulk_update(students, ["division"])
 
 
-
 # ==================================================================
-
 
 
 class ListDivisionView(ModelViewSet):
     queryset = Division.objects.all()
     serializer_class = SetDivisionSerializer
-    permission_classes = [IsAuthenticated,Isteacher]
+    permission_classes = [IsAuthenticated, Isteacher]
     http_method_names = ["get"]
 
     # ✅ GET (LIST with safe cache)
@@ -2210,6 +2214,7 @@ class ListDivisionView(ModelViewSet):
             pass  # Ignore Redis error
 
         return Response(serializer.data)
+
 
 from django.core.cache import cache
 from rest_framework.viewsets import ModelViewSet
@@ -3046,10 +3051,23 @@ class upload_students(APIView):
 # ============FEE MANAGEMENT VIEW==============
 
 
+class AcademicYearMainView(ModelViewSet):
+    queryset = AcademicYear.objects.all()
+    serializer_class = AcademicYearSerializer
+    permission_classes = [IsAuthenticated, Is_admin_trustee]
+
+    def get_queryset(self):
+        return AcademicYear.objects.filter(school=self.request.user.school)
+
+    def perform_create(self, serializer):
+        serializer.save(school=self.request.user.school)
+
+
 class AcademicYearViewSet(ModelViewSet):
     queryset = AcademicYear.objects.all()
     serializer_class = AcademicYearSerializer
     permission_classes = [IsAuthenticated, IsFeeManager]
+    http_method_names = ["get"]
 
     def get_queryset(self):
         return AcademicYear.objects.filter(school=self.request.user.school)
@@ -3115,20 +3133,17 @@ class SalaryComponentViewSet(ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(school=self.request.user.school)
-        
-    def destroy(self, request, *args, **kwargs):
-        response =  super().destroy(request, *args, **kwargs)
-        
-        return Response({
-            "message":"Salary Component Deleted Successfully"
-        })
-    
-    def update(self, request, *args, **kwargs):
-        response =  super().update(request, *args, **kwargs)
 
-        return Response({
-            "message":"Salary Component Update Successfully"
-        })
+    def destroy(self, request, *args, **kwargs):
+        response = super().destroy(request, *args, **kwargs)
+
+        return Response({"message": "Salary Component Deleted Successfully"})
+
+    def update(self, request, *args, **kwargs):
+        response = super().update(request, *args, **kwargs)
+
+        return Response({"message": "Salary Component Update Successfully"})
+
 
 class StaffSalaryComponentViewSet(ModelViewSet):
     queryset = StaffSalaryComponent.objects.all()
@@ -3152,16 +3167,19 @@ class StaffSalaryComponentViewSet(ModelViewSet):
             queryset = queryset.filter(is_active=is_active == "true")
 
         return queryset.order_by("staff__name", "component__name")
-    
+
     def create(self, request, *args, **kwargs):
-        response =  super().create(request, *args, **kwargs)
-        
-        staff = Staff.objects.filter(id = response.data.get("staff")).first()
-        return Response({
-            "message":"Salary Component Created Successfully",
-            "staff":staff.name,
-            "component_type":response.data.get("component_type")
-        })
+        response = super().create(request, *args, **kwargs)
+
+        staff = Staff.objects.filter(id=response.data.get("staff")).first()
+        return Response(
+            {
+                "message": "Salary Component Created Successfully",
+                "staff": staff.name,
+                "component_type": response.data.get("component_type"),
+            }
+        )
+
 
 class StaffSalaryPaymentViewSet(ModelViewSet):
     queryset = StaffSalaryPayment.objects.all()
@@ -3541,24 +3559,24 @@ class StudentFeeRazorpayVerifyView(APIView):
 
 class StaffListView(ModelViewSet):
     queryset = Staff.objects.all()
-    
+
     serializer_class = StaffListSirializer
-    permission_classes = [IsAuthenticated,IsFeeManager]
-    
+    permission_classes = [IsAuthenticated, IsFeeManager]
+
     def get_queryset(self):
-        return Staff.objects.filter(school = self.request.user.school)
-    
+        return Staff.objects.filter(school=self.request.user.school)
+
 
 class SchoolQuerySetMixin:
     def get_queryset(self):
-        return self.queryset.filter(
-            school=self.request.user.school
-        )
-        
+        return self.queryset.filter(school=self.request.user.school)
+
+
 class SchoolViewSet(ModelViewSet):
     queryset = School.objects.all()
     serializer_class = SchoolSerializer
-    
+
+
 # class WorkingDayViewSet(SchoolQuerySetMixin, ModelViewSet):
 #     queryset = WorkingDay.objects.all()
 #     serializer_class = WorkingDaySerializer
@@ -3578,14 +3596,14 @@ class SchoolViewSet(ModelViewSet):
 #     serializer_class = ClassDivSerializer
 #     def perform_create(self, serializer):
 #         serializer.save(school=self.request.user.school)
-        
+
 # class SubjectViewSet(SchoolQuerySetMixin, ModelViewSet):
 #     queryset = Subject.objects.all()
 #     serializer_class = SubjectSerializer
 
 #     def perform_create(self, serializer):
 #         serializer.save(school=self.request.user.school)
-        
+
 
 # class TeacherStaffViewSet(SchoolQuerySetMixin, ModelViewSet):
 #     queryset = Staff.objects.all()
@@ -3593,7 +3611,7 @@ class SchoolViewSet(ModelViewSet):
 
 #     def perform_create(self, serializer):
 #         serializer.save(school=self.request.user.school)
-        
+
 
 # class TimetableViewSet(SchoolQuerySetMixin, ModelViewSet):
 #     queryset = Timetable.objects.all()
@@ -3601,7 +3619,7 @@ class SchoolViewSet(ModelViewSet):
 
 #     def perform_create(self, serializer):
 #         serializer.save(school=self.request.user.school)
-        
+
 
 # class LectureSlotViewSet(SchoolQuerySetMixin, ModelViewSet):
 #     queryset = LectureSlot.objects.all()
@@ -3609,7 +3627,7 @@ class SchoolViewSet(ModelViewSet):
 
 #     def perform_create(self, serializer):
 #         serializer.save(school=self.request.user.school)
-        
+
 
 # class BreakSlotViewSet(SchoolQuerySetMixin, ModelViewSet):
 #     queryset = BreakSlot.objects.all()
@@ -3626,47 +3644,44 @@ class SchoolViewSet(ModelViewSet):
 #         serializer.save(school=self.request.user.school)
 
 
-
-
 from rest_framework.viewsets import ModelViewSet
 from .models import Time_Table_tb
+
 # from .serializers import TimeTableSerializer
 
 
 class TimeTableViewSet(ModelViewSet):
 
     serializer_class = TimeTableSerializer
-    permission_classes = [IsAuthenticated,IsCLerk]
+    permission_classes = [IsAuthenticated, IsCLerk]
 
     queryset = Time_Table_tb.objects.all()
 
     def get_queryset(self):
 
-        return self.queryset.filter(
-            school=self.request.user.school
-        ).select_related("class_division", "class_division__SchoolClass")
+        return self.queryset.filter(school=self.request.user.school).select_related(
+            "class_division", "class_division__SchoolClass"
+        )
 
     def perform_create(self, serializer):
 
-        serializer.save(
-            school=self.request.user.school
-        )
-        
+        serializer.save(school=self.request.user.school)
+
     def create(self, request, *args, **kwargs):
-        response =  super().create(request, *args, **kwargs)
-        
-        return Response({
-            "message":"Time Table Created Successfully"
-        })
+        response = super().create(request, *args, **kwargs)
+
+        return Response({"message": "Time Table Created Successfully"})
 
     @action(detail=False, methods=["get"], url_path="creatable-divisions")
     def creatable_divisions(self, request):
         school = request.user.school
         all_days = [day for day, _ in Time_Table_tb.DAY_CHOICES]
 
-        divisions = Division.objects.filter(
-            school=school
-        ).select_related("SchoolClass").order_by("SchoolClass_id", "division")
+        divisions = (
+            Division.objects.filter(school=school)
+            .select_related("SchoolClass")
+            .order_by("SchoolClass_id", "division")
+        )
 
         existing_rows = Time_Table_tb.objects.filter(
             school=school,
@@ -3695,7 +3710,8 @@ class TimeTableViewSet(ModelViewSet):
             )
 
         return Response(data)
-        
+
+
 # ----------------------------------------------------------
 # ATTENDANCE
 
@@ -3709,13 +3725,11 @@ class AttendanceStudentAPIView(APIView):
         teacher = request.user.staff
 
         # GET CLASS TEACHER ASSIGNMENT
-        assign_class = AssignClass.objects.select_related(
-            "division"
-        ).filter(
-            school=school,
-            teacher=teacher,
-            is_class_teacher=True
-        ).first()
+        assign_class = (
+            AssignClass.objects.select_related("division")
+            .filter(school=school, teacher=teacher, is_class_teacher=True)
+            .first()
+        )
 
         # IF TEACHER NOT CLASS TEACHER
         if not assign_class:
@@ -3723,43 +3737,27 @@ class AttendanceStudentAPIView(APIView):
             return Response(
                 {
                     "success": False,
-                    "message": (
-                        "You are not assigned "
-                        "as class teacher"
-                    )
+                    "message": ("You are not assigned " "as class teacher"),
                 },
-                status=status.HTTP_400_BAD_REQUEST
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         # GET STUDENTS
         students = Student.objects.filter(
-            school=school,
-            division=assign_class.division.division
+            school=school, division=assign_class.division.division
         ).order_by("gr_no")
 
-        serializer = StudentSerializer(
-            students,
-            many=True
-        )
+        serializer = StudentSerializer(students, many=True)
 
         return Response(
             {
                 "success": True,
-
-                "division_id": (
-                    assign_class.division.id
-                ),
-
-                "division_name": (
-                    str(assign_class.division)
-                ),
-
+                "division_id": (assign_class.division.id),
+                "division_name": (str(assign_class.division)),
                 "total_students": students.count(),
-
-                "students": serializer.data
+                "students": serializer.data,
             }
         )
-    
 
 
 # views.py
@@ -3782,31 +3780,21 @@ class StudentAttendanceView(APIView):
             "attendance_by",
         )
 
-        serializer = StudentAttendanceSerializer(
-            queryset,
-            many=True
-        )
+        serializer = StudentAttendanceSerializer(queryset, many=True)
 
         return Response(serializer.data)
 
     def post(self, request):
 
         serializer = StudentAttendanceSerializer(
-            data=request.data,
-            context={"request": request}
+            data=request.data, context={"request": request}
         )
 
         serializer.is_valid(raise_exception=True)
 
         serializer.save()
 
-        return Response(
-            serializer.data,
-            status=status.HTTP_201_CREATED
-        )
-
-
-
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
 # from .homework_serializer import (
@@ -3822,7 +3810,7 @@ class StudentAttendanceView(APIView):
 class HomeworkViewSet(ModelViewSet):
     """
     ViewSet for managing homework.
-    
+
     Actions:
     - CREATE: Teachers create homework for a division
     - LIST: Get all homework (teachers see all, students see their division's)
@@ -3831,7 +3819,7 @@ class HomeworkViewSet(ModelViewSet):
     - DESTROY: Teachers delete homework
     - student-homework: Students view homework for their division
     """
-    
+
     permission_classes = [IsAuthenticated]
     queryset = Homework.objects.all()
 
@@ -3904,7 +3892,7 @@ class HomeworkViewSet(ModelViewSet):
     def update(self, request, *args, **kwargs):
         """Only the teacher who created can update homework"""
         homework = self.get_object()
-        
+
         if homework.teacher.user != request.user:
             return Response(
                 {"error": "You can only update homework you created."},
@@ -3916,7 +3904,7 @@ class HomeworkViewSet(ModelViewSet):
     def destroy(self, request, *args, **kwargs):
         """Only the teacher who created can delete homework"""
         homework = self.get_object()
-        
+
         if homework.teacher.user != request.user:
             return Response(
                 {"error": "You can only delete homework you created."},
@@ -3984,20 +3972,31 @@ class HomeworkViewSet(ModelViewSet):
         """Get division details for this homework"""
         homework = self.get_object()
         division = homework.division
-        
-        return Response({
-            "division_id": division.id,
-            "division_name": division.division,
-            "school_class": division.SchoolClass.get_school_class_display(),
-            "total_students": Student.objects.filter(school_class=division.SchoolClass, division=division.division, school=request.user.school).count(),
-            "submitted_count": homework.submissions.filter(status__in=["submitted", "checked"]).values("student").distinct().count(),
-        })
+
+        return Response(
+            {
+                "division_id": division.id,
+                "division_name": division.division,
+                "school_class": division.SchoolClass.get_school_class_display(),
+                "total_students": Student.objects.filter(
+                    school_class=division.SchoolClass,
+                    division=division.division,
+                    school=request.user.school,
+                ).count(),
+                "submitted_count": homework.submissions.filter(
+                    status__in=["submitted", "checked"]
+                )
+                .values("student")
+                .distinct()
+                .count(),
+            }
+        )
 
 
 class HomeworkSubmissionViewSet(ModelViewSet):
     """
     ViewSet for managing homework submissions.
-    
+
     Actions:
     - CREATE: Students submit homework
     - LIST: Get submissions (students see their own, teachers see all for their homework)
@@ -4005,7 +4004,7 @@ class HomeworkSubmissionViewSet(ModelViewSet):
     - UPDATE: Update submission (teacher can grade)
     - check-submission: Teacher grades the submission
     """
-    
+
     permission_classes = [IsAuthenticated]
     queryset = HomeworkSubmission.objects.all()
     serializer_class = HomeworkSubmissionSerializer
@@ -4230,33 +4229,39 @@ class HomeworkSubmissionViewSet(ModelViewSet):
             )
 
         submissions = homework.submissions.all()
-        total_students = Student.objects.filter(school_class=homework.division.SchoolClass, division=homework.division.division, school=request.user.school).count()
+        total_students = Student.objects.filter(
+            school_class=homework.division.SchoolClass,
+            division=homework.division.division,
+            school=request.user.school,
+        ).count()
 
-        return Response({
-            "homework_id": homework.id,
-            "homework_title": homework.title,
-            "total_students": total_students,
-            "submitted": submissions.filter(status__in=["submitted", "checked"]).count(),
-            "pending": submissions.filter(status="pending").count(),
-            "late": submissions.filter(status="late").count(),
-            "checked": submissions.filter(status="checked").count(),
-            "average_marks": submissions.filter(marks__isnull=False).aggregate(
-                avg=models.Avg("marks")
-            )["avg"] or 0,
-        })
-
-
+        return Response(
+            {
+                "homework_id": homework.id,
+                "homework_title": homework.title,
+                "total_students": total_students,
+                "submitted": submissions.filter(
+                    status__in=["submitted", "checked"]
+                ).count(),
+                "pending": submissions.filter(status="pending").count(),
+                "late": submissions.filter(status="late").count(),
+                "checked": submissions.filter(status="checked").count(),
+                "average_marks": submissions.filter(marks__isnull=False).aggregate(
+                    avg=models.Avg("marks")
+                )["avg"]
+                or 0,
+            }
+        )
 
 
 # ------------------------------------GET STUDENT ----------------------------
 
 
-
 class StudentGetView(ModelViewSet):
-    
+
     queryset = Student.objects.all()
-    
+
     serializer_class = StudentGetSerializer
-    
+
     def get_queryset(self):
-        return Student.objects.filter(school = self.request.user.school)
+        return Student.objects.filter(school=self.request.user.school)

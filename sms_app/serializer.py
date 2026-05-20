@@ -384,6 +384,7 @@ class ManualStudentSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         gr_no = attrs.get("gr_no")
+        academic_year = attrs.get("academic_year")
         request = self.context.get("request")
         school = getattr(getattr(request, "user", None), "school", None)
 
@@ -394,6 +395,11 @@ class ManualStudentSerializer(serializers.ModelSerializer):
                         "gr_no": "A student with this gr_no already exists for this school."
                     }
                 )
+
+        if academic_year and school and academic_year.school_id != school.id:
+            raise serializers.ValidationError(
+                {"academic_year": "Invalid academic year for this school."}
+            )
 
         return attrs
 
@@ -640,6 +646,7 @@ class AdmissionFormSerializer(serializers.ModelSerializer):
             "id",
             "is_active",
             "fees_enable",
+            "academic_year",
             "fees",
             "title",
             "description",
@@ -1492,7 +1499,7 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
                 admission_number=instance.admission_number
             ).exists():
                 raise serializers.ValidationError(
-                    {"message": "This Student already created"}
+                    {"message":"This Student already created"}
                 )
 
             student = Student.objects.create(
@@ -1500,6 +1507,7 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
                 # form=instance.form,
                 # temp_user=instance.temp_user,
                 # division=instance.division,
+                academic_year = instance.form.academic_year,
                 admission=instance,
                 gr_no=gr_no,
                 # details_done=True,
@@ -1598,12 +1606,16 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
             if not student.user:
                 student_user = User.objects.create(username=gr_no)
                 student_user.set_password(gr_no)
+                
                 student_user.save()
 
                 group, _ = Group.objects.get_or_create(name="student")
                 student_user.groups.add(group)
                 student_user.role = "student"
-                student_user = self.context["request"].user.school
+                student_user.save() 
+
+                
+                # student_user = self.context["request"].user.school
 
                 student.user = student_user
                 student.save()

@@ -9,6 +9,7 @@ from django.utils.text import slugify
 from django.conf import settings
 
 
+
 class OTP(models.Model):
     email = models.EmailField(null=True, blank=True)
     mobile = models.CharField(max_length=15, null=True, blank=True)
@@ -177,6 +178,47 @@ class Staff(models.Model):
         return f"{self.name} ({self.category})"
 
 
+class AcademicYear(models.Model):
+    name = models.CharField(max_length=20)  # 2025-26
+    school = models.ForeignKey(School, on_delete=models.CASCADE)
+    start_month = models.PositiveSmallIntegerField(null=True, blank=True)
+    end_month = models.PositiveSmallIntegerField(null=True, blank=True)
+
+    def get_start_year(self):
+        if self.name and len(self.name) >= 4 and self.name[:4].isdigit():
+            return int(self.name[:4])
+        return None
+
+    def get_month_numbers(self):
+        if not self.start_month or not self.end_month:
+            return []
+
+        if self.start_month <= self.end_month:
+            return list(range(self.start_month, self.end_month + 1))
+
+        return list(range(self.start_month, 13)) + list(range(1, self.end_month + 1))
+
+    def get_billing_periods(self):
+        start_year = self.get_start_year()
+        months = self.get_month_numbers()
+
+        if not start_year:
+            return []
+
+        periods = []
+        for month in months:
+            year = start_year
+            if self.start_month and self.start_month > self.end_month and month < self.start_month:
+                year = start_year + 1
+            periods.append(f"{year}-{month:02d}")
+
+        return periods
+
+    def __str__(self):
+        return self.name
+
+
+
 class SchoolClass(models.Model):
 
     school = models.ForeignKey(
@@ -238,6 +280,8 @@ class AdmissionForm(models.Model):
         related_name="admission_forms",
         db_index=True,
     )
+    
+    academic_year = models.ForeignKey(AcademicYear, on_delete=models.SET_NULL, null = True,blank= True)
 
     title = models.CharField(max_length=255)
     description = models.TextField(blank=True, null=True)
@@ -455,7 +499,12 @@ class Student(models.Model):
     admission_date = models.DateField(blank=True, null=True)
     gr_no = models.CharField(max_length=100, blank=True, null=True)
 
-    academic_year = models.CharField(max_length=30, null=True, blank=True)
+    academic_year = models.ForeignKey(
+        "AcademicYear",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
     
     aadhar_number = models.CharField(max_length = 50, null = True, blank = True )
 
@@ -1001,45 +1050,6 @@ class AnnouncementTarget(models.Model):
 
 
 # =============FEE MANAGEMENT TABLE=================
-class AcademicYear(models.Model):
-    name = models.CharField(max_length=20)  # 2025-26
-    school = models.ForeignKey(School, on_delete=models.CASCADE)
-    start_month = models.PositiveSmallIntegerField(null=True, blank=True)
-    end_month = models.PositiveSmallIntegerField(null=True, blank=True)
-
-    def get_start_year(self):
-        if self.name and len(self.name) >= 4 and self.name[:4].isdigit():
-            return int(self.name[:4])
-        return None
-
-    def get_month_numbers(self):
-        if not self.start_month or not self.end_month:
-            return []
-
-        if self.start_month <= self.end_month:
-            return list(range(self.start_month, self.end_month + 1))
-
-        return list(range(self.start_month, 13)) + list(range(1, self.end_month + 1))
-
-    def get_billing_periods(self):
-        start_year = self.get_start_year()
-        months = self.get_month_numbers()
-
-        if not start_year:
-            return []
-
-        periods = []
-        for month in months:
-            year = start_year
-            if self.start_month and self.start_month > self.end_month and month < self.start_month:
-                year = start_year + 1
-            periods.append(f"{year}-{month:02d}")
-
-        return periods
-
-    def __str__(self):
-        return self.name
-
 
 class FeeType(models.Model):
     BILLING_CHOICES = [
@@ -1500,7 +1510,12 @@ class Timetable(models.Model):
         related_name="timetables"
     )
 
-    academic_year = models.CharField(max_length=20)
+    academic_year = models.ForeignKey(
+        "AcademicYear",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
 
     total_lectures = models.PositiveIntegerField(default=0)
 

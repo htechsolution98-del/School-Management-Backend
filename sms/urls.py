@@ -143,7 +143,8 @@ router.register(r'announcements', AnnouncementView, basename='announcements')# F
 router.register(r'get-announcements', GetAnnouncementView, basename='get-announcements')# For get announcement for student,staff with filter [school filter add remainig]   
 router.register(r'razardata', RazarDataView, basename='razardata')# For get announcement for student,staff with filter [school filter add remainig]   
 
-router.register(r'academic-year', AcademicYearViewSet, basename='academic-year')
+router.register(r'academic-year', AcademicYearViewSet, basename='academic-year') # For Only get
+router.register(r'main-academic-year', AcademicYearMainView, basename='main-academic-year')
 
 router.register(r'feetype', FeeTypeViewSet, basename='feetype')
 router.register(r'fee-wise-class', FeeWiseClassViewSet, basename='fee-wise-class')

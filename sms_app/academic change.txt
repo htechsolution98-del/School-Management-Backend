@@ -1,0 +1,134 @@
+
+1. Create Academic Year Master
+
+Same as before. First create master record:
+
+POST /api/academic-year/
+{
+  "name": "2026-27",
+  "start_month": 6,
+  "end_month": 5
+}
+Response gives:
+
+{
+  "id": 1,
+  "name": "2026-27"
+}
+Use this id in other APIs.
+
+2. Manual Student
+
+Old payload:
+
+{
+  "gr_no": "101",
+  "name": "Rahul",
+  "academic_year": "2026-27"
+}
+New payload:
+
+{
+  "gr_no": "101",
+  "name": "Rahul",
+  "academic_year": 1
+}
+API:
+
+POST /api/manualstudent/
+3. Excel Import
+
+API:
+
+POST /api/import-students/
+Old Excel column:
+
+Academic Year = 2026-27
+New Excel column is still same:
+
+Academic Year = 2026-27
+But now this value must exist in Academic Year master table:
+
+/api/academic-year/ must already have name = 2026-27
+If not, import returns error:
+
+Row 3: Academic year '2026-27' not found
+4. Student Fee
+
+This was already using AcademicYear ID.
+
+Old/current payload:
+
+{
+  "student": 5,
+  "academic_year": 1,
+  "feetype": 2,
+  "billing_period": "2026-06"
+}
+No change needed.
+
+API:
+
+POST /api/student-fee/
+GET /api/student-fee/?academic_year=1
+5. Student Fee Payment
+
+No direct academic year in payment payload. It comes from selected student_fee.
+
+Example:
+
+{
+  "student_fee": 10,
+  "amount": 500,
+  "payment_mode": "cash"
+}
+No change.
+
+6. Timetable Old Model
+
+If frontend uses old Timetable API/model, old payload was:
+
+{
+  "class_div": 2,
+  "academic_year": "2026-27",
+  "total_lectures": 6,
+  "total_breaks": 1
+}
+New payload:
+
+{
+  "class_div": 2,
+  "academic_year": 1,
+  "total_lectures": 6,
+  "total_breaks": 1
+}
+
+But your active timetable API seems to use Time_Table_tb, which currently does not have academic year in payload.
+
+7. Admission Form Mapping
+
+You asked not to change admission mapping. So if admission form has field:
+
+{
+  "map_to_student_field": "academic_year"
+}
+old frontend may send:
+
+{
+  "field": 10,
+  "value": "2026-27"
+}
+But after model change, proper future payload should be:
+
+{
+  "field": 10,
+  "value": "1"
+}
+Important: because admission mapping logic was not changed, using academic_year in admission form may still need backend handling before it works correctly.
+
+Short rule:
+
+Manual/API payload uses academic_year ID.
+Excel still uses academic year name.
+Fee already uses academic_year ID.
+Admission academic_year mapping needs later special handling.
