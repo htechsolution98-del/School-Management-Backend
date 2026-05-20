@@ -1269,14 +1269,30 @@ class DocumentSubmissionView(ModelViewSet):
         data = request.data
         files = request.FILES
 
-        # New simple payload for one document:
+        document_fields = (
+            data.getlist("document_field")
+            if hasattr(data, "getlist")
+            else [data.get("document_field")]
+        )
+        uploaded_files = (
+            files.getlist("file")
+            if hasattr(files, "getlist")
+            else [files.get("file") or data.get("file")]
+        )
+
+        # Simple payload, supports one or many repeated keys:
         # document_field=<id>, file=<uploaded file>
-        if data.get("document_field") is not None or files.get("file") is not None:
+        # document_field=<id>, file=<uploaded file>
+        if any(value is not None for value in document_fields) or uploaded_files:
+            max_count = max(len(document_fields), len(uploaded_files))
             return [
                 {
-                    "document_field": data.get("document_field"),
-                    "file": files.get("file") or data.get("file"),
+                    "document_field": (
+                        document_fields[index] if index < len(document_fields) else None
+                    ),
+                    "file": uploaded_files[index] if index < len(uploaded_files) else None,
                 }
+                for index in range(max_count)
             ]
 
         documents = []
@@ -1303,7 +1319,7 @@ class DocumentSubmissionView(ModelViewSet):
                     "file": file,
                 }
             )
-
+    
             i += 1
 
         return documents
