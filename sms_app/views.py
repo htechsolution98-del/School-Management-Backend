@@ -757,7 +757,7 @@ class StaffView(ModelViewSet):
         with transaction.atomic():
             user = User(username=username)
             user.school = self.request.user.school
-            user.role = category
+            user.role = cat.name #---------------------------------- THIS IS CHANGE ===category
             user.email = email if email else None
             user.mobile = mobile if mobile else None
 

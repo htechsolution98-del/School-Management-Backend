@@ -1463,6 +1463,7 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
                 # form=instance.form,
                 # temp_user=instance.temp_user,
                 # division=instance.division,
+                admission=instance,
                 gr_no=gr_no,
                 # details_done=True,
             )
@@ -1554,6 +1555,8 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
 
                 group, _ = Group.objects.get_or_create(name="student")
                 student_user.groups.add(group)
+                student_user.role = "student"
+                student_user = self.context["request"].user.school
 
                 student.user = student_user
                 student.save()
@@ -1562,22 +1565,44 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
             # 7. CREATE PARENT USER
 
             # =========================
-            mobile = student.mobile
-            last_six = str(mobile)[-6:]
+            school = self.context["request"].user.school
+            existing_parent = None
 
-            parent_user = User.objects.filter(username=last_six).first()
+            if instance.temp_user_id:
+                existing_parent = (
+                    Perents.objects.filter(
+                        school=school,
+                        perents_of__admission__temp_user=instance.temp_user,
+                    )
+                    .select_related("user")
+                    .first()
+                )
+
+            parent_user = existing_parent.user if existing_parent else None
 
             if not parent_user:
-                parent_user = User.objects.create(username=last_six)
+                if instance.temp_user_id:
+                    base_username = f"parent_{school.id}_{instance.temp_user_id}"
+                else:
+                    mobile = student.mobile or ""
+                    base_username = f"parent_{school.id}_{student.id}"
+
+                username = base_username
+                counter = 1 
+                while User.objects.filter(username=username).exists():
+                    username = f"{base_username}_{counter}"
+                    counter += 1
+
+                parent_user = User.objects.create(username=username)
                 parent_user.set_password("123456")
                 parent_user.role = "parents"
                 parent_user.save()
 
-                group, _ = Group.objects.get_or_create(name="parents")
-                parent_user.groups.add(group)
+            group, _ = Group.objects.get_or_create(name="parents")
+            parent_user.groups.add(group)
 
             Perents.objects.get_or_create(
-                school=self.context["request"].user.school,
+                school=school,
                 user=parent_user,
                 perents_of=student,
             )
@@ -4087,13 +4112,15 @@ class TimeTableSerializer(serializers.ModelSerializer):
             )
             if self.instance:
                 existing = existing.exclude(pk=self.instance.pk)
-            if existing.exists():
+            conflicting_timetable = existing.first()
+            if conflicting_timetable:
                 raise serializers.ValidationError(
                     {
                         "day": (
                             "A timetable for this class division and day "
                             "already exists."
-                        )
+                        ),
+                        "existing_timetable_id": conflicting_timetable.id,
                     }
                 )
 
@@ -4143,7 +4170,7 @@ class TimeTableSerializer(serializers.ModelSerializer):
 
         if slots_data is not None:
 
-            instance.slot_set.all().delete()
+            instance.slots.all().delete()
 
             for slot_data in slots_data:
 
