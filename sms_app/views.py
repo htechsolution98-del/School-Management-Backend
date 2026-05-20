@@ -1259,7 +1259,6 @@ class FormSubmissionViewSet(ModelViewSet):
     # def perform_create(self, serializer):
     #     serializer.save(user=self.request.user)
 
-
 class DocumentSubmissionView(ModelViewSet):
     queryset = AdmissionDocument.objects.all()
     serializer_class = AdmissionDocumentSubmissionSerializer
@@ -1267,7 +1266,7 @@ class DocumentSubmissionView(ModelViewSet):
     permission_classes = [IsTempUser]
 
     def create(self, request, *args, **kwargs):
-        data = request.data  # .copy()
+        data = request.data
 
         documents = []
         i = 0
@@ -1276,15 +1275,14 @@ class DocumentSubmissionView(ModelViewSet):
             document_field = data.get(f"documents[{i}][document_field]")
             file = data.get(f"documents[{i}][file]")
 
-            if not document_field and not file:
+            if document_field is None and file is None:
                 break
 
-            documents.append(
-                {
-                    "document_field": document_field,
-                    "file": file,
-                }
-            )
+            documents.append({
+                "document_field": document_field,
+                "file": file,
+            })
+
             i += 1
 
         final_data = {
@@ -1294,29 +1292,31 @@ class DocumentSubmissionView(ModelViewSet):
 
         serializer = self.get_serializer(data=final_data)
         serializer.is_valid(raise_exception=True)
+
+        # SAVE ONLY ONCE
         self.perform_create(serializer)
-    # --------------------------------------------------------
+
         admission_number = data.get("admission_number")
-        
+        fee_amount = 0
+
         if admission_number:
-            
+
             admission = Admission.objects.select_related("form").filter(
-                        admission_number=admission_number
-                    ).first()
+                admission_number=admission_number
+            ).first()
 
             if not admission:
                 return Response(
                     {"error": "Admission not found"},
                     status=status.HTTP_404_NOT_FOUND,
                 )
-            # print(admission.form.fee_type)
-            if admission.form.fee_type == 'general':
-                fee_amount = admission.form.fees
-                fee_amount = float(fee_amount)
 
-                
+            if admission.form.fee_type == "general":
+
+                fee_amount = float(admission.form.fees)
+
             else:
-            # Get class field value
+
                 value_obj = AdmissionFieldValue.objects.filter(
                     admission=admission,
                     field__section__form=admission.form,
@@ -1329,16 +1329,15 @@ class DocumentSubmissionView(ModelViewSet):
                         status=status.HTTP_400_BAD_REQUEST,
                     )
 
-                # Convert class id
                 try:
                     class_id = int(value_obj.value)
+
                 except (TypeError, ValueError):
                     return Response(
                         {"error": "Invalid class id"},
                         status=status.HTTP_400_BAD_REQUEST,
                     )
 
-                # Get fee structure
                 fee_structure = AdmissionFeeStructure.objects.filter(
                     admission_form=admission.form,
                     class_name_id=class_id,
@@ -1350,19 +1349,16 @@ class DocumentSubmissionView(ModelViewSet):
                         status=status.HTTP_400_BAD_REQUEST,
                     )
 
-                # Actual fee amount
                 fee_amount = float(fee_structure.fee_amount)
-        
-        
 
         return Response(
             {
                 "message": "Documents uploaded successfully",
-                "fee amount":fee_amount,
-                "admission_number": data.get("admission_number"),
-            }
+                "fee_amount": fee_amount,
+                "admission_number": admission_number,
+            },
+            status=status.HTTP_201_CREATED,
         )
-
 
 # ==================UPDATE SUBMITED DATA BY CLERK===================
 class AdmissionUpdateViewSet(ModelViewSet):
