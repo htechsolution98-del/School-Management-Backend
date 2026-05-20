@@ -552,6 +552,21 @@ class SchoolClassSerializer(serializers.ModelSerializer):
 
 # ===================== FORMFIELD =====================
 # 1
+ALLOWED_STUDENT_FIELD_MAPPINGS = {
+    "surname",
+    "name",
+    "father_name",
+    "mother_name",
+    "date_of_birth",
+    "mobile",
+    "school_class",
+    "division",
+    "admission_date",
+    "academic_year",
+    "aadhar_number",
+}
+
+
 class FormFieldSerializer(serializers.ModelSerializer):
     class Meta:
         model = FormField
@@ -565,6 +580,17 @@ class FormFieldSerializer(serializers.ModelSerializer):
             "map_to_student_field",
             "is_system_field",
         ]
+
+    def validate_map_to_student_field(self, value):
+        if value in [None, ""]:
+            return value
+
+        if value not in ALLOWED_STUDENT_FIELD_MAPPINGS:
+            raise serializers.ValidationError(
+                f"Invalid student field mapping '{value}'."
+            )
+
+        return value
 
 
 # ===================== FORMSECTION =====================
@@ -1496,6 +1522,16 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
 
                 if not field.map_to_student_field:
                     continue
+
+                if field.map_to_student_field not in ALLOWED_STUDENT_FIELD_MAPPINGS:
+                    raise serializers.ValidationError(
+                        {
+                            "message": (
+                                f"Invalid student field mapping '{field.map_to_student_field}' "
+                                f"on admission field '{field.label}'."
+                            )
+                        }
+                    )
 
                 if field.map_to_student_field == "school_class":
                     school_class = None
