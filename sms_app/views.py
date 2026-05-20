@@ -3054,7 +3054,7 @@ class upload_students(APIView):
 class AcademicYearMainView(ModelViewSet):
     queryset = AcademicYear.objects.all()
     serializer_class = AcademicYearSerializer
-    permission_classes = [IsAuthenticated, Is_admin_trustee]
+    permission_classes = [IsAuthenticated, Isprincipal]
 
     def get_queryset(self):
         return AcademicYear.objects.filter(school=self.request.user.school)
