@@ -912,6 +912,12 @@ class TempUserAdmissionViewSet(ReadOnlyModelViewSet):
         )
 
 
+class TempUserListViewSet(ReadOnlyModelViewSet):
+    queryset = TempUser.objects.select_related("user").all()
+    serializer_class = TempUserListSerializer
+    permission_classes = [IsAuthenticated]
+
+
 # ----------TO GET ADMISSION DATA TO TRUSTEE----------------
 
 

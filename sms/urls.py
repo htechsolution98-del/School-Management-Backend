@@ -82,6 +82,7 @@ router.register(r'documentsubmission', DocumentSubmissionView, basename='documen
 
 # TEMP USER GET ADMISSION DATA TUapi-01
 router.register(r'gettempuserdata', TempUserAdmissionViewSet, basename='gettempuserdata')
+router.register(r'tempusers', TempUserListViewSet, basename='tempusers')
 
 
 #GET SUBMITED DATA
@@ -253,6 +254,7 @@ urlpatterns = [
     re_path(r'^swagger(?P<format>\.json|\.yaml)$', schema_view.without_ui(cache_timeout=0)),
 
 ]
+
 
 if settings.DEBUG:
     urlpatterns += static(

@@ -347,6 +347,22 @@ class UserListSerialzer(serializers.ModelSerializer):
         fields = "__all__"
 
 
+class TempUserListSerializer(serializers.ModelSerializer):
+    username = serializers.CharField(source="user.username", read_only=True)
+    mobile = serializers.SerializerMethodField()
+    email = serializers.SerializerMethodField()
+
+    class Meta:
+        model = TempUser
+        fields = ["id", "username", "email", "mobile"]
+
+    def get_mobile(self, obj):
+        return obj.user.mobile if obj.user else None
+
+    def get_email(self, obj):
+        return obj.email or (obj.user.email if obj.user else None)
+
+
 class ModuleSerializer(serializers.ModelSerializer):
     class Meta:
         model = Module

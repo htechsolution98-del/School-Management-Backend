@@ -9,12 +9,14 @@ from django.utils.text import slugify
 from django.conf import settings
 
 
-
 class OTP(models.Model):
     email = models.EmailField(null=True, blank=True)
     mobile = models.CharField(max_length=15, null=True, blank=True)
     otp = models.CharField(max_length=6)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "otp"
 
 
 def generate_unique_slug(model, field_value):
@@ -52,8 +54,8 @@ class School(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
     updated_at = models.DateTimeField(auto_now=True, null=True, blank=True)
 
-    def __str__(self):
-        return self.name
+    class Meta:
+        db_table = "school"
 
     def save(self, *args, **kwargs):
         print("Name:", self.name)
@@ -74,6 +76,9 @@ class Feature(models.Model):
     def __str__(self):
         return self.name
 
+    class Meta:
+        db_table = "feature"
+
 
 # --------ADD SCHOOL FEATURE---------
 class SchoolFeature(models.Model):
@@ -83,15 +88,19 @@ class SchoolFeature(models.Model):
 
     class Meta:
         unique_together = ("school", "feature")
+        db_table = "school_feature"
 
 
 # ------------MODUL LIST------------
+
 
 class Module(models.Model):
     name = models.CharField(max_length=100)
     code = models.CharField(max_length=50, unique=True)  # e.g. STUDENT, FEES
     description = models.TextField(blank=True, null=True)
-    for_role = models.ForeignKey(Feature, on_delete=models.CASCADE, null=True, blank=True ) 
+    for_role = models.ForeignKey(
+        Feature, on_delete=models.CASCADE, null=True, blank=True
+    )
     is_active = models.BooleanField(default=True)
 
     class Meta:
@@ -104,11 +113,12 @@ class Module(models.Model):
 
 # -------------USER ACCESS MODUL--------
 
+
 class UserModuleAccess(models.Model):
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="module_access"
     )
-    
+
     module = models.ForeignKey(
         Module, on_delete=models.CASCADE, related_name="user_access"
     )
@@ -137,6 +147,9 @@ class CustomUser(AbstractUser):
     REQUIRED_FIELDS = []  #
 
     role = models.CharField(max_length=100, blank=True, null=True)
+
+    class Meta:
+        db_table = "custom_user"
 
 
 class Staff(models.Model):
@@ -177,6 +190,9 @@ class Staff(models.Model):
     def __str__(self):
         return f"{self.name} ({self.category})"
 
+    class Meta:
+        db_table = "staff"
+
 
 class AcademicYear(models.Model):
     name = models.CharField(max_length=20)  # 2025-26
@@ -208,7 +224,11 @@ class AcademicYear(models.Model):
         periods = []
         for month in months:
             year = start_year
-            if self.start_month and self.start_month > self.end_month and month < self.start_month:
+            if (
+                self.start_month
+                and self.start_month > self.end_month
+                and month < self.start_month
+            ):
                 year = start_year + 1
             periods.append(f"{year}-{month:02d}")
 
@@ -217,6 +237,8 @@ class AcademicYear(models.Model):
     def __str__(self):
         return self.name
 
+    class Meta:
+        db_table = "academic_year"
 
 
 class SchoolClass(models.Model):
@@ -257,6 +279,8 @@ class SchoolClass(models.Model):
     def __str__(self):
         return self.school_class
 
+    class Meta:
+        db_table = "school_class"
 
 
 class Division(models.Model):
@@ -272,6 +296,9 @@ class Division(models.Model):
     def __str__(self):
         return f"{self.SchoolClass} ({self.division})"
 
+    class Meta:
+        db_table = "division"
+
 
 class AdmissionForm(models.Model):
     school = models.ForeignKey(
@@ -280,8 +307,10 @@ class AdmissionForm(models.Model):
         related_name="admission_forms",
         db_index=True,
     )
-    
-    academic_year = models.ForeignKey(AcademicYear, on_delete=models.SET_NULL, null = True,blank= True)
+
+    academic_year = models.ForeignKey(
+        AcademicYear, on_delete=models.SET_NULL, null=True, blank=True
+    )
 
     title = models.CharField(max_length=255)
     description = models.TextField(blank=True, null=True)
@@ -304,6 +333,9 @@ class AdmissionForm(models.Model):
 
     def __str__(self):
         return f"{self.title} - {self.school.name}"
+
+    class Meta:
+        db_table = "admission_form"
 
 
 # ======newww addd======
@@ -352,6 +384,9 @@ class Admission(models.Model):
         related_name="verified_fees",
     )
 
+    class Meta:
+        db_table = "admission"
+
 
 class AdmissionFeeStructure(models.Model):
 
@@ -372,6 +407,9 @@ class AdmissionFeeStructure(models.Model):
     def __str__(self):
         return f"{self.class_name} - {self.fee_amount}"
 
+    class Meta:
+        db_table = "admission_fee_structure"
+
 
 class FormSection(models.Model):
 
@@ -387,6 +425,9 @@ class FormSection(models.Model):
 
     def __str__(self):
         return self.title
+
+    class Meta:
+        db_table = "form_section"
 
 
 class FormField(models.Model):
@@ -422,6 +463,9 @@ class FormField(models.Model):
     def __str__(self):
         return f"{self.label} ({self.field_type})"
 
+    class Meta:
+        db_table = "form_field"
+
 
 # # ======newww addd======
 class AdmissionFieldValue(models.Model):
@@ -434,19 +478,27 @@ class AdmissionFieldValue(models.Model):
 
     value = models.TextField(blank=True, null=True)
 
+    class Meta:
+        db_table = "admission_field_value"
+
 
 # # ======newww addd======
 class DocumentField(models.Model):
 
     school = models.ForeignKey(School, on_delete=models.CASCADE)
 
-    form = models.ForeignKey(AdmissionForm, on_delete=models.CASCADE, related_name="document_fields")
+    form = models.ForeignKey(
+        AdmissionForm, on_delete=models.CASCADE, related_name="document_fields"
+    )
 
     label = models.CharField(max_length=255)
 
     is_required = models.BooleanField(default=False)
 
     order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        db_table = "document_field"
 
 
 # # ======newww addd======
@@ -464,8 +516,12 @@ class AdmissionDocument(models.Model):
 
     uploaded_at = models.DateTimeField(auto_now_add=True)
 
+    class Meta:
+        db_table = "admission_document"
+
 
 # # ======this is modified======
+
 
 class Student(models.Model):
 
@@ -474,7 +530,6 @@ class Student(models.Model):
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE, null=True, blank=True
     )
-
 
     admission = models.OneToOneField(  # VERY IMPORTANT
         "Admission", on_delete=models.SET_NULL, null=True, blank=True
@@ -493,7 +548,7 @@ class Student(models.Model):
     school_class = models.ForeignKey(
         SchoolClass, on_delete=models.CASCADE, null=True, blank=True
     )
-    
+
     division = models.CharField(max_length=20, null=True, blank=True)
 
     admission_date = models.DateField(blank=True, null=True)
@@ -505,13 +560,14 @@ class Student(models.Model):
         null=True,
         blank=True,
     )
-    
-    aadhar_number = models.CharField(max_length = 50, null = True, blank = True )
+
+    aadhar_number = models.CharField(max_length=50, null=True, blank=True)
 
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
+        db_table = "student"
         constraints = [
             models.UniqueConstraint(
                 fields=["school", "gr_no"],
@@ -519,32 +575,41 @@ class Student(models.Model):
             )
         ]
 
+
 class StudentVerify(models.Model):
     gr_no = models.CharField(max_length=50)
-    admission_number = models.CharField(max_length=100,null=True, blank=True)
-    student = models.ForeignKey(Student,on_delete=models.CASCADE)
+    admission_number = models.CharField(max_length=100, null=True, blank=True)
+    student = models.ForeignKey(Student, on_delete=models.CASCADE)
     clerk_verify = models.BooleanField(default=False)
+
+    class Meta:
+        db_table = "student_verify"
 
 
 class StudentExtraData(models.Model):
-    student = models.ForeignKey(Student, on_delete=models.CASCADE,null=True, blank=True)
-    
+    student = models.ForeignKey(
+        Student, on_delete=models.CASCADE, null=True, blank=True
+    )
+
     religion = models.CharField(max_length=100, null=True, blank=True)
     scheduled_caste = models.CharField(max_length=100, null=True, blank=True)
 
     place_of_birth = models.CharField(max_length=255, null=True, blank=True)
-    
+
     leaving_date = models.DateField(null=True, blank=True)
-    
+
     last_school = models.CharField(max_length=255, null=True, blank=True)
-    
+
     progress = models.TextField(null=True, blank=True)
     conduct = models.TextField(null=True, blank=True)
-    
+
     remarks = models.TextField(null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "student_extra_data"
 
 
 class TempUser(models.Model):
@@ -554,24 +619,30 @@ class TempUser(models.Model):
     email = models.EmailField(blank=True, null=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
-    
-    
+
+    class Meta:
+        db_table = "temp_user"
+
+
 class Parent(models.Model):
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
-        related_name="parent_profile"
+        related_name="parent_profile",
     )
 
-    
+    class Meta:
+        db_table = "parent"
 
-    
 
 class RazorPayData(models.Model):
-    school = models.ForeignKey(School, on_delete=models.CASCADE )
+    school = models.ForeignKey(School, on_delete=models.CASCADE)
     razorpay_key_id = models.CharField(max_length=255, blank=True, null=True)
     razorpay_secret_key = models.CharField(max_length=255, blank=True, null=True)
-    
+
+    class Meta:
+        db_table = "razor_pay_data"
+
 
 # # ======newww addd======
 # class StudentStatus(models.Model):
@@ -639,6 +710,9 @@ class Perents(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     perents_of = models.ForeignKey(Student, on_delete=models.CASCADE)
 
+    class Meta:
+        db_table = "parents"
+
 
 class StudentFieldValue(models.Model):
     form_id = models.ForeignKey(
@@ -659,6 +733,9 @@ class StudentFieldValue(models.Model):
 
     def __str__(self):
         return f"{self.student} - {self.field.label}"
+
+    class Meta:
+        db_table = "student_field_value"
 
 
 # class DocumentField(models.Model):
@@ -718,6 +795,9 @@ class DocumentFile(models.Model):
     def __str__(self):
         return self.label.label if self.label else "Student Document"
 
+    class Meta:
+        db_table = "document_file"
+
 
 class Subject(models.Model):
 
@@ -733,6 +813,9 @@ class Subject(models.Model):
 
     def __str__(self):
         return f"{self.name} ({self.division})"
+
+    class Meta:
+        db_table = "subject"
 
 
 class Syllabus(models.Model):
@@ -751,6 +834,9 @@ class Syllabus(models.Model):
 
     def __str__(self):
         return f"{self.division} - {self.subject}"
+
+    class Meta:
+        db_table = "syllabus"
 
 
 class AdmissionFee(models.Model):
@@ -777,6 +863,9 @@ class AdmissionFee(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     paid_at = models.DateTimeField(blank=True, null=True)
 
+    class Meta:
+        db_table = "admission_fee"
+
 
 class AssignClass(models.Model):
 
@@ -789,11 +878,15 @@ class AssignClass(models.Model):
         Subject, on_delete=models.CASCADE, null=True, blank=True
     )
     division = models.ForeignKey(
-        Division, on_delete=models.CASCADE, null=True, blank=True)
+        Division, on_delete=models.CASCADE, null=True, blank=True
+    )
     is_class_teacher = models.BooleanField(default=False)
 
     def __str__(self):
         return f"{self.teacher} - {self.subject} - {self.division}"
+
+    class Meta:
+        db_table = "assign_class"
 
 
 # ========= TIME TABLE MODEL============
@@ -804,6 +897,9 @@ class Tt_year(models.Model):
         School, on_delete=models.CASCADE, null=True, blank=True, db_index=True
     )
     year = models.CharField(max_length=10, null=True, blank=True)
+
+    class Meta:
+        db_table = "tt_year"
 
 
 class Tt_day(models.Model):
@@ -826,6 +922,9 @@ class Tt_day(models.Model):
     )
     lecture = models.CharField(max_length=50, null=True, blank=True)
 
+    class Meta:
+        db_table = "tt_day"
+
 
 class Tt_day_time(models.Model):
     school = models.ForeignKey(
@@ -835,6 +934,9 @@ class Tt_day_time(models.Model):
     start = models.TimeField(null=True, blank=True)
     end = models.TimeField(null=True, blank=True)
 
+    class Meta:
+        db_table = "tt_day_time"
+
 
 class Tt_breaks(models.Model):
     day = models.ForeignKey(Tt_day, on_delete=models.CASCADE, null=True, blank=True)
@@ -842,6 +944,9 @@ class Tt_breaks(models.Model):
     breaks = models.IntegerField(null=True, blank=True)
     time = models.CharField(max_length=50, null=True, blank=True)
     description = models.CharField(max_length=100, null=True, blank=True)
+
+    class Meta:
+        db_table = "tt_breaks"
 
 
 class Tt_slot(models.Model):
@@ -851,6 +956,9 @@ class Tt_slot(models.Model):
     day = models.ForeignKey(Tt_day, on_delete=models.CASCADE, null=True, blank=True)
     lecture = models.CharField(max_length=50, null=True, blank=True)
     slot = models.JSONField(null=True, blank=True)
+
+    class Meta:
+        db_table = "tt_slot"
 
 
 class Time_table(models.Model):
@@ -870,9 +978,12 @@ class Time_table(models.Model):
     def __str__(self):
         return f"{self.year} - {self.day} - {self.class_div} - {self.slot}"
 
+    class Meta:
+        db_table = "time_table"
+
 
 class AttendanceTimeRule(models.Model):
-    
+
     school = models.ForeignKey(
         School, on_delete=models.CASCADE, null=True, blank=True, db_index=True
     )
@@ -880,9 +991,12 @@ class AttendanceTimeRule(models.Model):
     end_time = models.TimeField(null=True, blank=True)
     half_day_time = models.TimeField(null=True, blank=True)
 
+    class Meta:
+        db_table = "attendance_time_rule"
+
 
 class AttendanceLocation(models.Model):
-    
+
     school = models.ForeignKey(
         School, on_delete=models.CASCADE, null=True, blank=True, db_index=True
     )
@@ -892,6 +1006,9 @@ class AttendanceLocation(models.Model):
 
     def __str__(self):
         return f"Attendance Location for {self.school}"
+
+    class Meta:
+        db_table = "attendance_location"
 
 
 class Attendance(models.Model):
@@ -911,13 +1028,14 @@ class Attendance(models.Model):
     check_out = models.DateTimeField(null=True, blank=True)
 
     class Meta:
+        db_table = "attendance"
         constraints = [
             models.UniqueConstraint(
                 fields=["staff", "attendance_date"],
                 name="unique_staff_attendance_per_day",
             )
         ]
-        
+
         indexes = [
             models.Index(
                 fields=["school", "attendance_date"],
@@ -950,6 +1068,9 @@ class LeaveTemplate(models.Model):
     def __str__(self):
         return f"{self.leave_type} - {self.time_line}"
 
+    class Meta:
+        db_table = "leave_template"
+
 
 class LeaveRequest(models.Model):
     school = models.ForeignKey(
@@ -970,6 +1091,9 @@ class LeaveRequest(models.Model):
 
     def __str__(self):
         return f"{self.staff.name} - {self.leave_type} - {self.status}"
+
+    class Meta:
+        db_table = "leave_request"
 
 
 class LeavePerDay(models.Model):
@@ -1001,6 +1125,9 @@ class LeavePerDay(models.Model):
     def __str__(self):
         return f"{self.date} - {self.total_leaves} leaves"
 
+    class Meta:
+        db_table = "leave_per_day"
+
 
 class StaffRemainingLeave(models.Model):
     school = models.ForeignKey(
@@ -1016,6 +1143,9 @@ class StaffRemainingLeave(models.Model):
     def __str__(self):
         return f"{self.staff} - {self.leave_template}"
 
+    class Meta:
+        db_table = "staff_remaining_leave"
+
 
 class Announcement(models.Model):
     school = models.ForeignKey(
@@ -1028,6 +1158,9 @@ class Announcement(models.Model):
     expires_at = models.DateTimeField(null=True, blank=True)  # optional
 
     created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "announcement"
 
 
 class AnnouncementTarget(models.Model):
@@ -1048,8 +1181,12 @@ class AnnouncementTarget(models.Model):
     target_type = models.CharField(max_length=10, choices=TARGET_TYPE)
     target_id = models.IntegerField(null=True, blank=True)
 
+    class Meta:
+        db_table = "announcement_target"
+
 
 # =============FEE MANAGEMENT TABLE=================
+
 
 class FeeType(models.Model):
     BILLING_CHOICES = [
@@ -1059,12 +1196,19 @@ class FeeType(models.Model):
         ("half_yearly", "Half-Yearly"),
         ("yearly", "Yearly"),
     ]
-    name = models.CharField(max_length=100, null=True, blank=True)  # Tuition, Transport, Exam
+    name = models.CharField(
+        max_length=100, null=True, blank=True
+    )  # Tuition, Transport, Exam
     school = models.ForeignKey(School, on_delete=models.CASCADE, null=True, blank=True)
-    billing_cycle = models.CharField(max_length=20, choices=BILLING_CHOICES, null=True, blank=True)
+    billing_cycle = models.CharField(
+        max_length=20, choices=BILLING_CHOICES, null=True, blank=True
+    )
 
     def __str__(self):
         return self.name or "Fee Type"
+
+    class Meta:
+        db_table = "fee_type"
 
 
 class FeeWiseClass(models.Model):
@@ -1074,8 +1218,12 @@ class FeeWiseClass(models.Model):
     ]
 
     school = models.ForeignKey(School, on_delete=models.CASCADE, null=True, blank=True)
-    feetype = models.ForeignKey(FeeType, on_delete=models.CASCADE, null=True, blank=True)
-    school_class = models.ForeignKey(SchoolClass, on_delete=models.CASCADE, null=True, blank=True)
+    feetype = models.ForeignKey(
+        FeeType, on_delete=models.CASCADE, null=True, blank=True
+    )
+    school_class = models.ForeignKey(
+        SchoolClass, on_delete=models.CASCADE, null=True, blank=True
+    )
     amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     late_fee_enabled = models.BooleanField(default=False)
     grace_days = models.PositiveIntegerField(default=0)
@@ -1083,10 +1231,15 @@ class FeeWiseClass(models.Model):
         max_length=20, choices=LATE_FEE_TYPE_CHOICES, null=True, blank=True
     )
     late_fee_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
-    max_late_fee = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    max_late_fee = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True
+    )
 
     def __str__(self):
         return f"{self.feetype} - {self.school_class} - {self.amount}"
+
+    class Meta:
+        db_table = "fee_wise_class"
 
 
 class StudentFee(models.Model):
@@ -1129,7 +1282,9 @@ class StudentFee(models.Model):
         max_length=20, choices=LATE_FEE_TYPE_CHOICES, null=True, blank=True
     )
     late_fee_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
-    max_late_fee = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    max_late_fee = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True
+    )
     fine_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     paid_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
 
@@ -1142,6 +1297,7 @@ class StudentFee(models.Model):
     paid_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
+        db_table = "student_fee"
         unique_together = ("student", "feetype", "academic_year", "billing_period")
 
     @property
@@ -1157,7 +1313,11 @@ class StudentFee(models.Model):
         from datetime import timedelta
         from django.utils import timezone
 
-        if not self.late_fee_enabled or not self.due_date or self.status in ["paid", "cancelled"]:
+        if (
+            not self.late_fee_enabled
+            or not self.due_date
+            or self.status in ["paid", "cancelled"]
+        ):
             return 0
 
         today = today or timezone.localdate()
@@ -1189,7 +1349,12 @@ class StudentFee(models.Model):
         from django.db.models import Sum
         from django.utils import timezone
 
-        total_paid = self.payments.filter(is_verified=True).aggregate(total=Sum("amount"))["total"] or 0
+        total_paid = (
+            self.payments.filter(is_verified=True).aggregate(total=Sum("amount"))[
+                "total"
+            ]
+            or 0
+        )
         self.paid_amount = total_paid
 
         if total_paid <= 0:
@@ -1202,7 +1367,11 @@ class StudentFee(models.Model):
             self.status = "partial"
             self.paid_at = None
 
-        latest_payment = self.payments.filter(is_verified=True).order_by("-payment_date", "-created_at").first()
+        latest_payment = (
+            self.payments.filter(is_verified=True)
+            .order_by("-payment_date", "-created_at")
+            .first()
+        )
         if latest_payment:
             self.payment_mode = latest_payment.payment_mode
             self.transaction_id = latest_payment.transaction_id
@@ -1210,7 +1379,15 @@ class StudentFee(models.Model):
             self.payment_mode = None
             self.transaction_id = None
 
-        self.save(update_fields=["paid_amount", "status", "paid_at", "payment_mode", "transaction_id"])
+        self.save(
+            update_fields=[
+                "paid_amount",
+                "status",
+                "paid_at",
+                "payment_mode",
+                "transaction_id",
+            ]
+        )
 
     def save(self, *args, **kwargs):
         if self.fee_wise_class:
@@ -1282,6 +1459,9 @@ class StudentFeePayment(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True)
 
+    class Meta:
+        db_table = "student_fee_payment"
+
     def save(self, *args, **kwargs):
         if self.student_fee:
             self.school = self.student_fee.school
@@ -1293,7 +1473,6 @@ class StudentFeePayment(models.Model):
     def __str__(self):
         return f"{self.student} - {self.feetype} - {self.amount}"
 
-    
 
 # ---------TABLES FOR SALARY--------
 
@@ -1308,16 +1487,21 @@ class SalaryComponent(models.Model):
     component_type = models.CharField(max_length=20, choices=COMPONENT_TYPE)
     is_active = models.BooleanField(default=True)
     school = models.ForeignKey(School, on_delete=models.CASCADE)
-    
-    
+
+    class Meta:
+        db_table = "salary_component"
+
+
 class StaffSalaryComponent(models.Model):
-    
+
     CALCULATION_TYPE = (
         ("fixed", "Fixed"),
         ("percentage", "Percentage"),
     )
 
-    staff = models.ForeignKey(Staff, on_delete=models.CASCADE, related_name="salary_components")
+    staff = models.ForeignKey(
+        Staff, on_delete=models.CASCADE, related_name="salary_components"
+    )
     component = models.ForeignKey(SalaryComponent, on_delete=models.CASCADE)
 
     calculation_type = models.CharField(max_length=20, choices=CALCULATION_TYPE)
@@ -1325,6 +1509,9 @@ class StaffSalaryComponent(models.Model):
 
     # optional
     is_active = models.BooleanField(default=True)
+
+    class Meta:
+        db_table = "staff_salary_component"
 
 
 class StaffSalaryPayment(models.Model):
@@ -1386,6 +1573,7 @@ class StaffSalaryPayment(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
+        db_table = "staff_salary_payment"
         constraints = [
             models.UniqueConstraint(
                 fields=["staff", "salary_month"],
@@ -1408,12 +1596,11 @@ class StaffSalaryPayment(models.Model):
         super().save(*args, **kwargs)
 
 
-
-
 #  ITS FOR TIME TABLE
 # =========================================================
 # WORKING DAYS
 # =========================================================
+
 
 class WorkingDay(models.Model):
 
@@ -1428,55 +1615,46 @@ class WorkingDay(models.Model):
     ]
 
     school = models.ForeignKey(
-        School,
-        on_delete=models.CASCADE,
-        related_name="working_days"
+        School, on_delete=models.CASCADE, related_name="working_days"
     )
 
-    day = models.CharField(
-        max_length=20,
-        choices=DAY_CHOICES
-    )
+    day = models.CharField(max_length=20, choices=DAY_CHOICES)
 
     class Meta:
+        db_table = "working_day"
         unique_together = ("school", "day")
 
     def __str__(self):
         return f"{self.school.name} - {self.day}"
 
 
-
 # =========================================================
 # HOLIDAYS
 # =========================================================
 
+
 class Holiday(models.Model):
 
     school = models.ForeignKey(
-        School,
-        on_delete=models.CASCADE,
-        related_name="holidays"
+        School, on_delete=models.CASCADE, related_name="holidays"
     )
 
     name = models.CharField(max_length=255)
 
     start_date = models.DateField()
 
-    end_date = models.DateField(
-        null=True,
-        blank=True
-    )
+    end_date = models.DateField(null=True, blank=True)
 
-    description = models.TextField(
-        blank=True,
-        null=True
-    )
+    description = models.TextField(blank=True, null=True)
+
+    class Meta:
+        db_table = "holiday"
 
     def __str__(self):
         return self.name
 
 
-# THIS MODEL ALL REDAY HAVE 
+# THIS MODEL ALL REDAY HAVE
 
 # =========================================================
 # STANDARD / CLASS
@@ -1491,23 +1669,19 @@ class Holiday(models.Model):
 # =========================================================
 
 
-
 # =========================================================
 # TIMETABLE
 # =========================================================
 
+
 class Timetable(models.Model):
 
     school = models.ForeignKey(
-        School,
-        on_delete=models.CASCADE,
-        related_name="timetables"
+        School, on_delete=models.CASCADE, related_name="timetables"
     )
 
     class_div = models.ForeignKey(
-        Division,
-        on_delete=models.CASCADE,
-        related_name="timetables"
+        Division, on_delete=models.CASCADE, related_name="timetables"
     )
 
     academic_year = models.ForeignKey(
@@ -1526,29 +1700,25 @@ class Timetable(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        unique_together = (
-            "school",
-            "class_div",
-            "academic_year"
-        )
+        db_table = "timetable"
+        unique_together = ("school", "class_div", "academic_year")
 
     def __str__(self):
         return f"{self.standard} - {self.academic_year}"
-
 
 
 # =========================================================
 # LECTURE SLOT
 # =========================================================
 
-class LectureSlot(models.Model):
-    school = models.ForeignKey("School", on_delete=models.CASCADE, null = True, blank = True)
 
+class LectureSlot(models.Model):
+    school = models.ForeignKey(
+        "School", on_delete=models.CASCADE, null=True, blank=True
+    )
 
     timetable = models.ForeignKey(
-        Timetable,
-        on_delete=models.CASCADE,
-        related_name="lecture_slots"
+        Timetable, on_delete=models.CASCADE, related_name="lecture_slots"
     )
 
     lecture_number = models.PositiveIntegerField()
@@ -1558,30 +1728,27 @@ class LectureSlot(models.Model):
     end_time = models.TimeField()
 
     class Meta:
+        db_table = "lecture_slot"
         ordering = ["lecture_number"]
 
-        unique_together = (
-            "timetable",
-            "lecture_number"
-        )
+        unique_together = ("timetable", "lecture_number")
 
     def __str__(self):
         return f"Lecture {self.lecture_number}"
-
-
 
 
 # =========================================================
 # BREAK SLOT
 # =========================================================
 
+
 class BreakSlot(models.Model):
-    school = models.ForeignKey("School", on_delete=models.CASCADE, null = True, blank = True)
+    school = models.ForeignKey(
+        "School", on_delete=models.CASCADE, null=True, blank=True
+    )
 
     timetable = models.ForeignKey(
-        Timetable,
-        on_delete=models.CASCADE,
-        related_name="break_slots"
+        Timetable, on_delete=models.CASCADE, related_name="break_slots"
     )
 
     break_number = models.PositiveIntegerField()
@@ -1593,24 +1760,24 @@ class BreakSlot(models.Model):
     duration_minutes = models.PositiveIntegerField()
 
     class Meta:
+        db_table = "break_slot"
         ordering = ["break_number"]
 
-        unique_together = (
-            "timetable",
-            "break_number"
-        )
+        unique_together = ("timetable", "break_number")
 
     def __str__(self):
         return f"Break {self.break_number}"
-
 
 
 # =========================================================
 # TIMETABLE ENTRY
 # =========================================================
 
+
 class TimetableEntry(models.Model):
-    school = models.ForeignKey("School", on_delete=models.CASCADE, null = True, blank = True)
+    school = models.ForeignKey(
+        "School", on_delete=models.CASCADE, null=True, blank=True
+    )
 
     DAY_CHOICES = [
         ("monday", "Monday"),
@@ -1623,50 +1790,33 @@ class TimetableEntry(models.Model):
     ]
 
     timetable = models.ForeignKey(
-        Timetable,
-        on_delete=models.CASCADE,
-        related_name="entries"
+        Timetable, on_delete=models.CASCADE, related_name="entries"
     )
 
-    day = models.CharField(
-        max_length=20,
-        choices=DAY_CHOICES
-    )
+    day = models.CharField(max_length=20, choices=DAY_CHOICES)
 
     lecture_slot = models.ForeignKey(
-        LectureSlot,
-        on_delete=models.CASCADE,
-        related_name="entries"
+        LectureSlot, on_delete=models.CASCADE, related_name="entries"
     )
 
     subject = models.ForeignKey(
-        Subject,
-        on_delete=models.CASCADE,
-        related_name="timetable_entries"
+        Subject, on_delete=models.CASCADE, related_name="timetable_entries"
     )
 
     teacher_staff = models.ForeignKey(
-        Staff,
-        on_delete=models.CASCADE,
-        related_name="timetable_entries"
+        Staff, on_delete=models.CASCADE, related_name="timetable_entries"
     )
 
     class Meta:
-        unique_together = (
-            "timetable",
-            "day",
-            "lecture_slot"
-        )
+        db_table = "timetable_entry"
+        unique_together = ("timetable", "day", "lecture_slot")
 
     def __str__(self):
-        return (
-            f"{self.day} - "
-            f"{self.subject.name} - "
-            f"{self.teacher_staff.name}"
-        )
-        
+        return f"{self.day} - " f"{self.subject.name} - " f"{self.teacher_staff.name}"
+
 
 from django.core.exceptions import ValidationError
+
 
 class Time_Table_tb(models.Model):
     school = models.ForeignKey("School", on_delete=models.CASCADE)
@@ -1681,68 +1831,65 @@ class Time_Table_tb(models.Model):
         ("sunday", "Sunday"),
     ]
 
-    day = models.CharField(
-        max_length=20,
-        choices=DAY_CHOICES
-    )
-    
-    class_division = models.ForeignKey(Division, on_delete=models.CASCADE )
-    
+    day = models.CharField(max_length=20, choices=DAY_CHOICES)
+
+    class_division = models.ForeignKey(Division, on_delete=models.CASCADE)
+
     total_lecture = models.PositiveIntegerField()
-    
+
     start_time = models.TimeField()
-    
+
     end_time = models.TimeField()
-    
+
     def clean(self):
         if self.start_time >= self.end_time:
-            raise ValidationError(
-                "End time must be greater than start time"
-            )
+            raise ValidationError("End time must be greater than start time")
 
     class Meta:
+        db_table = "time_table_tb"
         constraints = [
             models.UniqueConstraint(
-                fields=["school","class_division", "day"],
-                name="unique_division_day"
+                fields=["school", "class_division", "day"], name="unique_division_day"
             )
         ]
 
 
 class Slot(models.Model):
-    school = models.ForeignKey("School", on_delete=models.CASCADE, null = True, blank = True)
-    
-    timetable = models.ForeignKey(Time_Table_tb, on_delete=models.CASCADE, related_name="slots")
-    
-    is_lecture  = models.BooleanField(default=False)
-    is_break =  models.BooleanField(default=False)
+    school = models.ForeignKey(
+        "School", on_delete=models.CASCADE, null=True, blank=True
+    )
+
+    timetable = models.ForeignKey(
+        Time_Table_tb, on_delete=models.CASCADE, related_name="slots"
+    )
+
+    is_lecture = models.BooleanField(default=False)
+    is_break = models.BooleanField(default=False)
     slot_number = models.PositiveIntegerField()
 
-    slot_start_time = models.TimeField(null=True, blank= True)
+    slot_start_time = models.TimeField(null=True, blank=True)
 
-    slot_end_time = models.TimeField(null=True, blank= True)
+    slot_end_time = models.TimeField(null=True, blank=True)
 
-    subject = models.ForeignKey(Subject, on_delete=models.CASCADE ,null=True, blank= True)
-    
-    teacher = models.ForeignKey(Staff, on_delete=models.CASCADE ,null=True, blank= True)
-    
+    subject = models.ForeignKey(
+        Subject, on_delete=models.CASCADE, null=True, blank=True
+    )
+
+    teacher = models.ForeignKey(Staff, on_delete=models.CASCADE, null=True, blank=True)
+
     class Meta:
+        db_table = "slot"
         ordering = ["slot_number"]
 
-        unique_together = (
-            "timetable",
-            "slot_number"
-        )
+        unique_together = ("timetable", "slot_number")
 
     def clean(self):
         if self.is_lecture == self.is_break:
-            raise ValidationError(
-                "Slot must be either lecture or break"
-            )
-            
+            raise ValidationError("Slot must be either lecture or break")
+
     def __str__(self):
         return f"Lecture {self.slot_number}"
-    
+
 
 from django.db import models
 
@@ -1770,7 +1917,7 @@ class StudentAttendance(models.Model):
     )
 
     is_present = models.BooleanField(default=False)
-    
+
     is_absent = models.BooleanField(default=False)
 
     attendance_date = models.DateField(auto_now_add=True)
@@ -1778,27 +1925,21 @@ class StudentAttendance(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
+        db_table = "student_attendance"
         unique_together = ("student", "attendance_date")
 
     def __str__(self):
         return f"{self.student} - {self.attendance_date}"
 
 
-
-
-
 class Homework(models.Model):
 
     school = models.ForeignKey(
-        "School",
-        on_delete=models.CASCADE,
-        related_name="homeworks"
+        "School", on_delete=models.CASCADE, related_name="homeworks"
     )
 
     division = models.ForeignKey(
-        "Division",
-        on_delete=models.CASCADE,
-        related_name="homeworks"
+        "Division", on_delete=models.CASCADE, related_name="homeworks"
     )
 
     teacher = models.ForeignKey(
@@ -1806,7 +1947,7 @@ class Homework(models.Model):
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        related_name="assigned_homeworks"
+        related_name="assigned_homeworks",
     )
 
     title = models.CharField(max_length=255)
@@ -1817,11 +1958,7 @@ class Homework(models.Model):
 
     due_date = models.DateField()
 
-    attachment = models.FileField(
-        upload_to="homework/",
-        null=True,
-        blank=True
-    )
+    attachment = models.FileField(upload_to="homework/", null=True, blank=True)
 
     is_active = models.BooleanField(default=True)
 
@@ -1830,11 +1967,12 @@ class Homework(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
+        db_table = "homework"
         ordering = ["-created_at"]
 
     def __str__(self):
         return f"{self.title}"
-    
+
 
 class HomeworkSubmission(models.Model):
 
@@ -1846,72 +1984,61 @@ class HomeworkSubmission(models.Model):
     ]
 
     school = models.ForeignKey(
-        "School",
-        on_delete=models.CASCADE,
-        related_name="homework_submissions"
+        "School", on_delete=models.CASCADE, related_name="homework_submissions"
     )
 
     homework = models.ForeignKey(
-        "Homework",
-        on_delete=models.CASCADE,
-        related_name="submissions"
+        "Homework", on_delete=models.CASCADE, related_name="submissions"
     )
 
     student = models.ForeignKey(
-        "Student",
-        on_delete=models.CASCADE,
-        related_name="homework_submissions"
+        "Student", on_delete=models.CASCADE, related_name="homework_submissions"
     )
 
     attachment = models.FileField(
-        upload_to="homework/submissions/",
-        null=True,
-        blank=True
+        upload_to="homework/submissions/", null=True, blank=True
     )
 
-    submitted_at = models.DateTimeField(
-        null=True,
-        blank=True
-    )
+    submitted_at = models.DateTimeField(null=True, blank=True)
 
-    status = models.CharField(
-        max_length=20,
-        choices=STATUS_CHOICES,
-        default="pending"
-    )
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
 
-    marks = models.DecimalField(
-        max_digits=5,
-        decimal_places=2,
-        null=True,
-        blank=True
-    )
+    marks = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
 
-    teacher_remark = models.TextField(
-        null=True,
-        blank=True
-    )
+    teacher_remark = models.TextField(null=True, blank=True)
 
     checked_by = models.ForeignKey(
         "Staff",
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        related_name="checked_homeworks"
+        related_name="checked_homeworks",
     )
 
-    checked_at = models.DateTimeField(
-        null=True,
-        blank=True
-    )
+    checked_at = models.DateTimeField(null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
 
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
+        db_table = "homework_submission"
         unique_together = ["homework", "student"]
         ordering = ["-created_at"]
 
     def __str__(self):
         return f"{self.student}"
+
+
+# # Ensure every model in this app uses a consistent db_table naming convention
+# # without modifying individual model Meta classes or fields.
+# try:
+#     from django.apps import apps
+
+#     for _model in apps.get_models():
+#         if getattr(_model._meta, "app_label", None) == "sms_app":
+#             # set table name to '<modelname>_table' (model_name is already lowercase)
+#             _model._meta.db_table = f"{_model._meta.model_name}_table"
+# except Exception:
+#     # import-time may fail in some management commands; ignore silently
+#     pass
