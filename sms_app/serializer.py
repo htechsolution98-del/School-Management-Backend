@@ -351,16 +351,20 @@ class TempUserListSerializer(serializers.ModelSerializer):
     username = serializers.CharField(source="user.username", read_only=True)
     mobile = serializers.SerializerMethodField()
     email = serializers.SerializerMethodField()
+    is_active = serializers.SerializerMethodField()
 
     class Meta:
         model = TempUser
-        fields = ["id", "username", "email", "mobile"]
+        fields = ["id", "username", "email", "mobile", "is_active"]
 
     def get_mobile(self, obj):
         return obj.user.mobile if obj.user else None
 
     def get_email(self, obj):
         return obj.email or (obj.user.email if obj.user else None)
+
+    def get_is_active(self, obj):
+        return obj.user.is_active if obj.user else False
 
 
 class ModuleSerializer(serializers.ModelSerializer):
@@ -2871,8 +2875,10 @@ class FeeTypeSerializer(serializers.ModelSerializer):
 
         return attrs
 
-
 class AcademicYearSerializer(serializers.ModelSerializer):
+    start_year = serializers.IntegerField(write_only=True, required=False)
+    end_year = serializers.IntegerField(write_only=True, required=False)
+
     month_numbers = serializers.SerializerMethodField()
     billing_periods = serializers.SerializerMethodField()
 
@@ -2884,10 +2890,12 @@ class AcademicYearSerializer(serializers.ModelSerializer):
             "name",
             "start_month",
             "end_month",
+            "start_year",
+            "end_year",
             "month_numbers",
             "billing_periods",
         ]
-        read_only_fields = ["school"]
+        read_only_fields = ["school", "name"]
 
     def get_month_numbers(self, obj):
         return obj.get_month_numbers()
@@ -2899,7 +2907,9 @@ class AcademicYearSerializer(serializers.ModelSerializer):
         start_month = attrs.get(
             "start_month", getattr(self.instance, "start_month", None)
         )
-        end_month = attrs.get("end_month", getattr(self.instance, "end_month", None))
+        end_month = attrs.get(
+            "end_month", getattr(self.instance, "end_month", None)
+        )
 
         if not self.instance and (start_month is None or end_month is None):
             raise serializers.ValidationError(
@@ -2918,7 +2928,74 @@ class AcademicYearSerializer(serializers.ModelSerializer):
                     {field_name: "Month must be between 1 and 12."}
                 )
 
+        request = self.context.get("request")
+        school = getattr(request.user, "school", None) if request else None
+
+        start_year = attrs.get("start_year")
+        end_year = attrs.get("end_year")
+
+        if start_year is not None or end_year is not None:
+
+            if start_year is None or end_year is None:
+                raise serializers.ValidationError(
+                    {
+                        "start_year": "Both start_year and end_year are required.",
+                        "end_year": "Both start_year and end_year are required.",
+                    }
+                )
+
+            if len(str(start_year)) != 4 or len(str(end_year)) != 4:
+                raise serializers.ValidationError(
+                    "Year values must be 4 digits."
+                )
+
+            if end_year != start_year + 1:
+                raise serializers.ValidationError(
+                    "End year must be start_year + 1."
+                )
+
+            attrs["name"] = f"{start_year}-{str(end_year)[-2:]}"
+
+        name = attrs.get("name", getattr(self.instance, "name", None))
+
+        if school and name:
+            queryset = AcademicYear.objects.filter(school=school, name=name)
+            if self.instance:
+                queryset = queryset.exclude(pk=self.instance.pk)
+            if queryset.exists():
+                raise serializers.ValidationError(
+                    {"name": "This academic year already exists for this school."}
+                )
+
+        if school and start_month is not None and end_month is not None:
+            queryset = AcademicYear.objects.filter(
+                school=school,
+                start_month=start_month,
+                end_month=end_month,
+            )
+            if self.instance:
+                queryset = queryset.exclude(pk=self.instance.pk)
+            if queryset.exists():
+                raise serializers.ValidationError(
+                    {
+                        "start_month": "An academic year with the same start and end month already exists for this school.",
+                        "end_month": "An academic year with the same start and end month already exists for this school.",
+                    }
+                )
+
         return attrs
+
+    def create(self, validated_data):
+        validated_data.pop("start_year", None)
+        validated_data.pop("end_year", None)
+
+        return AcademicYear.objects.create(**validated_data)
+
+    def update(self, instance, validated_data):
+        validated_data.pop("start_year", None)
+        validated_data.pop("end_year", None)
+
+        return super().update(instance, validated_data)
 
 
 class FeeWiseClassSerializer(serializers.ModelSerializer):

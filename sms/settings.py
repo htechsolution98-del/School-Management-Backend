@@ -161,7 +161,7 @@ DATABASES = {
 
 # 🔥 FORCE SSL PROPERLY
 DATABASES['default']['OPTIONS'] = {
-    'sslmode': 'require',
+    'sslmode':'require',
     'connect_timeout': 10,
 }
 # Password validation

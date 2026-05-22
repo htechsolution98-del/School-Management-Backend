@@ -73,6 +73,7 @@ router.register(r'formstatus', FormStatus, basename='formstatus')
 
 
 # MANUAL PAST STUDENT ENTERTY
+
 router.register(r'manualstudent',ManualStudentView,basename='manualstudent')
 
 # ADMISSION FORM FILL FIELDS SFapi-01
@@ -82,6 +83,7 @@ router.register(r'documentsubmission', DocumentSubmissionView, basename='documen
 
 # TEMP USER GET ADMISSION DATA TUapi-01
 router.register(r'gettempuserdata', TempUserAdmissionViewSet, basename='gettempuserdata')
+
 router.register(r'tempusers', TempUserListViewSet, basename='tempusers')
 
 
@@ -228,6 +230,7 @@ urlpatterns = [
     path('api/schoollist/',SchoolListView.as_view()),
     
     # ITS FOR GET STIDENT FOR ATTENDANSE
+    
     path(
         "api/get/attendance/students/",
         AttendanceStudentAPIView.as_view(),

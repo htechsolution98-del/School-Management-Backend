@@ -199,6 +199,7 @@ class AcademicYear(models.Model):
     school = models.ForeignKey(School, on_delete=models.CASCADE)
     start_month = models.PositiveSmallIntegerField(null=True, blank=True)
     end_month = models.PositiveSmallIntegerField(null=True, blank=True)
+    is_active = models.BooleanField(default=False)
 
     def get_start_year(self):
         if self.name and len(self.name) >= 4 and self.name[:4].isdigit():
@@ -1975,7 +1976,6 @@ class Homework(models.Model):
 
 
 class HomeworkSubmission(models.Model):
-
     STATUS_CHOICES = [
         ("pending", "Pending"),
         ("submitted", "Submitted"),

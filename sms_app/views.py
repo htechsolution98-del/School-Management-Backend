@@ -286,6 +286,7 @@ class SendOTPView(APIView):
         OTP.objects.create(
             email=email if email else None, mobile=mobile if mobile else None, otp=otp
         )
+
         # if email:
         #     send_otp_email(
         #         email=email,
@@ -916,6 +917,66 @@ class TempUserListViewSet(ReadOnlyModelViewSet):
     queryset = TempUser.objects.select_related("user").all()
     serializer_class = TempUserListSerializer
     permission_classes = [IsAuthenticated]
+
+    @action(
+        detail=False,
+        methods=["post"],
+        permission_classes=[IsAuthenticated, Isprincipal],
+        url_path="deactivate-all",
+    )
+    
+    def deactivate_all(self, request):
+        User.objects.filter(groups__name="temp_user").update(is_active=False)
+        return Response(
+            {"message": "All temp users have been deactivated."},
+            status=status.HTTP_200_OK,
+        ) 
+
+    @action(
+        detail=True,
+        methods=["patch"],
+        permission_classes=[IsAuthenticated, Isprincipal],
+        url_path="activate",
+    )
+    def activate(self, request, pk=None):
+        temp_user = self.get_object()
+        is_active = request.data.get("is_active")
+
+        if is_active is None:
+            return Response(
+                {
+                    "message": "Send is_active=true or is_active=false in the request body."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if str(is_active).lower() in ["true", "1"]:
+            with transaction.atomic():
+                User.objects.filter(groups__name="temp_user").exclude(
+                    pk=temp_user.user.pk
+                ).update(is_active=False)
+                temp_user.user.is_active = True
+                temp_user.user.save()
+
+            return Response(
+                {
+                    "message": "Selected temp user activated and all others have been deactivated."
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        if str(is_active).lower() in ["false", "0"]:
+            temp_user.user.is_active = False
+            temp_user.user.save()
+            return Response(
+                {"message": "Selected temp user has been deactivated."},
+                status=status.HTTP_200_OK,
+            )
+
+        return Response(
+            {"message": "Invalid is_active value. Use true or false."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
 
 # ----------TO GET ADMISSION DATA TO TRUSTEE----------------
