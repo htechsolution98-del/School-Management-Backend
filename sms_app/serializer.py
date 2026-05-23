@@ -1352,8 +1352,6 @@ class TempUserAdmissionDataSerializer(serializers.ModelSerializer):
 # ============================================================
 
 
-class MobileCheckSerializer(serializers.Serializer):
-    mobile = serializers.CharField()
 
 
 # For viewing data
@@ -2213,25 +2211,23 @@ class Time_tableSerializer(serializers.ModelSerializer):
         return data
 
 
-class GetStudentSerializer(serializers.ModelSerializer):
+class GetStudentVerifySerializer(serializers.ModelSerializer):
     class Meta:
-        model = Student.objects.all()
-        fields = []
+        model = StudentVerify
+        fields = '__all__'
+  
 
-
-class StudentFieldValueReadSerializerForPrinciple(serializers.ModelSerializer):
-    field_label = serializers.CharField(source="field.label", read_only=True)
-
+class GetStudentExtraDataSerializer(serializers.ModelSerializer):
     class Meta:
-        model = StudentFieldValue
-        fields = ["id", "field", "field_label", "value"]
-
+        model = StudentExtraData
+        fields = '__all__'
+        
 
 class GetStudentSerializer(serializers.ModelSerializer):
-    field_values = StudentFieldValueReadSerializerForPrinciple(
-        many=True, read_only=True
-    )
-
+    studentverify = GetStudentVerifySerializer(read_only = True)
+    extradata = GetStudentExtraDataSerializer(read_only = True)
+    class_name = serializers.CharField(source = "school_class.school_class")
+    
     class Meta:
         model = Student
         fields = [
@@ -2239,45 +2235,17 @@ class GetStudentSerializer(serializers.ModelSerializer):
             "user",
             "mobile",
             "school",
-            "form",
-            "user",
             "mobile",
             "school_class",
             "division",
             "is_active",
             "created_at",
-            "details_done",
-            "principle_verified",
-            "fees_verified",
-            "clerk_verified",
-            "principle_verified_at",
-            "clerk_verified_at",
-            "fees_verified_at",
             "gr_no",
-            "field_values",
+            "studentverify",
+            "extradata"
         ]
 
-        read_only_fields = [
-            "id",
-            "field_values",
-            "school",
-            "form",
-            "user",
-            "mobile",
-            "school_class",
-            "division",
-            "is_active",
-            "created_at",
-            "details_done",
-            "principle_verified",
-            "fees_verified",
-            "clerk_verified",
-            "principle_verified_at",
-            "clerk_verified_at",
-            "fees_verified_at",
-            "gr_no",
-            "field_values",
-        ]
+        read_only_fields = fields
 
 
 class AttendanceLocationSerializer(serializers.ModelSerializer):

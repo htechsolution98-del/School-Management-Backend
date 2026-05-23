@@ -167,7 +167,7 @@ router.register(r'homework-submission', HomeworkSubmissionViewSet, basename='hom
 router.register(r'studentget', StudentGetView, basename='studentget')
 
 
-
+    
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('health/', health_check, name='health_check'),
@@ -195,17 +195,11 @@ urlpatterns = [
      path('api/admission/<uuid:unique_link>/',Admission_link.as_view()),#THIS API JUSR RETURN SCHOOL PERAMETER ###-----DONE
      
      path('api/admission/form/link/',ShareFormLink), #to get active form link for admission form fill up
-     path('api/checkmobile/',CheckMobileAPIView.as_view()),
      
      # To get remaining leave for staff when click on apply leave button for show remaining leave
      path('api/get-remaining-leaves/',GetRemainingLeaveView.as_view()),
      
-    # path('form_page/', TemplateView.as_vi ew(template_name = 'add_form.html')),
-    # path('fill_form/',TemplateView.as_view(template_name='form_fill.html')),
-    # # path('fillform/<int:id>/submit/',SubmitFormView.as_view()),
-    
-    # # for admisiion for link
-    # path('admission/',TemplateView.as_view(template_name='admisiom_form.html')),
+
     path('map/',TemplateView.as_view(template_name='map.html')),
     
     path('payment/',TemplateView.as_view(template_name='payment.html')),

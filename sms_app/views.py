@@ -950,18 +950,27 @@ class TempUserListViewSet(ReadOnlyModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        if str(is_active).lower() in ["true", "1"]:
-            with transaction.atomic():
-                User.objects.filter(groups__name="temp_user").exclude(
-                    pk=temp_user.user.pk
-                ).update(is_active=False)
-                temp_user.user.is_active = True
-                temp_user.user.save()
+        # if str(is_active).lower() in ["true", "1"]:
+        #     with transaction.atomic():
+        #         User.objects.filter(groups__name="temp_user").exclude(
+        #             pk=temp_user.user.pk
+        #         ).update(is_active=False)
+        #         temp_user.user.is_active = True
+        #         temp_user.user.save()
 
+        #     return Response(
+        #         {
+        #             "message": "Selected temp user activated and all others have been deactivated."
+        #         },
+        #         status=status.HTTP_200_OK,
+        #     )
+        
+        
+        if str(is_active).lower() in ["true", "1"]:
+            temp_user.user.is_active = True
+            temp_user.user.save()
             return Response(
-                {
-                    "message": "Selected temp user activated and all others have been deactivated."
-                },
+                {"message": "Selected temp user has been activated."},
                 status=status.HTTP_200_OK,
             )
 
@@ -1571,50 +1580,6 @@ class AdmissionDocumentViewSet(ModelViewSet):
 
 
 # ======================================================
-
-
-class CheckMobileAPIView(APIView):
-    def post(self, request):
-        serializer = MobileCheckSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-
-        mobile = serializer.validated_data["mobile"]
-
-        student = Student.objects.filter(mobile=mobile).first()
-
-        # CASE 1: Already used
-        if student and student.details_done:
-            return Response(
-                {"status": "used", "message": "This number is already used"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        #  CASE 2: Resume
-        if student and not student.details_done:
-            values = StudentFieldValue.objects.filter(student=student)
-
-            return Response(
-                {
-                    # "status": "resume",
-                    "id": student.id,
-                    "mobile": student.mobile,
-                    "school": student.school.id if student.school else None,
-                    "school_class": (
-                        student.school_class.id if student.school_class else None
-                    ),
-                    "field_values": [
-                        {"field": v.field.id, "value": v.value} for v in values
-                    ],
-                },
-                status=status.HTTP_200_OK,
-            )
-
-        # CASE 3: New number
-        return Response(
-            {"status": "new", "message": "Mobile number is available"},
-            status=status.HTTP_200_OK,
-        )
-
 
 import razorpay
 
