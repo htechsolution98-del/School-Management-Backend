@@ -1597,6 +1597,7 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
                         school=self.context["request"].user.school,
                     )
                     for fv in instance.field_values.all()
+                    if not fv.field.map_to_student_field
                 ]
             )
 

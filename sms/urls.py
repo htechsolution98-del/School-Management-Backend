@@ -130,11 +130,10 @@ router.register(
     basename="timetable"
 )
 
+router.register(r'get-student',GetStudentView,basename='get-student')
 
-
-router.register(r'get-student',GetStudentView,basename='get-student')# for 
-
-router.register(r'attendance', AttendanceView, basename='attendance')# For attendance tracking METHOD [GET,POST,PUT,DELETE]
+# FOR ATTENDANCE TRACKING METHOD [GET,POST,PUT,DELETE]
+router.register(r'attendance', AttendanceView, basename='attendance') 
 
 router.register(r'leave-template', LeaveTemplateView, basename='leave-template')# For leave template tracking METHOD [GET,POST,PUT,DELETE]
 router.register(r'leave-request', LeaveRequestView, basename='leave-request')# 
@@ -167,7 +166,7 @@ router.register(r'homework-submission', HomeworkSubmissionViewSet, basename='hom
 router.register(r'studentget', StudentGetView, basename='studentget')
 
 
-    
+
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('health/', health_check, name='health_check'),
