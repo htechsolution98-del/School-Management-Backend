@@ -2235,7 +2235,6 @@ class GetStudentSerializer(serializers.ModelSerializer):
             "user",
             "mobile",
             "school",
-            "mobile",
             "school_class",
             "division",
             "is_active",

@@ -972,7 +972,7 @@ class TempUserListViewSet(ReadOnlyModelViewSet):
             return Response(
                 {"message": "Selected temp user has been activated."},
                 status=status.HTTP_200_OK,
-            )
+            )   
 
         if str(is_active).lower() in ["false", "0"]:
             temp_user.user.is_active = False
@@ -2631,11 +2631,11 @@ def SetSlotView(request):
 class GetStudentView(ModelViewSet):
     queryset = Student.objects.all()
     serializer_class = GetStudentSerializer
-    # permission_classes = [IsAuthenticated, Isprincipal]
+    permission_classes = [IsAuthenticated, Isprincipal]
 
     def get_queryset(self):
-        # school = self.request.user.school or None
-        queryset = Student.objects.filter(details_done=True)
+        school = self.request.user.school
+        queryset = Student.objects.filter(school = school)
 
         school_class = self.request.query_params.get("school_class")
 
