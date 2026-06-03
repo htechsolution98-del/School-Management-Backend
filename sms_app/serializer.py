@@ -2495,6 +2495,7 @@ class AttendanceSerializer(serializers.ModelSerializer):
 
 
 class LeaveTemplateSerializer(serializers.ModelSerializer):
+
     class Meta:
         model = LeaveTemplate
         fields = "__all__"
@@ -2503,52 +2504,71 @@ class LeaveTemplateSerializer(serializers.ModelSerializer):
     def validate_leave_num(self, value):
         if value <= 0:
             raise serializers.ValidationError(
-                "Leave number must be a positive integer."
+                "Leave number must be greater than zero."
             )
         return value
 
     def validate_leave_type(self, value):
         if not value or not value.strip():
-            raise serializers.ValidationError("Leave type cannot be empty.")
+            raise serializers.ValidationError(
+                "Leave type cannot be empty."
+            )
         return value.strip()
 
     def validate(self, attrs):
         request = self.context.get("request")
+
         if not request or not hasattr(request, "user"):
-            raise serializers.ValidationError("Request user is required.")
+            raise serializers.ValidationError(
+                "Request user is required."
+            )
 
         school = getattr(request.user, "school", None)
-        if not school:
-            raise serializers.ValidationError("User school is not configured.")
 
+        if not school:
+            raise serializers.ValidationError(
+                "User school is not configured."
+            )
+
+        staff = attrs.get("staff")
         leave_type = attrs.get("leave_type")
         time_line = attrs.get("time_line")
 
-        # Check for duplicate leave templates for the same school
-        if LeaveTemplate.objects.filter(
-            school=school, leave_type=leave_type, time_line=time_line
-        ).exists():
+        qs = LeaveTemplate.objects.filter(
+            school=school,
+            staff=staff,
+            leave_type=leave_type,
+            time_line=time_line,
+        )
+
+        # Ignore current record during update
+        if self.instance:
+            qs = qs.exclude(pk=self.instance.pk)
+
+        if qs.exists():
             raise serializers.ValidationError(
-                "A leave template with this type and timeline already exists for this school."
+                "This leave template already exists for this staff."
             )
 
         return attrs
 
     def create(self, validated_data):
-        school = self.context.get("request").user.school
+        school = self.context["request"].user.school
 
-        staff_data = Staff.objects.filter(school=school.id)
+        leave_template = LeaveTemplate.objects.create(
+            # school=school,
+            **validated_data
+        )
 
-        leave_template = LeaveTemplate.objects.create(school=school, **validated_data)
-
-        for staff in staff_data:
-            StaffRemainingLeave.objects.create(
-                school=school,
-                leave_template=leave_template,
-                staff=staff,
-                total_levaes=validated_data.get("leave_num", 0),
-                remaining_leaves=validated_data.get("leave_num", 0),
-            )
+        StaffRemainingLeave.objects.create(
+            school=school,
+            staff=leave_template.staff,
+            leave_template=leave_template,
+            month=timezone.now().month,
+            year=timezone.now().year,
+            total_leaves=leave_template.leave_num,
+            remaining_leaves=leave_template.leave_num,
+        )
 
         return leave_template
 
@@ -2603,7 +2623,7 @@ class StaffRemainingLeaveSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = StaffRemainingLeave
-        fields = ["id", "staff", "leave_type", "total_levaes", "remaining_leaves"]
+        fields = ["id", "staff", "leave_type", "total_leaves", "month","year","remaining_leaves"]
         read_only_fields = ["id"]
 
 
@@ -2740,6 +2760,10 @@ class ChangeLeavePerDaySerializer(serializers.ModelSerializer):
         instance.save()
 
         return instance
+class BulkLeaveStatusSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(
+        choices=["APPROVED", "REJECTED"]
+    )
 
 
 # class

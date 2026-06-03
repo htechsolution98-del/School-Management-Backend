@@ -407,6 +407,7 @@ class LoginView(APIView):
                 "school_slug": response_data["school_slug"],
                 "roles": response_data["roles"],
                 "modules": response_data["modules"],
+                "access": access_token,
             },
             status=status.HTTP_200_OK,
         )
@@ -572,7 +573,7 @@ class HasModuleAccess(BasePermission):
 class FeatureView(ModelViewSet):
     queryset = Feature.objects.all()
     serializer_class = FeatureSerialzer
-    permission_classes = [IsAuthenticated, Is_super_admin]
+    # permission_classes = [IsAuthenticated, Is_super_admin]
 
     http_method_names = ["get", "post", "delete"]
 
@@ -618,7 +619,7 @@ from rest_framework import serializers
 class SchoolView(ModelViewSet):
     queryset = School.objects.all()
     serializer_class = SchoolSerializer
-    permission_classes = [IsAuthenticated, Is_super_admin]
+    # permission_classes = [IsAuthenticated, Is_super_admin]
 
     # ✅ Cache-safe queryset
     def get_queryset(self):
@@ -2735,14 +2736,18 @@ class TodayAttendanceStatusView(APIView):
 
 
 class LeaveTemplateView(ModelViewSet):
-    queryset = LeaveTemplate.objects.all()
+
     serializer_class = LeaveTemplateSerializer
-    # permission_classes = [IsAuthenticated]
 
-    def get_parsers(self):
+    def get_queryset(self):
+        return LeaveTemplate.objects.filter(
+            school=self.request.user.school
+        )
 
-        return super().get_parsers()
-
+    def perform_create(self, serializer):
+        serializer.save(
+            school=self.request.user.school
+        )
 
 class LeaveRequestView(ModelViewSet):
     queryset = LeaveRequest.objects.all()
@@ -2766,7 +2771,7 @@ class GetLeaveRequestView(ModelViewSet):
 class ChangeLeaveView(ModelViewSet):
     queryset = LeavePerDay.objects.all()
     serializer_class = ChangeLeavePerDaySerializer
-    permission_classes = [IsAuthenticated, Isprincipal]
+    # permission_classes = [IsAuthenticated, Isprincipal]
     http_method_names = ["patch"]
 
     def update(self, request, *args, **kwargs):
@@ -2779,6 +2784,98 @@ class ChangeLeaveView(ModelViewSet):
 
         return super().update(request, *args, **kwargs)
 
+from django.shortcuts import get_object_or_404
+from django.utils import timezone
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
+
+from django.utils import timezone
+
+class BulkLeaveStatusView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, pk):
+        leave_request = get_object_or_404(
+            LeaveRequest,
+            pk=pk,
+            school=request.user.school
+        )
+
+        serializer = BulkLeaveStatusSerializer(
+            data=request.data
+        )
+        serializer.is_valid(raise_exception=True)
+
+        status = serializer.validated_data["status"]
+
+        leave_days = LeavePerDay.objects.filter(
+            leave=leave_request
+        )
+
+        remaining_data = StaffRemainingLeave.objects.filter(
+            staff=leave_request.staff,
+            leave_template__leave_type=leave_request.leave_type,
+            month=leave_request.start_date.month,
+            year=leave_request.start_date.year
+        ).first()
+
+        if not remaining_data:
+            return Response(
+                {"error": "Leave balance not found"},
+                status=400
+            )
+
+        if status == "APPROVED":
+
+            pending_count = leave_days.filter(
+                status="PENDING"
+            ).count()
+
+            if pending_count == 0:
+                return Response(
+                    {"error": "No pending leave days found"},
+                    status=400
+                )
+
+            if remaining_data.remaining_leaves < pending_count:
+                return Response(
+                    {"error": "Insufficient leave balance"},
+                    status=400
+                )
+
+            remaining_data.remaining_leaves -= pending_count
+            remaining_data.save()
+
+            leave_days.update(
+                status="APPROVED",
+                approved_at=timezone.now()
+            )
+
+        elif status == "REJECTED":
+
+            approved_count = leave_days.filter(
+                status="APPROVED"
+            ).count()
+
+            if approved_count == 0:
+                return Response(
+                    {"error": "No approved leave days found"},
+                    status=400
+                )
+
+            remaining_data.remaining_leaves += approved_count
+            remaining_data.save()
+
+            leave_days.update(
+                status="REJECTED",
+                approved_at=None
+            )
+
+        return Response({
+            "message": f"All leave days {status.lower()} successfully"
+        })
 
 class GetRemainingLeaveView(APIView):
     permission_classes = [IsAuthenticated]

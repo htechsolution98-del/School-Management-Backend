@@ -173,7 +173,7 @@ urlpatterns = [
     path('api/',include(router.urls)),
     path('api/dashboard-count/', DashboardCountAPIView.as_view(), name='dashboard-count'),
     path('api/access/',CustomLoginView.as_view()),  
-        
+    
     path('api/refresh/',TokenRefreshView.as_view()),
     
     #FOR ATTENDANCE LOCATION
@@ -197,6 +197,7 @@ urlpatterns = [
      
      # To get remaining leave for staff when click on apply leave button for show remaining leave
      path('api/get-remaining-leaves/',GetRemainingLeaveView.as_view()),
+     path('api/bulkstatus/<int:pk>/',BulkLeaveStatusView.as_view()),
      
 
     path('map/',TemplateView.as_view(template_name='map.html')),

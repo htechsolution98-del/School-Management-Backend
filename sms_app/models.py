@@ -290,8 +290,9 @@ class Division(models.Model):
         School, on_delete=models.CASCADE, null=True, blank=True, db_index=True
     )
 
+    
     SchoolClass = models.ForeignKey(SchoolClass, on_delete=models.CASCADE)
-    division = models.CharField(null=True, blank=True)
+    division = models.CharField(null=True, blank=True,max_length=20)
     capacity = models.IntegerField(null=True, blank=True)
 
     def __str__(self):
@@ -1049,19 +1050,14 @@ class Attendance(models.Model):
 
 
 class LeaveTemplate(models.Model):
-    TIMELINE_CHOICES = [
-        ("MONTHLY", "Monthly"),
-        ("QUARTERLY", "Quarterly"),
-        ("SEMI_ANNUAL", "Semi-Annual"),
-        ("ANNUAL", "Annual"),
-    ]
 
     school = models.ForeignKey(
         School, on_delete=models.CASCADE, null=True, blank=True, db_index=True
     )
     time_line = models.CharField(
-        max_length=20, choices=TIMELINE_CHOICES, null=True, blank=True
+        max_length=20, null=True, blank=True
     )
+    staff=models.ForeignKey(Staff,on_delete=models.CASCADE,related_name='staff')
     leave_type = models.CharField(max_length=100, null=True, blank=True)
     leave_num = models.IntegerField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
@@ -1071,13 +1067,34 @@ class LeaveTemplate(models.Model):
 
     class Meta:
         db_table = "leave_template"
+      
+    unique_together = (
+        "school",
+        "staff",
+        "leave_type",
+        "time_line"
+    )
 
 
 class LeaveRequest(models.Model):
+
+    STATUS_CHOICES = [
+        ("PENDING", "Pending"),
+        ("APPROVED", "Approved"),
+        ("REJECTED", "Rejected"),
+         ("PARTIAL", "Partial"),
+    ]
+
+  
     school = models.ForeignKey(
         School, on_delete=models.CASCADE, null=True, blank=True, db_index=True
     )
     staff = models.ForeignKey(Staff, on_delete=models.CASCADE, null=True, blank=True)
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default="PENDING"
+    )
     leave_type = models.CharField(max_length=100, null=True, blank=True)
     start_date = models.DateField(null=True, blank=True)
     end_date = models.DateField(null=True, blank=True)
@@ -1124,7 +1141,7 @@ class LeavePerDay(models.Model):
     approved_at = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):
-        return f"{self.date} - {self.total_leaves} leaves"
+        return f"{self.date} - {self.status} leaves"
 
     class Meta:
         db_table = "leave_per_day"
@@ -1132,20 +1149,45 @@ class LeavePerDay(models.Model):
 
 class StaffRemainingLeave(models.Model):
     school = models.ForeignKey(
-        School, on_delete=models.CASCADE, null=True, blank=True, db_index=True
+        School,
+        on_delete=models.CASCADE,
+        db_index=True
     )
-    staff = models.ForeignKey(Staff, on_delete=models.CASCADE, null=True, blank=True)
-    leave_template = models.ForeignKey(
-        LeaveTemplate, on_delete=models.CASCADE, null=True, blank=True
-    )
-    total_levaes = models.IntegerField(null=True, blank=True)
-    remaining_leaves = models.IntegerField(null=True, blank=True)
 
-    def __str__(self):
-        return f"{self.staff} - {self.leave_template}"
+    staff = models.ForeignKey(
+        Staff,
+        on_delete=models.CASCADE
+    )
+
+    leave_template = models.ForeignKey(
+        LeaveTemplate,
+        on_delete=models.CASCADE
+    )
+
+    month = models.IntegerField()
+
+    year = models.IntegerField()
+
+    total_leaves = models.IntegerField(default=0)
+    carry_forward_leaves = models.IntegerField(default=0)
+    remaining_leaves = models.IntegerField(default=0)
 
     class Meta:
         db_table = "staff_remaining_leave"
+
+        unique_together = (
+            "staff",
+            "leave_template",
+            "month",
+            "year"
+        )
+
+    def __str__(self):
+        return (
+            f"{self.staff} - "
+            f"{self.leave_template.leave_type} - "
+            f"{self.month}/{self.year}"
+        )
 
 
 class Announcement(models.Model):
@@ -1491,6 +1533,7 @@ class SalaryComponent(models.Model):
 
     class Meta:
         db_table = "salary_component"
+
 
 
 class StaffSalaryComponent(models.Model):
