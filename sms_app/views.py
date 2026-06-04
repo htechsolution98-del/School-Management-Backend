@@ -337,6 +337,8 @@ from rest_framework_simplejwt.tokens import RefreshToken
 # from .serializers import LoginSerializer
 from .models import UserModuleAccess
 
+from sms_app.harsh_views import carry_forward_leave
+
 
 class LoginView(APIView):
 
@@ -349,6 +351,11 @@ class LoginView(APIView):
         serializer.is_valid(raise_exception=True)
 
         user = serializer.validated_data["user"]
+        
+        staff = Staff.objects.filter(user=user).first()
+
+        if staff:
+            carry_forward_leave(staff)
 
         # =====================================
         # Generate JWT Tokens
@@ -2735,115 +2742,7 @@ class TodayAttendanceStatusView(APIView):
         )
 
 
-class LeaveTypeView(ModelViewSet):
-    queryset = LeaveType.objects.all()
-    serializer_class = LeaveTypeSerializer
-    permission_classes = [IsAuthenticated, Is_admin_trustee]
 
-
-class LeaveTemplateView(ModelViewSet):
-    queryset = LeaveTemplate.objects.all()
-    serializer_class = LeaveTemplateSerializer
-    permission_classes = [IsAuthenticated]
-
-    def get_parsers(self):
-
-        return super().get_parsers()
-
-
-class LeaveRequestView(ModelViewSet):
-    queryset = LeaveRequest.objects.all()
-    serializer_class = LeaveRequestSerializer
-    permission_classes = [IsAuthenticated]
-    
-    
-
-
-
-class GetLeaveRequestView(ModelViewSet):
-    queryset = LeaveRequest.objects.all()
-    serializer_class = GetLeaveRequestSerializer
-    permission_classes = [IsAuthenticated]
-    http_method_names = ["get"]
-
-    def get_queryset(self):
-
-        queryset = LeaveRequest.objects.filter(school=self.request.user.school)
-
-        return queryset
-
-
-class ChangeLeaveView(ModelViewSet):
-    queryset = LeavePerDay.objects.all()
-    serializer_class = ChangeLeavePerDaySerializer
-    permission_classes = [IsAuthenticated, Isprincipal]
-    http_method_names = ["patch"]
-
-    def update(self, request, *args, **kwargs):
-        instance = self.get_object()
-
-        if instance.leave.school != request.user.school:
-            return Response(
-                {"error": "You are not allowed to modify this record"}, status=403
-            )
-
-        return super().update(request, *args, **kwargs)
-
-
-class GetRemainingLeaveView(APIView):
-    permission_classes = [IsAuthenticated]
-
-    def post(self, request):
-        leave_template = request.data.get("leave_template")
-        user = request.user
-
-        staff = Staff.objects.filter(user=user).first()
-        queryset = StaffRemainingLeave.objects.filter(
-            staff=staff, school=user.school, leave_template=leave_template
-        )
-
-        serializer = StaffRemainingLeaveSerializer(queryset, many=True)
-        return Response(serializer.data)
-
-
-
-class ChangeAllLeaveView(APIView):
-    permission_classes = [IsAuthenticated, Isprincipal]
-
-    def patch(self, request, pk):
-        
-        status_value = request.data.get("status")
-
-        leave_request = LeaveRequest.objects.filter(
-            id=pk,
-            school=request.user.school
-        ).first()
-
-        if not leave_request:
-            return Response(
-                {"error": "Leave request not found"},
-                status=404
-            )
-
-        leave_days = leave_request.leave_days.filter(
-            status="PENDING"
-        )
-
-        for leave_day in leave_days:
-
-            serializer = ChangeLeavePerDaySerializer(
-                leave_day,  
-                data={"status": status_value},
-                partial=True,
-                context={"request": request}
-            )
-
-            serializer.is_valid(raise_exception=True)
-            serializer.save()
-
-        return Response(
-            {"message": "All leave days approved"}
-        )
 
 
 class AnnouncementView(ModelViewSet):

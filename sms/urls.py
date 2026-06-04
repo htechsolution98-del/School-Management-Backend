@@ -30,6 +30,9 @@ from drf_yasg import openapi
 from django.conf import settings
 from django.conf.urls.static import static
 
+
+from sms_app.harsh_views import *
+
 schema_view = get_schema_view(
     openapi.Info(
         title="My API",
@@ -199,6 +202,8 @@ urlpatterns = [
      
      # To get remaining leave for staff when click on apply leave button for show remaining leave
      path('api/get-remaining-leaves/',GetRemainingLeaveView.as_view()),
+     
+    #  path('api/carry-forward/', LeaveCarryForward.as_view()),
      
      path("api/approve-all-leave/<int:pk>/",ChangeAllLeaveView.as_view()),
      

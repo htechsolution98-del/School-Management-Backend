@@ -1169,9 +1169,9 @@ class StaffRemainingLeave(models.Model):
     total_levaes = models.IntegerField(null=True, blank=True)
     remaining_leaves = models.IntegerField(null=True, blank=True)
     
-    # month = models.IntegerField(null=True)
+    month = models.IntegerField(default=timezone.now().month)
     
-    # year = models.IntegerField(null=True)
+    year = models.IntegerField(default=timezone.now().year)
 
     def __str__(self):
         return f"{self.staff} - {self.leave_template}"
