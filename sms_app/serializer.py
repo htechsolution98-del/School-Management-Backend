@@ -2492,13 +2492,22 @@ class AttendanceSerializer(serializers.ModelSerializer):
                 return attendance
 
             return attendance
+        
+class LeaveTypeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = LeaveType
+        fields = '__all__'
 
 
 class LeaveTemplateSerializer(serializers.ModelSerializer):
+    leave_type_name = serializers.CharField(
+        source="leave_type.name", read_only=True
+    )
+
     class Meta:
         model = LeaveTemplate
-        fields = "__all__"
-        read_only_fields = ["school"]
+        fields = ["id","leave_num","created_at","time_line", "school", "staff", "leave_type", "leave_type_name"]
+        read_only_fields = ["school","time_line"]
 
     def validate_leave_num(self, value):
         if value <= 0:
@@ -2507,10 +2516,10 @@ class LeaveTemplateSerializer(serializers.ModelSerializer):
             )
         return value
 
-    def validate_leave_type(self, value):
-        if not value or not value.strip():
-            raise serializers.ValidationError("Leave type cannot be empty.")
-        return value.strip()
+    # def validate_leave_type(self, value):
+    #     if not value or not value.strip():
+    #         raise serializers.ValidationError("Leave type cannot be empty.")
+    #     return value.strip()
 
     def validate(self, attrs):
         request = self.context.get("request")
@@ -2523,10 +2532,11 @@ class LeaveTemplateSerializer(serializers.ModelSerializer):
 
         leave_type = attrs.get("leave_type")
         time_line = attrs.get("time_line")
+        staff = attrs.get("staff")
 
         # Check for duplicate leave templates for the same school
         if LeaveTemplate.objects.filter(
-            school=school, leave_type=leave_type, time_line=time_line
+            school=school, leave_type=leave_type, staff=staff
         ).exists():
             raise serializers.ValidationError(
                 "A leave template with this type and timeline already exists for this school."
@@ -2537,18 +2547,19 @@ class LeaveTemplateSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         school = self.context.get("request").user.school
 
-        staff_data = Staff.objects.filter(school=school.id)
+        # staff_data = Staff.objects.filter(school=school.id)
+        staff = validated_data["staff"]
 
         leave_template = LeaveTemplate.objects.create(school=school, **validated_data)
 
-        for staff in staff_data:
-            StaffRemainingLeave.objects.create(
-                school=school,
-                leave_template=leave_template,
-                staff=staff,
-                total_levaes=validated_data.get("leave_num", 0),
-                remaining_leaves=validated_data.get("leave_num", 0),
-            )
+        # for staff in staff_data:
+        StaffRemainingLeave.objects.create(
+            school=school,
+            leave_template=leave_template,
+            staff=staff,
+            total_levaes=validated_data.get("leave_num", 0),
+            remaining_leaves=validated_data.get("leave_num", 0),
+        )
 
         return leave_template
 
@@ -2558,9 +2569,12 @@ from datetime import timedelta
 
 
 class LeaveRequestSerializer(serializers.ModelSerializer):
+    leave_type_name = serializers.CharField(
+        source="leave_type.name", read_only=True
+    )
     class Meta:
         model = LeaveRequest
-        fields = "__all__"
+        fields = ["id","start_date","end_date", "total_days","reason", "created_at", "updated_at","school", "staff","leave_type","leave_type_name",]
         read_only_fields = ["school", "staff", "total_days", "approved_by"]
 
     def create(self, validated_data):
@@ -2600,10 +2614,10 @@ class StaffRemainingLeaveSerializer(serializers.ModelSerializer):
     leave_type = serializers.CharField(
         source="leave_template.leave_type", read_only=True
     )
-
+    staff_name = serializers.CharField(source="staff.name", read_only=True)
     class Meta:
         model = StaffRemainingLeave
-        fields = ["id", "staff", "leave_type", "total_levaes", "remaining_leaves"]
+        fields = ["id", "staff", "staff_name", "leave_type", "total_levaes", "remaining_leaves"]
         read_only_fields = ["id"]
 
 
@@ -2617,13 +2631,20 @@ class GetLeavePerDaySerializer(serializers.ModelSerializer):
 class GetLeaveRequestSerializer(serializers.ModelSerializer):
     leave_days = GetLeavePerDaySerializer(many=True, read_only=True)
     remaining_leaves = serializers.SerializerMethodField()
+    leave_type_name = serializers.CharField(
+        source="leave_type.name", read_only=True
+    )
+    
+    staff_name = serializers.CharField(source="staff.name", read_only=True)
 
     class Meta:
         model = LeaveRequest
         fields = [
             "id",
             "staff",
+            "staff_name",
             "leave_type",
+            "leave_type_name",
             "reason",
             "total_days",
             "start_date",
@@ -2740,6 +2761,9 @@ class ChangeLeavePerDaySerializer(serializers.ModelSerializer):
         instance.save()
 
         return instance
+    
+    
+
 
 
 # class

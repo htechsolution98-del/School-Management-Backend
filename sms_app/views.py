@@ -407,6 +407,7 @@ class LoginView(APIView):
                 "school_slug": response_data["school_slug"],
                 "roles": response_data["roles"],
                 "modules": response_data["modules"],
+                "access":response_data['access']
             },
             status=status.HTTP_200_OK,
         )
@@ -2734,10 +2735,16 @@ class TodayAttendanceStatusView(APIView):
         )
 
 
+class LeaveTypeView(ModelViewSet):
+    queryset = LeaveType.objects.all()
+    serializer_class = LeaveTypeSerializer
+    permission_classes = [IsAuthenticated, Is_admin_trustee]
+
+
 class LeaveTemplateView(ModelViewSet):
     queryset = LeaveTemplate.objects.all()
     serializer_class = LeaveTemplateSerializer
-    # permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated]
 
     def get_parsers(self):
 
@@ -2748,6 +2755,9 @@ class LeaveRequestView(ModelViewSet):
     queryset = LeaveRequest.objects.all()
     serializer_class = LeaveRequestSerializer
     permission_classes = [IsAuthenticated]
+    
+    
+
 
 
 class GetLeaveRequestView(ModelViewSet):
@@ -2794,6 +2804,46 @@ class GetRemainingLeaveView(APIView):
 
         serializer = StaffRemainingLeaveSerializer(queryset, many=True)
         return Response(serializer.data)
+
+
+
+class ChangeAllLeaveView(APIView):
+    permission_classes = [IsAuthenticated, Isprincipal]
+
+    def patch(self, request, pk):
+        
+        status_value = request.data.get("status")
+
+        leave_request = LeaveRequest.objects.filter(
+            id=pk,
+            school=request.user.school
+        ).first()
+
+        if not leave_request:
+            return Response(
+                {"error": "Leave request not found"},
+                status=404
+            )
+
+        leave_days = leave_request.leave_days.filter(
+            status="PENDING"
+        )
+
+        for leave_day in leave_days:
+
+            serializer = ChangeLeavePerDaySerializer(
+                leave_day,  
+                data={"status": status_value},
+                partial=True,
+                context={"request": request}
+            )
+
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+
+        return Response(
+            {"message": "All leave days approved"}
+        )
 
 
 class AnnouncementView(ModelViewSet):

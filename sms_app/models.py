@@ -54,6 +54,9 @@ class School(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
     updated_at = models.DateTimeField(auto_now=True, null=True, blank=True)
 
+    def __str__(self):
+        return self.name
+
     class Meta:
         db_table = "school"
 
@@ -291,7 +294,7 @@ class Division(models.Model):
     )
 
     SchoolClass = models.ForeignKey(SchoolClass, on_delete=models.CASCADE)
-    division = models.CharField(null=True, blank=True)
+    division = models.CharField(null=True, blank=True, max_length=20)
     capacity = models.IntegerField(null=True, blank=True)
 
     def __str__(self):
@@ -1046,31 +1049,54 @@ class Attendance(models.Model):
 
     def __str__(self):
         return f"{self.name} - {self.attendance_date}"
+    
+    
+
+class LeaveType(models.Model):
+    name = models.CharField(max_length=100, null=True, blank=True)
+    school = models.ForeignKey(School, on_delete=models.CASCADE)
+    
+    def __str__(self):
+        return self.name
+    
+    class Meta:
+        db_table = "leave_type"
 
 
 class LeaveTemplate(models.Model):
-    TIMELINE_CHOICES = [
-        ("MONTHLY", "Monthly"),
-        ("QUARTERLY", "Quarterly"),
-        ("SEMI_ANNUAL", "Semi-Annual"),
-        ("ANNUAL", "Annual"),
-    ]
+    # TIMELINE_CHOICES = [
+    #     ("MONTHLY", "Monthly"),
+    #     ("QUARTERLY", "Quarterly"),
+    #     ("SEMI_ANNUAL", "Semi-Annual"),
+    #     ("ANNUAL", "Annual"),
+    # ]
 
     school = models.ForeignKey(
         School, on_delete=models.CASCADE, null=True, blank=True, db_index=True
     )
-    time_line = models.CharField(
-        max_length=20, choices=TIMELINE_CHOICES, null=True, blank=True
+    staff = models.ForeignKey(
+        Staff, on_delete=models.CASCADE, null=True, blank=True, db_index=True
     )
-    leave_type = models.CharField(max_length=100, null=True, blank=True)
+    # time_line = models.CharField(
+    #     max_length=20, choices=TIMELINE_CHOICES, null=True, blank=True
+    # )
+    leave_type = models.ForeignKey(LeaveType, on_delete=models.CASCADE, null=True)
     leave_num = models.IntegerField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
+    time_line = models.CharField(max_length=20,default="MONTHLY")
 
     def __str__(self):
-        return f"{self.leave_type} - {self.time_line}"
+        return f"{self.staff.name} - {self.leave_type}"
 
     class Meta:
         db_table = "leave_template"
+        
+        constraints = [
+            models.UniqueConstraint(
+                fields=["school", "staff", "leave_type"],
+                name="unique_staff_leave_type"
+            )
+        ]
 
 
 class LeaveRequest(models.Model):
@@ -1078,7 +1104,8 @@ class LeaveRequest(models.Model):
         School, on_delete=models.CASCADE, null=True, blank=True, db_index=True
     )
     staff = models.ForeignKey(Staff, on_delete=models.CASCADE, null=True, blank=True)
-    leave_type = models.CharField(max_length=100, null=True, blank=True)
+    # leave_type = models.CharField(max_length=100, null=True, blank=True)
+    leave_type = models.ForeignKey(LeaveType, on_delete=models.CASCADE, null=True)
     start_date = models.DateField(null=True, blank=True)
     end_date = models.DateField(null=True, blank=True)
 
@@ -1091,7 +1118,8 @@ class LeaveRequest(models.Model):
     )  # at a time no nedd this
 
     def __str__(self):
-        return f"{self.staff.name} - {self.leave_type} - {self.status}"
+        # return f"{self.staff.name} - {self.leave_type} - {self.status}"
+        return f"{self.staff.name} - {self.leave_type} - {self.total_days} "
 
     class Meta:
         db_table = "leave_request"
@@ -1124,7 +1152,7 @@ class LeavePerDay(models.Model):
     approved_at = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):
-        return f"{self.date} - {self.total_leaves} leaves"
+        return f"{self.date} - {self.leave.total_days} leaves"
 
     class Meta:
         db_table = "leave_per_day"
@@ -1140,12 +1168,27 @@ class StaffRemainingLeave(models.Model):
     )
     total_levaes = models.IntegerField(null=True, blank=True)
     remaining_leaves = models.IntegerField(null=True, blank=True)
+    
+    # month = models.IntegerField(null=True)
+    
+    # year = models.IntegerField(null=True)
 
     def __str__(self):
         return f"{self.staff} - {self.leave_template}"
+    
+    # def apply_carry_forward(self):
+    #     self.remaining_leaves += self.leave_template.leave_num
+    #     self.save()
 
     class Meta:
         db_table = "staff_remaining_leave"
+        
+        # constraints = [
+        #     models.UniqueConstraint(
+        #         fields=["staff", "leave_template", "month", "year"],
+        #         name="unique_staff_leave_month_year"
+        #     )
+        # ]
 
 
 class Announcement(models.Model):
