@@ -336,7 +336,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 # from .serializers import LoginSerializer
 from .models import UserModuleAccess
-
+from datetime import date
 
 class LoginView(APIView):
 
@@ -349,7 +349,9 @@ class LoginView(APIView):
         serializer.is_valid(raise_exception=True)
 
         user = serializer.validated_data["user"]
-
+        
+        generate_carry_forward_leaves()
+      
         # =====================================
         # Generate JWT Tokens
         # =====================================
@@ -2784,6 +2786,70 @@ class ChangeLeaveView(ModelViewSet):
 
         return super().update(request, *args, **kwargs)
 
+from sms_app.models import StaffRemainingLeave
+
+
+def generate_carry_forward_leaves():
+
+    today = datetime.today()
+
+    # next month logic
+    if today.month == 12:
+        next_month = 1
+        next_year = today.year + 1
+    else:
+        next_month = today.month + 1
+        next_year = today.year
+
+    staff_list = Staff.objects.all()
+
+    for staff in staff_list:
+
+        templates = LeaveTemplate.objects.filter(staff=staff)
+
+        for template in templates:
+
+            existing = StaffRemainingLeave.objects.filter(
+                staff=staff,
+                leave_template=template,
+                month=next_month,
+                year=next_year
+            ).first()
+
+            if existing:
+                continue
+
+            # previous month logic
+            if next_month == 1:
+                prev_month = 12
+                prev_year = next_year - 1
+            else:
+                prev_month = next_month - 1
+                prev_year = next_year
+
+            previous_record = StaffRemainingLeave.objects.filter(
+                staff=staff,
+                leave_template=template,
+                month=prev_month,
+                year=prev_year
+            ).first()
+
+            carry_forward = previous_record.remaining_leaves if previous_record else 0
+
+            StaffRemainingLeave.objects.create(
+                school=template.school,
+                staff=staff,
+                leave_template=template,
+                month=next_month,
+                year=next_year,
+                total_leaves=template.leave_num,
+                carry_forward_leaves=carry_forward,
+                remaining_leaves=template.leave_num + carry_forward
+            )
+
+
+
+
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework.permissions import IsAuthenticated
@@ -2791,82 +2857,94 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 
-from django.utils import timezone
-
 class BulkLeaveStatusView(APIView):
     permission_classes = [IsAuthenticated]
 
     def patch(self, request, pk):
+
         leave_request = get_object_or_404(
             LeaveRequest,
             pk=pk,
             school=request.user.school
         )
 
-        serializer = BulkLeaveStatusSerializer(
-            data=request.data
-        )
+        serializer = BulkLeaveStatusSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        status = serializer.validated_data["status"]
+        new_status = serializer.validated_data["status"]
 
         leave_days = LeavePerDay.objects.filter(
             leave=leave_request
         )
 
-        remaining_data = StaffRemainingLeave.objects.filter(
-            staff=leave_request.staff,
-            leave_template__leave_type=leave_request.leave_type,
-            month=leave_request.start_date.month,
-            year=leave_request.start_date.year
+        staff = leave_request.staff
+        leave_type = leave_request.leave_type
+
+        leave_template = LeaveTemplate.objects.filter(
+            leave_type=leave_type,
+            school=request.user.school
         ).first()
 
-        if not remaining_data:
+        if not leave_template:
             return Response(
-                {"error": "Leave balance not found"},
+                {"error": f"No leave template found for {leave_type}"},
                 status=400
             )
 
-        if status == "APPROVED":
+        # -----------------------------
+        # APPROVE FLOW
+        # -----------------------------
+        if new_status == "APPROVED":
 
             pending_count = leave_days.filter(
                 status="PENDING"
             ).count()
 
-            if pending_count == 0:
+            # update leave balance directly from DB
+            leave_balance = StaffRemainingLeave.objects.filter(
+                staff=staff,
+                leave_template=leave_template
+            ).first()
+
+            if not leave_balance:
                 return Response(
-                    {"error": "No pending leave days found"},
+                    {"error": "Leave balance not initialized"},
                     status=400
                 )
 
-            if remaining_data.remaining_leaves < pending_count:
+            if leave_balance.remaining_leaves < pending_count:
                 return Response(
-                    {"error": "Insufficient leave balance"},
+                    {
+                        "error": f"Insufficient leaves. Remaining: {leave_balance.remaining_leaves}"
+                    },
                     status=400
                 )
 
-            remaining_data.remaining_leaves -= pending_count
-            remaining_data.save()
+            leave_balance.remaining_leaves -= pending_count
+            leave_balance.save()
 
             leave_days.update(
                 status="APPROVED",
                 approved_at=timezone.now()
             )
 
-        elif status == "REJECTED":
+        # -----------------------------
+        # REJECT FLOW
+        # -----------------------------
+        elif new_status == "REJECTED":
 
             approved_count = leave_days.filter(
                 status="APPROVED"
             ).count()
 
-            if approved_count == 0:
-                return Response(
-                    {"error": "No approved leave days found"},
-                    status=400
-                )
+            leave_balance = StaffRemainingLeave.objects.filter(
+                staff=staff,
+                leave_template=leave_template
+            ).first()
 
-            remaining_data.remaining_leaves += approved_count
-            remaining_data.save()
+            if leave_balance:
+                leave_balance.remaining_leaves += approved_count
+                leave_balance.save()
 
             leave_days.update(
                 status="REJECTED",
@@ -2874,7 +2952,7 @@ class BulkLeaveStatusView(APIView):
             )
 
         return Response({
-            "message": f"All leave days {status.lower()} successfully"
+            "message": f"All leave days {new_status.lower()} successfully"
         })
 
 class GetRemainingLeaveView(APIView):
@@ -2892,6 +2970,21 @@ class GetRemainingLeaveView(APIView):
         serializer = StaffRemainingLeaveSerializer(queryset, many=True)
         return Response(serializer.data)
 
+class GetRemainingLeavePerStaffView(APIView):
+    permission_classes=[IsAuthenticated]
+    def get(self,request):
+        leave=LeaveRequest.objects.filter(staff=request.user.staff,school=request.user.school).order_by("-created_at")
+        
+        # leave_template=LeaveTemplate.objects.filter(staff=request.user.staff,school=request.user.school)
+        # print(leave_template)
+        remaining_leaves=StaffRemainingLeave.objects.filter(staff=request.user.staff,school=request.user.school).order_by("year","month")
+        
+        leave_request=LeaveRequestSerializer(leave,many=True)
+        remaining_leaves_left=StaffRemainingLeaveSerializer(remaining_leaves,many=True)
+        return Response({
+            "Leave_request":leave_request.data,
+            "reamining_leaves":remaining_leaves_left.data
+        })
 
 class AnnouncementView(ModelViewSet):
     queryset = Announcement.objects.all()
@@ -4394,3 +4487,141 @@ class StudentGetView(ModelViewSet):
 
     def get_queryset(self):
         return Student.objects.filter(school=self.request.user.school)
+
+class StaffFaceEnrollView(APIView):
+    permission_classes=[IsAuthenticated]
+    def post(self,request):
+        staff=Staff.objects.get(user=request.user)
+        if not staff:
+            return Response(
+                {"Error":"Staff is not found"},
+                status=404)
+        serializer = StaffFaceSerializer(
+    data=request.data,
+    context={
+        "request": request,
+        "staff": staff,
+    }
+)
+        if serializer.is_valid():
+            face_obj=serializer.save()
+        
+            return Response({
+                "message":"Face enroll sucessfully.",
+                "staff":staff.id,
+                "face_id":face_obj.id
+            })
+
+        return Response(serializer.errors, status=400)
+    
+import requests
+import io
+
+from PIL import Image
+
+from django.conf import settings
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
+from rest_framework import status
+
+
+# -------------------------
+# Image Optimization Helper
+# -------------------------
+def optimize_image(uploaded_file, size=(800, 800), quality=60):
+    """
+    Resize + compress image to avoid Face++ 413 error
+    """
+
+    image = Image.open(uploaded_file)
+    image = image.convert("RGB")
+    image.thumbnail(size)
+
+    buffer = io.BytesIO()
+    image.save(buffer, format="JPEG", quality=quality)
+
+    buffer.seek(0)
+    return buffer
+
+
+# -------------------------
+# VIEW
+# -------------------------
+class StaffFaceVerifyView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+
+        serializer = StaffFaceVerifySerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        uploaded_image = serializer.validated_data["image"]
+
+        # get staff
+        try:
+            staff = Staff.objects.get(user=request.user)
+
+            staff_face = StaffFace.objects.get(
+                staff=staff,
+                is_enrolled=True
+            )
+
+        except StaffFace.DoesNotExist:
+            return Response(
+                {"error": "Face not enrolled."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        enrolled_image = staff_face.face_image
+
+        # -------------------------
+        # OPTIMIZE BOTH IMAGES
+        # -------------------------
+        enrolled_image.open("rb")
+
+        optimized_enrolled = optimize_image(enrolled_image)
+        optimized_uploaded = optimize_image(uploaded_image)
+
+        # -------------------------
+        # FACE++ REQUEST
+        # -------------------------
+        try:
+            response = requests.post(
+                "https://api-us.faceplusplus.com/facepp/v3/compare",
+                data={
+                    "api_key": settings.FACEPP_API_KEY,
+                    "api_secret": settings.FACEPP_API_SECRET,
+                },
+                files={
+                    "image_file1": ("enrolled.jpg", optimized_enrolled, "image/jpeg"),
+                    "image_file2": ("live.jpg", optimized_uploaded, "image/jpeg"),
+                },
+                timeout=30
+            )
+
+        except requests.exceptions.RequestException as e:
+            return Response(
+                {"error": f"Face++ request failed: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+        # -------------------------
+        # RESPONSE HANDLING
+        # -------------------------
+        result = response.json()
+
+        if response.status_code != 200:
+            return Response(
+                {"error": result},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        confidence = result.get("confidence", 0)
+        verified = confidence >= 80
+
+        return Response({
+            "verified": verified,
+            "confidence": confidence,
+            "raw_response": result
+        })

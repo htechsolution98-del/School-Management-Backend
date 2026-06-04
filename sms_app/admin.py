@@ -7,4 +7,6 @@ admin.site.register(StaffRemainingLeave)
 admin.site.register(Staff)
 admin.site.register(School)
 admin.site.register(CustomUser)
+admin.site.register(Attendance)
+admin.site.register(StaffFace)
 # Register your models here.

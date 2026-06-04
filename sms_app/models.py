@@ -1025,7 +1025,6 @@ class Attendance(models.Model):
     date_time = models.DateTimeField(null=True, blank=True)
     is_present = models.BooleanField(default=False)
     is_half_day = models.BooleanField(default=False)
-
     check_in = models.DateTimeField(null=True, blank=True)
     check_out = models.DateTimeField(null=True, blank=True)
 
@@ -1527,7 +1526,7 @@ class SalaryComponent(models.Model):
     )
 
     name = models.CharField(max_length=255)  # DA, HRA, PF
-    component_type = models.CharField(max_length=20, choices=COMPONENT_TYPE)
+    component_type = models.CharField(max_length=20, choices=COMPONENT_TYPE) # Deduction,Earning
     is_active = models.BooleanField(default=True)
     school = models.ForeignKey(School, on_delete=models.CASCADE)
 
@@ -2085,3 +2084,15 @@ class HomeworkSubmission(models.Model):
 # except Exception:
 #     # import-time may fail in some management commands; ignore silently
 #     pass
+
+
+class StaffFace(models.Model):
+    staff=models.OneToOneField(Staff,on_delete=models.CASCADE,related_name="face")
+    face_image=models.ImageField(upload_to="staff-faces/")
+    is_enrolled = models.BooleanField(default=False)
+    created_at=models.DateTimeField(auto_now_add=True)
+    updated_at=models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Face - {self.staff.name}"
+    

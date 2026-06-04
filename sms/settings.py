@@ -225,3 +225,7 @@ EMAIL_HOST_USER = 'yash.error.1@gmail.com'
 EMAIL_HOST_PASSWORD = 'zjsartihpvaqfvpi'
 
 DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
+
+FACEPP_API_KEY='bjE_bVqsDDgX6ekpuqdDjwZnnydn27zG'
+
+FACEPP_API_SECRET='waQF9vWlZyH-HQtqKJezJlX7vAAjNYY4'

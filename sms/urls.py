@@ -198,6 +198,7 @@ urlpatterns = [
      # To get remaining leave for staff when click on apply leave button for show remaining leave
      path('api/get-remaining-leaves/',GetRemainingLeaveView.as_view()),
      path('api/bulkstatus/<int:pk>/',BulkLeaveStatusView.as_view()),
+
      
 
     path('map/',TemplateView.as_view(template_name='map.html')),
@@ -222,7 +223,9 @@ urlpatterns = [
     path('api/get_receipt/<int:student_id>/<int:form_id>/',get_receipt),
     
     path('api/schoollist/',SchoolListView.as_view()),
-    
+    path('face-enroll/',StaffFaceEnrollView.as_view()),
+    path('face-verify/',StaffFaceVerifyView.as_view()),
+    path('perstaff-leave/',GetRemainingLeavePerStaffView.as_view()),
     # ITS FOR GET STIDENT FOR ATTENDANSE
     
     path(

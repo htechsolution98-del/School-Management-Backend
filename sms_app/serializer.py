@@ -25,7 +25,8 @@ from django.contrib.auth.models import Group
 from rest_framework import serializers
 from django.db.models import Q, Sum
 from django.contrib.auth import get_user_model
-
+import cv2
+import numpy as np
 User = get_user_model()
 
 
@@ -4810,3 +4811,69 @@ class StudentGetSerializer(serializers.ModelSerializer):
     class Meta:
         model = Student
         fields = ["id","surname", "name", "father_name", "mother_name", "school_class","class_name"]
+
+class StaffFaceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model=StaffFace
+        fields=["id","face_image","is_enrolled"]
+        read_only_fields=["is_enrolled"]
+      
+    def validate_face_image(self, image):
+        image_bytes = np.asarray(bytearray(image.read()), dtype=np.uint8)
+
+        img = cv2.imdecode(image_bytes, cv2.IMREAD_COLOR)
+
+        if img is None:
+            raise serializers.ValidationError(
+                "Invalid image file."
+            )
+
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+        face_cascade = cv2.CascadeClassifier(
+            cv2.data.haarcascades +
+            "haarcascade_frontalface_default.xml"
+        )
+
+        faces = face_cascade.detectMultiScale(
+            gray,
+            scaleFactor=1.1,
+            minNeighbors=5
+        )
+
+        if len(faces) == 0:
+            raise serializers.ValidationError(
+                "No face detected."
+            )
+
+        if len(faces) > 1:
+            raise serializers.ValidationError(
+                "Multiple faces detected."
+            )
+
+        image.seek(0)
+
+        return image
+    
+    def create(self, validated_data):
+            request = self.context["request"]
+            staff = Staff.objects.get(user=request.user)
+
+            face, created = StaffFace.objects.get_or_create(
+                staff=staff,
+                defaults=validated_data
+            )
+
+            if not created:
+                face.face_image = validated_data["face_image"]
+                
+            face.is_enrolled = True 
+            face.save()
+
+            return face
+    
+class StaffFaceVerifySerializer(serializers.Serializer):
+    image=serializers.ImageField()
+    
+
+
