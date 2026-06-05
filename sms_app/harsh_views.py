@@ -8,6 +8,9 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import BasePermission
 from .harsh_serializer import *
+from rest_framework.generics import GenericAPIView, ListCreateAPIView
+from rest_framework import status
+from rest_framework.exceptions import ValidationError
 
 
 
@@ -43,13 +46,55 @@ def carry_forward_leave(staff): # when login staff check month and year and carr
             leave.save()
 
 
-class LeaveTypeView(ModelViewSet): #for creating leave type - casual leave, sick leave
-    queryset = LeaveType.objects.all()
+# class LeaveTypeView(ModelViewSet): #for creating leave type - casual leave, sick leave
+#     queryset = LeaveType.objects.all()
+#     serializer_class = LeaveTypeSerializer
+#     permission_classes = [IsAuthenticated, IsCLerk]
+
+
+
+class LeaveTypeView(ModelViewSet): #for create, read, update, delete  leave type - casual leave, sick leave
     serializer_class = LeaveTypeSerializer
     permission_classes = [IsAuthenticated, IsCLerk]
 
+    def get_queryset(self):
+        staff = Staff.objects.filter(
+            user=self.request.user,
+            category="CLERK"
+        ).first()
 
-class LeaveTemplateView(ModelViewSet): #for giving perticular staff hoe many days of leave given
+        if not staff:
+            return LeaveType.objects.none()
+
+        return LeaveType.objects.filter(
+            school=staff.school
+        )
+
+    def perform_create(self, serializer):
+        staff = Staff.objects.filter(
+            user=self.request.user,
+            category="CLERK"
+        ).first()
+
+        if not staff:
+            raise ValidationError("Clerk profile not found.")
+
+        name = serializer.validated_data.get("name")
+
+        if LeaveType.objects.filter(
+            school=staff.school,
+            name__iexact=name
+        ).exists():
+            raise ValidationError(
+                {"name": "This leave type already exists."}
+            )
+
+        serializer.save(school=staff.school)
+
+
+
+
+class LeaveTemplateView(ModelViewSet): #for giving perticular staff how many days of leave given
     queryset = LeaveTemplate.objects.all()
     serializer_class = LeaveTemplateSerializer
     permission_classes = [IsAuthenticated, IsCLerk]

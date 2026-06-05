@@ -1054,7 +1054,7 @@ class Attendance(models.Model):
 
 class LeaveType(models.Model):
     name = models.CharField(max_length=100, null=True, blank=True)
-    school = models.ForeignKey(School, on_delete=models.CASCADE)
+    school = models.ForeignKey(School, on_delete=models.CASCADE, null=True)
     
     def __str__(self):
         return self.name

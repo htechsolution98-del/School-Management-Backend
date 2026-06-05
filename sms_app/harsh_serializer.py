@@ -5,6 +5,12 @@ class LeaveTypeSerializer(serializers.ModelSerializer):
     class Meta:
         model = LeaveType
         fields = '__all__'
+        read_only_fields = ['school']
+        
+        
+# class LeaveTypeGenericSerializer(serializers.Serializer):
+#     name = serializers.CharField()
+#     school = serializers.CharField()
 
 
 class LeaveTemplateSerializer(serializers.ModelSerializer):
@@ -118,6 +124,7 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
         return leave_request
 
 
+
 class StaffRemainingLeaveSerializer(serializers.ModelSerializer):
     leave_type = serializers.CharField(
         source="leave_template.leave_type", read_only=True
@@ -131,12 +138,12 @@ class StaffRemainingLeaveSerializer(serializers.ModelSerializer):
 
 
 
-
 class GetLeavePerDaySerializer(serializers.ModelSerializer):
     class Meta:
         model = LeavePerDay
         fields = ["id", "date", "school", "leave", "status", "approved_at"]
         read_only_fields = ["id", "date", "school", "leave"]
+
 
 
 class GetLeaveRequestSerializer(serializers.ModelSerializer):

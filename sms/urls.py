@@ -139,6 +139,9 @@ router.register(r'get-student',GetStudentView,basename='get-student')
 router.register(r'attendance', AttendanceView, basename='attendance') 
 
 router.register(r'leave-type', LeaveTypeView, basename='leave-type')# For leave template tracking METHOD [GET,POST,PUT,DELETE]
+
+
+
 router.register(r'leave-template', LeaveTemplateView, basename='leave-template')# For leave template tracking METHOD [GET,POST,PUT,DELETE]
 router.register(r'leave-request', LeaveRequestView, basename='leave-request')# 
 
@@ -202,6 +205,9 @@ urlpatterns = [
      
      # To get remaining leave for staff when click on apply leave button for show remaining leave
      path('api/get-remaining-leaves/',GetRemainingLeaveView.as_view()),
+     
+     
+    #  path('api/leave-type/', LeaveTypeGenericView.as_view()),
      
     #  path('api/carry-forward/', LeaveCarryForward.as_view()),
      
