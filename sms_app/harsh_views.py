@@ -196,3 +196,24 @@ class ChangeAllLeaveView(APIView): # for APPROVE all day leave
         return Response(
             {"message": "All leave days approved"}
         )
+        
+        
+        
+class AttendanceLocationViewSet(ModelViewSet):
+    serializer_class = AttendanceLocationViewSerializer
+    permission_classes = [IsAuthenticated, IsCLerk]
+
+    def get_queryset(self):
+        return AttendanceLocation.objects.filter(
+            school=self.request.user.school
+        )
+
+    # ✅ attach request context (important for your create logic)
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context["request"] = self.request
+        return context
+
+    # ✅ auto-attach school on create (optional but safer)
+    def perform_create(self, serializer):
+        serializer.save()

@@ -789,7 +789,7 @@ class AdmissionSubmissionSerializer(serializers.ModelSerializer):
     school_class = serializers.PrimaryKeyRelatedField(
         queryset=SchoolClass.objects.all(),
         required=False,
-        write_only=True,
+        write_only=True,    
     )
 
     # allow input also

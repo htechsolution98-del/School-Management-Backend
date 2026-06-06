@@ -1007,6 +1007,7 @@ class AttendanceLocation(models.Model):
     latitude = models.DecimalField(max_digits=9, decimal_places=6)
     longitude = models.DecimalField(max_digits=9, decimal_places=6)
     radius = models.DecimalField(max_digits=10, decimal_places=2)
+    time_rule = models.ForeignKey(AttendanceTimeRule, on_delete=models.CASCADE, null=True)
 
     def __str__(self):
         return f"Attendance Location for {self.school}"

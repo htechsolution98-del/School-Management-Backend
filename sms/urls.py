@@ -175,6 +175,11 @@ router.register(r'studentget', StudentGetView, basename='studentget')
 
 
 
+#FOR LOCATION AND TIME SET IN CLERK
+router.register(r"attendance-location", AttendanceLocationViewSet, basename="attendance-location")
+
+
+
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('health/', health_check, name='health_check'),
