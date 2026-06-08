@@ -30,6 +30,9 @@ from drf_yasg import openapi
 from django.conf import settings
 from django.conf.urls.static import static
 
+
+from sms_app.harsh_views import *
+
 schema_view = get_schema_view(
     openapi.Info(
         title="My API",
@@ -135,12 +138,17 @@ router.register(r'get-student',GetStudentView,basename='get-student')
 # FOR ATTENDANCE TRACKING METHOD [GET,POST,PUT,DELETE]
 router.register(r'attendance', AttendanceView, basename='attendance') 
 
+router.register(r'leave-type', LeaveTypeView, basename='leave-type')# For leave template tracking METHOD [GET,POST,PUT,DELETE]
+
+
+
 router.register(r'leave-template', LeaveTemplateView, basename='leave-template')# For leave template tracking METHOD [GET,POST,PUT,DELETE]
 router.register(r'leave-request', LeaveRequestView, basename='leave-request')# 
 
 router.register(r'get-leave-requests', GetLeaveRequestView, basename='get-leave-requests')# For get leave request for principle with filter [school filter add remainig]
 
 router.register(r'change-leave-status', ChangeLeaveView, basename='change-leave-status')# For approve leave request for principle METHOD [PUT]
+
 router.register(r'announcements', AnnouncementView, basename='announcements')# For managing announcements
 router.register(r'get-announcements', GetAnnouncementView, basename='get-announcements')# For get announcement for student,staff with filter [school filter add remainig]   
 router.register(r'razardata', RazarDataView, basename='razardata')# For get announcement for student,staff with filter [school filter add remainig]   
@@ -164,6 +172,24 @@ router.register(r'homework', HomeworkViewSet, basename='homework')
 router.register(r'homework-submission', HomeworkSubmissionViewSet, basename='homework-submission')
 
 router.register(r'studentget', StudentGetView, basename='studentget')
+
+
+
+#FOR LOCATION AND TIME SET IN CLERK
+router.register(r"attendance-location", AttendanceLocationViewSet, basename="attendance-location")
+
+
+
+# for cerificate type to set
+router.register(r"certificate-type", CertificateTypeSerializer, basename="certificate-type")
+
+#student ask for certificate
+router.register(r"certificate-request", CertificateRequestViewSet, basename="certificate-request")
+
+
+router.register(r"certificate-request-status", ClerkCertificateRequestViewSet, basename="certificate-request-status")
+
+
 
 
 
@@ -197,6 +223,13 @@ urlpatterns = [
      
      # To get remaining leave for staff when click on apply leave button for show remaining leave
      path('api/get-remaining-leaves/',GetRemainingLeaveView.as_view()),
+     
+     
+    #  path('api/leave-type/', LeaveTypeGenericView.as_view()),
+     
+    #  path('api/carry-forward/', LeaveCarryForward.as_view()),
+     
+     path("api/approve-all-leave/<int:pk>/",ChangeAllLeaveView.as_view()),
      
 
     path('map/',TemplateView.as_view(template_name='map.html')),

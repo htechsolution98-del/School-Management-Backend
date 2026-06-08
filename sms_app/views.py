@@ -337,6 +337,8 @@ from rest_framework_simplejwt.tokens import RefreshToken
 # from .serializers import LoginSerializer
 from .models import UserModuleAccess
 
+from sms_app.harsh_views import carry_forward_leave
+
 
 class LoginView(APIView):
 
@@ -349,6 +351,11 @@ class LoginView(APIView):
         serializer.is_valid(raise_exception=True)
 
         user = serializer.validated_data["user"]
+        
+        staff = Staff.objects.filter(user=user).first()
+
+        if staff:
+            carry_forward_leave(staff)
 
         # =====================================
         # Generate JWT Tokens
@@ -407,6 +414,7 @@ class LoginView(APIView):
                 "school_slug": response_data["school_slug"],
                 "roles": response_data["roles"],
                 "modules": response_data["modules"],
+                "access":response_data['access']
             },
             status=status.HTTP_200_OK,
         )
@@ -2734,66 +2742,7 @@ class TodayAttendanceStatusView(APIView):
         )
 
 
-class LeaveTemplateView(ModelViewSet):
-    queryset = LeaveTemplate.objects.all()
-    serializer_class = LeaveTemplateSerializer
-    # permission_classes = [IsAuthenticated]
 
-    def get_parsers(self):
-
-        return super().get_parsers()
-
-
-class LeaveRequestView(ModelViewSet):
-    queryset = LeaveRequest.objects.all()
-    serializer_class = LeaveRequestSerializer
-    permission_classes = [IsAuthenticated]
-
-
-class GetLeaveRequestView(ModelViewSet):
-    queryset = LeaveRequest.objects.all()
-    serializer_class = GetLeaveRequestSerializer
-    permission_classes = [IsAuthenticated]
-    http_method_names = ["get"]
-
-    def get_queryset(self):
-
-        queryset = LeaveRequest.objects.filter(school=self.request.user.school)
-
-        return queryset
-
-
-class ChangeLeaveView(ModelViewSet):
-    queryset = LeavePerDay.objects.all()
-    serializer_class = ChangeLeavePerDaySerializer
-    permission_classes = [IsAuthenticated, Isprincipal]
-    http_method_names = ["patch"]
-
-    def update(self, request, *args, **kwargs):
-        instance = self.get_object()
-
-        if instance.leave.school != request.user.school:
-            return Response(
-                {"error": "You are not allowed to modify this record"}, status=403
-            )
-
-        return super().update(request, *args, **kwargs)
-
-
-class GetRemainingLeaveView(APIView):
-    permission_classes = [IsAuthenticated]
-
-    def post(self, request):
-        leave_template = request.data.get("leave_template")
-        user = request.user
-
-        staff = Staff.objects.filter(user=user).first()
-        queryset = StaffRemainingLeave.objects.filter(
-            staff=staff, school=user.school, leave_template=leave_template
-        )
-
-        serializer = StaffRemainingLeaveSerializer(queryset, many=True)
-        return Response(serializer.data)
 
 
 class AnnouncementView(ModelViewSet):
