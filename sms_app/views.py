@@ -727,7 +727,7 @@ class RazarDataView(ModelViewSet):
 class StaffView(ModelViewSet):
     queryset = Staff.objects.all()
     serializer_class = StaffSerializer
-    permission_classes = [IsAuthenticated, Is_admin_trustee, IsCLerk]
+    permission_classes = [IsAuthenticated, Is_admin_trustee]
 
     # 🔹 Get staff list with Redis cache
     def get_queryset(self):
@@ -3542,7 +3542,7 @@ class StaffListView(ModelViewSet):
     queryset = Staff.objects.all()
 
     serializer_class = StaffListSirializer
-    permission_classes = [IsAuthenticated, IsFeeManager]
+    permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
         return Staff.objects.filter(school=self.request.user.school)
