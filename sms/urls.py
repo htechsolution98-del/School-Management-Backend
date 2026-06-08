@@ -180,6 +180,19 @@ router.register(r"attendance-location", AttendanceLocationViewSet, basename="att
 
 
 
+# for cerificate type to set
+router.register(r"certificate-type", CertificateTypeSerializer, basename="certificate-type")
+
+#student ask for certificate
+router.register(r"certificate-request", CertificateRequestViewSet, basename="certificate-request")
+
+
+router.register(r"certificate-request-status", ClerkCertificateRequestViewSet, basename="certificate-request-status")
+
+
+
+
+
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('health/', health_check, name='health_check'),

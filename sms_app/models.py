@@ -2072,6 +2072,43 @@ class HomeworkSubmission(models.Model):
 
     def __str__(self):
         return f"{self.student}"
+    
+    
+class CertificateType(models.Model):
+    name = models.CharField(max_length=100, null=True, blank=True)
+    school = models.ForeignKey(School, on_delete=models.CASCADE, null=True)
+    
+    def __str__(self):
+        return self.name
+    
+    class Meta:
+        db_table = "certificate_type"
+    
+    
+    
+class CertificateRequest(models.Model):
+    # student = models.ForeignKey(Student, on_delete=models.CASCADE)
+    certificate_type = models.ForeignKey(CertificateType, on_delete=models.CASCADE)
+    school = models.ForeignKey(School, on_delete=models.CASCADE, null=True)
+
+    status = models.CharField(
+        max_length=20,
+        choices=[
+            ("PENDING", "Pending"),
+            ("APPROVED", "Approved"),
+            ("REJECTED", "Rejected"),
+        ],
+        default="PENDING"
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        db_table = "certificate_request"
+        
+# class Certificate(models.Model):
+#     student = 
+    
 
 
 # # Ensure every model in this app uses a consistent db_table naming convention

@@ -11,6 +11,7 @@ from .harsh_serializer import *
 from rest_framework.generics import GenericAPIView, ListCreateAPIView
 from rest_framework import status
 from rest_framework.exceptions import ValidationError
+from rest_framework.decorators import action
 
 
 
@@ -21,6 +22,15 @@ class IsCLerk(BasePermission):
             and request.user.is_authenticated
             and request.user.groups.filter(name="CLERK").exists()
         )
+        
+class Isstudent(BasePermission):
+    def has_permission(self, request, view):
+        return (
+            request.user
+            and request.user.is_authenticated
+            and request.user.groups.filter(name="student").exists()
+        )
+
 
 
 
@@ -216,4 +226,155 @@ class AttendanceLocationViewSet(ModelViewSet):
 
     # ✅ auto-attach school on create (optional but safer)
     def perform_create(self, serializer):
+        serializer.save()
+        
+        
+        
+        
+class CertificateTypeSerializer(ModelViewSet): #for create, read, update, delete  certificate type - Bonafide
+    serializer_class = CerificateTypeSerializer
+    permission_classes = [IsAuthenticated, IsCLerk]
+
+    def get_queryset(self):
+        user = self.request.user
+
+        # Clerk access (same as before)
+        staff = Staff.objects.filter(user=user, category="CLERK").first()
+        if staff:
+            return CertificateType.objects.filter(school=staff.school)
+
+        # Student access
+        student = Student.objects.filter(user=user).first()
+        if student:
+            return CertificateType.objects.filter(school=student.school)
+
+        return CertificateType.objects.none()
+
+
+    def perform_create(self, serializer):
+        staff = Staff.objects.filter(
+            user=self.request.user,
+            category="CLERK"
+        ).first()
+
+        if not staff:
+            raise ValidationError("Clerk profile not found.")
+
+        name = serializer.validated_data.get("name")
+
+        if CertificateType.objects.filter(
+            school=staff.school,
+            name__iexact=name
+        ).exists():
+            raise ValidationError(
+                {"name": "This Certificate already exists."}
+            )
+
+        serializer.save(school=staff.school)
+        
+        
+
+
+# class CertificateRequestViewSet(ModelViewSet):
+#     serializer_class = CertificateRequestSerializer
+#     permission_classes = [IsAuthenticated]
+
+#     def get_queryset(self):
+#         student = Student.objects.filter(user=self.request.user).first()
+#         if not student:
+#             return CertificateRequest.objects.none()
+
+#         return CertificateRequest.objects.filter(student=student)
+
+#     def perform_create(self, serializer):
+#         student = Student.objects.filter(user=self.request.user).first()
+
+#         if not student:
+#             raise ValidationError("Student profile not found.")
+        
+#         if CertificateRequest.objects.filter(
+#                 student=student,
+#                 certificate_type=serializer.validated_data["certificate_type"],
+#                 status="PENDING"
+#             ).exists():
+            
+#             raise ValidationError("Request already pending.")
+
+#         serializer.save(student=student)
+
+
+class CertificateRequestViewSet(ModelViewSet):
+    serializer_class = CertificateRequestSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        staff = Staff.objects.filter(user=self.request.user).first()
+
+        if not staff:
+            return CertificateRequest.objects.none()
+
+        return CertificateRequest.objects.filter(
+            school=staff.school
+        )
+        
+    def perform_create(self, serializer):
+        staff = Staff.objects.filter(user=self.request.user).first()
+
+        if not staff:
+            raise ValidationError("Staff not found")
+
+        # OPTIONAL RULE: only teachers can create
+        if staff.category != "TEACHER":
+            raise ValidationError("Only teachers can create requests")
+
+        serializer.save(
+            school=staff.school
+        )
+        
+        
+
+
+class ClerkCertificateRequestViewSet(ModelViewSet):
+    serializer_class = ClerkCertificateRequestSerializer
+    permission_classes = [IsAuthenticated, IsCLerk]
+
+    def get_queryset(self):
+        staff = Staff.objects.filter(
+            user=self.request.user,
+            category="CLERK"
+        ).first()
+
+        if not staff:
+            return CertificateRequest.objects.none()
+
+        queryset = CertificateRequest.objects.filter(
+            certificate_type__school=staff.school
+        ).select_related("certificate_type")
+
+        status = self.request.query_params.get("status")
+        if status:
+            queryset = queryset.filter(status=status.upper())
+
+        return queryset
+
+    def perform_update(self, serializer):
+        staff = Staff.objects.filter(
+            user=self.request.user,
+            category="CLERK"
+        ).first()
+
+        if not staff:
+            raise ValidationError("Clerk profile not found.")
+
+        instance = self.get_object()
+
+        # Only allow status change if PENDING
+        if instance.status != "PENDING":
+            raise ValidationError("Request already processed.")
+
+        new_status = serializer.validated_data.get("status")
+
+        if new_status not in ["APPROVED", "REJECTED"]:
+            raise ValidationError("Invalid status value.")
+
         serializer.save()

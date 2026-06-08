@@ -401,3 +401,38 @@ class AttendanceLocationViewSerializer(serializers.ModelSerializer):
             rule.save()
 
         return instance
+    
+    
+    
+class CerificateTypeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CertificateType
+        fields = '__all__'
+        read_only_fields = ['school']    
+        
+        
+        
+class CertificateRequestSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CertificateRequest
+        fields = "__all__"
+        read_only_fields = ["student", "status"]
+        
+        
+class ClerkCertificateRequestSerializer(serializers.ModelSerializer):
+    # student_name = serializers.CharField(source="student.user.username", read_only=True)
+    certificate_type_name = serializers.CharField(source="certificate_type.name", read_only=True)
+
+    class Meta:
+        model = CertificateRequest
+        fields = [
+            "id",
+            # "student",
+            # "student_name",
+            "certificate_type",
+            "certificate_type_name",
+            "status",
+            "created_at",
+        ]
+        
+    

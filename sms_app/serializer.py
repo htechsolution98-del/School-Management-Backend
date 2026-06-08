@@ -1623,8 +1623,8 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
             # =========================
 
             if not student.user:
-                student_user = User.objects.create(username=gr_no)
-                student_user.set_password(gr_no)
+                student_user = User.objects.create(username=gr_no, password = gr_no)
+                # student_user.set_password(gr_no)
                 
                 student_user.save()
 
