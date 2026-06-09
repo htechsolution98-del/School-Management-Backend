@@ -1,6 +1,24 @@
 from django.contrib import admin
 from .models import *
-
+admin.site.register(LeaveTemplate)
+admin.site.register(LeaveRequest)
+admin.site.register(LeavePerDay)
+admin.site.register(StaffRemainingLeave)
+admin.site.register(Staff)
+admin.site.register(School)
+admin.site.register(CustomUser)
+admin.site.register(Attendance)
+admin.site.register(StaffFace)
+admin.site.register(AttendanceLocation)
+admin.site.register(Parent)
+admin.site.register(Student)
+admin.site.register(StudentParent)
+admin.site.register(StudentDocument)
+admin.site.register(SchoolClass)
+admin.site.register(StudentNotification)
+admin.site.register(StudentAttendance)
+admin.site.register(Exam)
+admin.site.register(ExamNotification)
 # Register your models here.
 
 admin.site.register(School)

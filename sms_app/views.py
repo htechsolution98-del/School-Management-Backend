@@ -19,7 +19,7 @@ from rest_framework.views import APIView
 
 from os import link
 from urllib import request, response
-
+from django.shortcuts import get_object_or_404
 from django.http import JsonResponse
 from django.shortcuts import render
 from requests import get
@@ -336,9 +336,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 # from .serializers import LoginSerializer
 from .models import UserModuleAccess
-
-from sms_app.harsh_views import carry_forward_leave
-
+from datetime import date
 
 class LoginView(APIView):
 
@@ -352,11 +350,8 @@ class LoginView(APIView):
 
         user = serializer.validated_data["user"]
         
-        staff = Staff.objects.filter(user=user).first()
-
-        if staff:
-            carry_forward_leave(staff)
-
+        
+      
         # =====================================
         # Generate JWT Tokens
         # =====================================
@@ -414,7 +409,7 @@ class LoginView(APIView):
                 "school_slug": response_data["school_slug"],
                 "roles": response_data["roles"],
                 "modules": response_data["modules"],
-                "access":response_data['access']
+                # "access": access_token,
             },
             status=status.HTTP_200_OK,
         )
@@ -530,7 +525,13 @@ class Isstudent(BasePermission):
             and request.user.is_authenticated
             and request.user.groups.filter(name="student").exists()
         )
-
+class Isparent(BasePermission):
+    def has_permission(self, request, view):
+        return (
+            request.user
+            and request.user.is_authenticated
+            
+        )
 
 class Isteacher(BasePermission):
     def has_permission(self, request, view):
@@ -580,7 +581,7 @@ class HasModuleAccess(BasePermission):
 class FeatureView(ModelViewSet):
     queryset = Feature.objects.all()
     serializer_class = FeatureSerialzer
-    permission_classes = [IsAuthenticated, Is_super_admin]
+    # permission_classes = [IsAuthenticated, Is_super_admin]
 
     http_method_names = ["get", "post", "delete"]
 
@@ -626,7 +627,7 @@ from rest_framework import serializers
 class SchoolView(ModelViewSet):
     queryset = School.objects.all()
     serializer_class = SchoolSerializer
-    permission_classes = [IsAuthenticated, Is_super_admin]
+    # permission_classes = [IsAuthenticated, Is_super_admin]
 
     # ✅ Cache-safe queryset
     def get_queryset(self):
@@ -2655,6 +2656,7 @@ class GetStudentView(ModelViewSet):
 
 class GetLocationView(APIView):
     permission_classes = [IsAuthenticated, IsCLerk]
+    
 
     def post(self, request):
         serializer = AttendanceLocationSerializer(
@@ -2678,6 +2680,26 @@ class GetLocationView(APIView):
 
         return Response(serializer.data, status=status.HTTP_200_OK)
 
+# class DeleteUpdateLocationView(APIView):
+#     permission_classes=[IsAuthenticated,IsCLerk]
+
+#     def delete(self,request,pk):
+#         attendancelocation=get_object_or_404(AttendanceLocation,pk=pk)
+#         attendancelocation.delete()
+#         return Response(
+#             {"message": "Location deleted successfully"},
+#              status=status.HTTP_204_NO_CONTENT
+#         )
+
+#     def put(self,pk):
+#         attendancelocation=get_object_or_404(AttendanceLocation,pk=pk)
+#         serializer=AttendanceLocationSerializer(attendancelocation,data=request.data)
+#         if serializer.is_valid():
+#             serializer.save()
+#             return Response(serializer.data)
+#         return Response(serializer.errors)
+
+    
 
 class AttendanceView(ModelViewSet):
     queryset = Attendance.objects.all()
@@ -2743,7 +2765,21 @@ class TodayAttendanceStatusView(APIView):
 
 
 
-
+class GetRemainingLeavePerStaffView(APIView):
+    permission_classes=[IsAuthenticated]
+    def get(self,request):
+        leave=LeaveRequest.objects.filter(staff=request.user.staff,school=request.user.school).order_by("-created_at")
+        
+        # leave_template=LeaveTemplate.objects.filter(staff=request.user.staff,school=request.user.school)
+        # print(leave_template)
+        remaining_leaves=StaffRemainingLeave.objects.filter(staff=request.user.staff,school=request.user.school).order_by("year","month")
+        
+        leave_request=LeaveRequestSerializer(leave,many=True)
+        remaining_leaves_left=StaffRemainingLeaveSerializer(remaining_leaves,many=True)
+        return Response({
+            "Leave_request":leave_request.data,
+            "reamining_leaves":remaining_leaves_left.data
+        })
 
 class AnnouncementView(ModelViewSet):
     queryset = Announcement.objects.all()
@@ -3751,7 +3787,7 @@ from .models import StudentAttendance
 
 
 class StudentAttendanceView(APIView):
-
+    permission_classes=[IsAuthenticated]
     def get(self, request):
 
         queryset = StudentAttendance.objects.filter(
@@ -4246,3 +4282,243 @@ class StudentGetView(ModelViewSet):
 
     def get_queryset(self):
         return Student.objects.filter(school=self.request.user.school)
+
+class StaffFaceEnrollView(APIView):
+    permission_classes=[IsAuthenticated]
+    def post(self,request):
+        staff=Staff.objects.get(user=request.user)
+        if not staff:
+            return Response(
+                {"Error":"Staff is not found"},
+                status=404)
+        serializer = StaffFaceSerializer(
+    data=request.data,
+    context={
+        "request": request,
+        "staff": staff,
+    }
+)
+        if serializer.is_valid():
+            face_obj=serializer.save()
+        
+            return Response({
+                "message":"Face enroll sucessfully.",
+                "staff":staff.id,
+                "face_id":face_obj.id
+            })
+
+        return Response(serializer.errors, status=400)
+    
+import requests
+import io
+
+from PIL import Image
+
+from django.conf import settings
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
+from rest_framework import status
+
+
+# -------------------------
+# Image Optimization Helper
+# -------------------------
+def optimize_image(uploaded_file, size=(800, 800), quality=60):
+    """
+    Resize + compress image to avoid Face++ 413 error
+    """
+
+    image = Image.open(uploaded_file)
+    image = image.convert("RGB")
+    image.thumbnail(size)
+
+    buffer = io.BytesIO()
+    image.save(buffer, format="JPEG", quality=quality)
+
+    buffer.seek(0)
+    return buffer
+
+
+# -------------------------
+# VIEW
+# -------------------------
+class StaffFaceVerifyView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+
+        serializer = StaffFaceVerifySerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        uploaded_image = serializer.validated_data["image"]
+
+        # get staff
+        try:
+            staff = Staff.objects.get(user=request.user)
+
+            staff_face = StaffFace.objects.get(
+                staff=staff,
+                is_enrolled=True
+            )
+
+        except StaffFace.DoesNotExist:
+            return Response(
+                {"error": "Face not enrolled."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        enrolled_image = staff_face.face_image
+
+        # -------------------------
+        # OPTIMIZE BOTH IMAGES
+        # -------------------------
+        enrolled_image.open("rb")
+
+        optimized_enrolled = optimize_image(enrolled_image)
+        optimized_uploaded = optimize_image(uploaded_image)
+
+        # -------------------------
+        # FACE++ REQUEST
+        # -------------------------
+        try:
+            response = requests.post(
+                "https://api-us.faceplusplus.com/facepp/v3/compare",
+                data={
+                    "api_key": settings.FACEPP_API_KEY,
+                    "api_secret": settings.FACEPP_API_SECRET,
+                },
+                files={
+                    "image_file1": ("enrolled.jpg", optimized_enrolled, "image/jpeg"),
+                    "image_file2": ("live.jpg", optimized_uploaded, "image/jpeg"),
+                },
+                timeout=30
+            )
+
+        except requests.exceptions.RequestException as e:
+            return Response(
+                {"error": f"Face++ request failed: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+        # -------------------------
+        # RESPONSE HANDLING
+        # -------------------------
+        result = response.json()
+
+        if response.status_code != 200:
+            return Response(
+                {"error": result},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        confidence = result.get("confidence", 0)
+        verified = confidence >= 80
+
+        return Response({
+            "verified": verified,
+            "confidence": confidence,
+            "raw_response": result
+        })
+
+class ParentCreateView(APIView):
+
+    def post(self, request):
+
+        serializer = ParentCreateSerializer(
+            data=request.data
+        )
+
+        if serializer.is_valid():
+
+            parent = serializer.save()
+
+            return Response(
+                {
+                    "message": "Parent created successfully",
+                    "parent_id": parent.id,
+                },
+                status=status.HTTP_201_CREATED,
+            )
+
+        return Response(
+            serializer.errors,
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+
+
+class StudentDocumentViews(APIView):
+    def get_permissions(self):
+        if self.request.method == "GET":
+            return [IsAuthenticated(), Isparent()]
+        return [IsAuthenticated(), Isteacher()]
+
+    def get(self,request):
+        parent=get_object_or_404(Parent,user=request.user)
+        studentdocument=StudentDocument.objects.filter(student__parent=parent)
+        serializer=StudentDocumentSerializer(studentdocument,many=True)
+        return Response(serializer.data)
+    
+    def post(self,request):
+        serializer=StudentDocumentSerializer(data=request.data)
+
+        if serializer.is_valid():
+            serializer.save(school=request.user.school,uploaded_by=request.user.staff)
+            return Response(serializer.data)
+        return Response(serializer.errors,status=404)
+
+
+
+class StudentNotificationView(APIView):
+    permission_classes=[IsAuthenticated]
+    # def get_permissions(self):
+    #     if self.request.method == "GET":
+    #         return [IsAuthenticated(), Isparent()]
+    #     return [IsAuthenticated(), Isteacher()]
+
+    def get(self,request):
+        parent=get_object_or_404(Parent,user=request.user)
+        print(parent)
+        notification=StudentNotification.objects.filter(student__parent=parent).order_by("-created_at")
+        print(notification)
+        serializer=StudentNotificationSerializer(notification,many=True)
+        return Response(serializer.data)
+    
+    def post(self,request):
+        serializer=StudentNotificationSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save(school=request.user.school,created_by=request.user.staff)
+            return Response(serializer.data)
+        return Response(serializer.errors,status=404)
+
+
+class ExamView(APIView):
+    permission_classes=[IsAuthenticated]
+    def get(self,request):
+        school = request.user.parent_profile.school
+        print(school)
+        notifications = ExamNotification.objects.filter(
+            exam__school=school
+        ).order_by("-created_at")
+
+        serializer = ExamNotificationSerializer(notifications, many=True)
+        return Response(serializer.data)
+    
+    def post(self,request):
+        serializer=ExamSerializer(data=request.data)
+        if serializer.is_valid():
+            exam=serializer.save(school=request.user.school,created_by=request.user.staff,)
+            ExamNotification.objects.create(
+                exam=exam,
+                title=f"New Exam {exam.title}",
+                message=(
+                    f"Exam scheduled on {exam.exam_date} "
+                    f"from {exam.start_time} to {exam.end_time}"
+                )
+            )
+            return Response(serializer.data)
+        
+        return Response(serializer.errors,status=404)
+    
+   

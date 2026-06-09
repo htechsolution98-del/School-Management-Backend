@@ -71,6 +71,9 @@ class School(models.Model):
 
         super().save(*args, **kwargs)
 
+    def __str__(self):
+        return self.name
+
 
 # -----------SCHOLL FEATURE---------
 class Feature(models.Model):
@@ -293,6 +296,7 @@ class Division(models.Model):
         School, on_delete=models.CASCADE, null=True, blank=True, db_index=True
     )
 
+    
     SchoolClass = models.ForeignKey(SchoolClass, on_delete=models.CASCADE)
     division = models.CharField(null=True, blank=True, max_length=20)
     capacity = models.IntegerField(null=True, blank=True)
@@ -525,7 +529,16 @@ class AdmissionDocument(models.Model):
 
 
 # # ======this is modified======
+class Parent(models.Model):
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="parent_profile",
+    )
+    school = models.ForeignKey(School, on_delete=models.CASCADE,default=1)
 
+    class Meta:
+        db_table = "parent"
 
 class Student(models.Model):
 
@@ -539,6 +552,7 @@ class Student(models.Model):
     admission = models.OneToOneField(  # VERY IMPORTANT
         "Admission", on_delete=models.SET_NULL, null=True, blank=True
     )
+    parent=models.ForeignKey(Parent,on_delete=models.CASCADE,null=True,blank=True)
 
     # Identity
     surname = models.CharField(max_length=100, blank=True, null=True)
@@ -629,15 +643,7 @@ class TempUser(models.Model):
         db_table = "temp_user"
 
 
-class Parent(models.Model):
-    user = models.OneToOneField(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
-        related_name="parent_profile",
-    )
 
-    class Meta:
-        db_table = "parent"
 
 
 class RazorPayData(models.Model):
@@ -1029,7 +1035,6 @@ class Attendance(models.Model):
     date_time = models.DateTimeField(null=True, blank=True)
     is_present = models.BooleanField(default=False)
     is_half_day = models.BooleanField(default=False)
-
     check_in = models.DateTimeField(null=True, blank=True)
     check_out = models.DateTimeField(null=True, blank=True)
 
@@ -1066,23 +1071,15 @@ class LeaveType(models.Model):
 
 
 class LeaveTemplate(models.Model):
-    # TIMELINE_CHOICES = [
-    #     ("MONTHLY", "Monthly"),
-    #     ("QUARTERLY", "Quarterly"),
-    #     ("SEMI_ANNUAL", "Semi-Annual"),
-    #     ("ANNUAL", "Annual"),
-    # ]
 
     school = models.ForeignKey(
         School, on_delete=models.CASCADE, null=True, blank=True, db_index=True
     )
-    staff = models.ForeignKey(
-        Staff, on_delete=models.CASCADE, null=True, blank=True, db_index=True
+    time_line = models.CharField(
+        max_length=20, null=True, blank=True
     )
-    # time_line = models.CharField(
-    #     max_length=20, choices=TIMELINE_CHOICES, null=True, blank=True
-    # )
-    leave_type = models.ForeignKey(LeaveType, on_delete=models.CASCADE, null=True)
+    staff=models.ForeignKey(Staff,on_delete=models.CASCADE,related_name='staff')
+    leave_type = models.CharField(max_length=100, null=True, blank=True)
     leave_num = models.IntegerField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
     time_line = models.CharField(max_length=20,default="MONTHLY")
@@ -1092,22 +1089,35 @@ class LeaveTemplate(models.Model):
 
     class Meta:
         db_table = "leave_template"
-        
-        constraints = [
-            models.UniqueConstraint(
-                fields=["school", "staff", "leave_type"],
-                name="unique_staff_leave_type"
-            )
-        ]
+      
+    # unique_together = (
+    #     "school",
+    #     "staff",
+    #     "leave_type",
+    #     "time_line"
+    # )
 
 
 class LeaveRequest(models.Model):
+
+    STATUS_CHOICES = [
+        ("PENDING", "Pending"),
+        ("APPROVED", "Approved"),
+        ("REJECTED", "Rejected"),
+         ("PARTIAL", "Partial"),
+    ]
+
+  
     school = models.ForeignKey(
         School, on_delete=models.CASCADE, null=True, blank=True, db_index=True
     )
     staff = models.ForeignKey(Staff, on_delete=models.CASCADE, null=True, blank=True)
-    # leave_type = models.CharField(max_length=100, null=True, blank=True)
-    leave_type = models.ForeignKey(LeaveType, on_delete=models.CASCADE, null=True)
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default="PENDING"
+    )
+    leave_type = models.CharField(max_length=100, null=True, blank=True)
     start_date = models.DateField(null=True, blank=True)
     end_date = models.DateField(null=True, blank=True)
 
@@ -1162,25 +1172,28 @@ class LeavePerDay(models.Model):
 
 class StaffRemainingLeave(models.Model):
     school = models.ForeignKey(
-        School, on_delete=models.CASCADE, null=True, blank=True, db_index=True
+        School,
+        on_delete=models.CASCADE,
+        db_index=True
     )
-    staff = models.ForeignKey(Staff, on_delete=models.CASCADE, null=True, blank=True)
-    leave_template = models.ForeignKey(
-        LeaveTemplate, on_delete=models.CASCADE, null=True, blank=True
-    )
-    total_levaes = models.IntegerField(null=True, blank=True)
-    remaining_leaves = models.IntegerField(null=True, blank=True)
-    
-    month = models.IntegerField(default=timezone.now().month)
-    
-    year = models.IntegerField(default=timezone.now().year)
 
-    def __str__(self):
-        return f"{self.staff} - {self.leave_template}"
-    
-    # def apply_carry_forward(self):
-    #     self.remaining_leaves += self.leave_template.leave_num
-    #     self.save()
+    staff = models.ForeignKey(
+        Staff,
+        on_delete=models.CASCADE
+    )
+
+    leave_template = models.ForeignKey(
+        LeaveTemplate,
+        on_delete=models.CASCADE
+    )
+
+    # month = models.IntegerField()
+
+    year = models.IntegerField()
+
+    total_leaves = models.IntegerField(default=0)
+    carry_forward_leaves = models.IntegerField(default=0)
+    remaining_leaves = models.IntegerField(default=0)
 
     class Meta:
         db_table = "staff_remaining_leave"
@@ -1191,6 +1204,19 @@ class StaffRemainingLeave(models.Model):
         #         name="unique_staff_leave_month_year"
         #     )
         # ]
+
+        unique_together = (
+            "staff",
+            "leave_template",
+            "year"
+        )
+
+    def __str__(self):
+        return (
+            f"{self.staff} - "
+            f"{self.leave_template.leave_type} - "
+            # f"{self.month}/{self.year}"
+        )
 
 
 class Announcement(models.Model):
@@ -1530,12 +1556,13 @@ class SalaryComponent(models.Model):
     )
 
     name = models.CharField(max_length=255)  # DA, HRA, PF
-    component_type = models.CharField(max_length=20, choices=COMPONENT_TYPE)
+    component_type = models.CharField(max_length=20, choices=COMPONENT_TYPE) # Deduction,Earning
     is_active = models.BooleanField(default=True)
     school = models.ForeignKey(School, on_delete=models.CASCADE)
 
     class Meta:
         db_table = "salary_component"
+
 
 
 class StaffSalaryComponent(models.Model):
@@ -1970,6 +1997,7 @@ class StudentAttendance(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True)
 
+
     class Meta:
         db_table = "student_attendance"
         unique_together = ("student", "attendance_date")
@@ -2124,3 +2152,204 @@ class CertificateRequest(models.Model):
 # except Exception:
 #     # import-time may fail in some management commands; ignore silently
 #     pass
+
+
+class StaffFace(models.Model):
+    staff=models.OneToOneField(Staff,on_delete=models.CASCADE,related_name="face")
+    face_image=models.ImageField(upload_to="staff-faces/")
+    is_enrolled = models.BooleanField(default=False)
+    created_at=models.DateTimeField(auto_now_add=True)
+    updated_at=models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Face - {self.staff.name}"
+
+
+class StudentParent(models.Model):
+
+    RELATIONSHIP_CHOICES = [
+        ("FATHER", "Father"),
+        ("MOTHER", "Mother"),
+        ("GUARDIAN", "Guardian"),
+    ]
+
+    student = models.ForeignKey(
+        Student,
+        on_delete=models.CASCADE,
+        related_name="parent_mappings",
+    )
+
+    parent = models.ForeignKey(
+        Parent,
+        on_delete=models.CASCADE,
+        related_name="student_mappings",
+    )
+
+    relationship = models.CharField(
+        max_length=20,
+        choices=RELATIONSHIP_CHOICES,
+    )
+
+    is_primary = models.BooleanField(default=False)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "student_parent"
+        unique_together = ("student", "parent")
+
+
+class StudentDocument(models.Model):
+
+    DOCUMENT_TYPES = [
+        ("RESULT", "Result"),
+        ("REPORT_CARD", "Report Card"),
+        ("CERTIFICATE", "Certificate"),
+        ("ACHIEVEMENT", "Achievement"),
+        ("OTHER", "Other"),
+    ]
+
+    school = models.ForeignKey(
+        School,
+        on_delete=models.CASCADE
+    )
+
+    student = models.ForeignKey(
+        Student,
+        on_delete=models.CASCADE,
+        related_name="student_documents",
+    )
+
+    uploaded_by = models.ForeignKey(
+        Staff,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="uploaded_documents",
+    )
+
+    document_type = models.CharField(
+        max_length=20,
+        choices=DOCUMENT_TYPES,
+    )
+
+    title = models.CharField(max_length=255)
+
+    description = models.TextField(
+        null=True,
+        blank=True,
+    )
+
+    document = models.FileField(
+        upload_to="student_documents/",
+    )
+
+    academic_year = models.ForeignKey(
+        AcademicYear,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+
+    is_visible_to_parent = models.BooleanField(
+        default=True
+    )
+
+    uploaded_at = models.DateTimeField(
+        auto_now_add=True
+    )
+
+    updated_at = models.DateTimeField(
+        auto_now=True
+    )
+
+    class Meta:
+        db_table = "student_document"
+        ordering = ["-uploaded_at"]
+
+    def __str__(self):
+        return f"{self.student.name} - {self.title}"
+    
+from django.db import models
+
+
+class StudentNotification(models.Model):
+
+    NOTIFICATION_TYPES = (
+        ("ATTENDANCE", "Attendance"),
+        ("PROGRESS", "Progress"),
+        ("DOCUMENT", "Document"),
+        ("EXAM", "Exam"),
+        ("HOMEWORK", "Homework"),
+        ("GENERAL", "General"),
+    )
+
+    school = models.ForeignKey(
+        School,
+        on_delete=models.CASCADE
+    )
+
+    student = models.ForeignKey(
+        Student,
+        on_delete=models.CASCADE,
+        related_name="notifications"
+    )
+
+    created_by = models.ForeignKey(
+        Staff,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True
+    )
+
+    notification_type = models.CharField(
+        max_length=20,
+        choices=NOTIFICATION_TYPES
+    )
+
+    title = models.CharField(
+        max_length=255
+    )
+
+    message = models.TextField()
+
+    is_read = models.BooleanField(
+        default=False
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True
+    )
+
+    class Meta:
+        db_table = "student_notification"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.student.name} - {self.title}"
+    
+
+# Exam or Event Notification
+class Exam(models.Model):
+    school = models.ForeignKey(School, on_delete=models.CASCADE)
+    created_by = models.ForeignKey(Staff, on_delete=models.CASCADE)  # principal
+
+    title = models.CharField(max_length=255)
+    description = models.TextField()
+
+    exam_date = models.DateField()
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+
+    class_group = models.ForeignKey(SchoolClass, on_delete=models.CASCADE)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+class ExamNotification(models.Model):
+    exam = models.ForeignKey(Exam, on_delete=models.CASCADE)
+
+    title = models.CharField(max_length=255)
+    message = models.TextField()
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    
