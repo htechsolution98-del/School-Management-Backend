@@ -4365,9 +4365,7 @@ class StudentAttendanceSerializer(serializers.ModelSerializer):
         model = StudentAttendance
         fields = [
             "id",
-            "school",
             "student",
-            "attendance_by",
             "is_present",
             "is_absent",
             "attendance_date",
@@ -4406,7 +4404,22 @@ class StudentAttendanceSerializer(serializers.ModelSerializer):
         validated_data["school"] = request.user.school
         validated_data["attendance_by"] = request.user.staff
 
-        return super().create(validated_data)
+        attendance = super().create(validated_data)
+
+        StudentNotification.objects.create(
+            school=attendance.school,
+            student=attendance.student,
+            created_by=request.user.staff,
+            notification_type="ATTENDANCE",
+            title="Attendance Updated",
+            message=(
+                f"{attendance.student.name} marked "
+                f"{'Present' if attendance.is_present else 'Absent'} "
+                f"on {attendance.attendance_date}"
+            )
+        )
+
+        return attendance
 
 
 from rest_framework import serializers
@@ -4871,9 +4884,45 @@ class StaffFaceSerializer(serializers.ModelSerializer):
             face.save()
 
             return face
-    
+
+class ParentCreateSerializer(serializers.Serializer):
+    username = serializers.CharField()
+    email = serializers.EmailField()
+    password = serializers.CharField(write_only=True)
+
+    def create(self, validated_data):
+
+        user = User.objects.create_user(
+            username=validated_data["username"],
+            email=validated_data["email"],
+            password=validated_data["password"],
+        )
+
+        parent = Parent.objects.create(
+            user=user
+        )
+
+        return parent
+
 class StaffFaceVerifySerializer(serializers.Serializer):
     image=serializers.ImageField()
     
+class StudentDocumentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model=StudentDocument
+        fields=["student","document_type","title","description","document"]
 
+class StudentNotificationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model=StudentNotification
+        fields=["student","notification_type","title","message"]
 
+class ExamSerializer(serializers.ModelSerializer):
+    class Meta:
+        model=Exam
+        fields=["title","description","exam_date","start_time","end_time","class_group"]
+
+class ExamNotificationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model=ExamNotification
+        fields=["exam","title","message"]

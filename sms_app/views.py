@@ -525,7 +525,13 @@ class Isstudent(BasePermission):
             and request.user.is_authenticated
             and request.user.groups.filter(name="student").exists()
         )
-
+class Isparent(BasePermission):
+    def has_permission(self, request, view):
+        return (
+            request.user
+            and request.user.is_authenticated
+            
+        )
 
 class Isteacher(BasePermission):
     def has_permission(self, request, view):
@@ -2650,6 +2656,7 @@ class GetStudentView(ModelViewSet):
 
 class GetLocationView(APIView):
     permission_classes = [IsAuthenticated, IsCLerk]
+    
 
     def post(self, request):
         serializer = AttendanceLocationSerializer(
@@ -2673,6 +2680,26 @@ class GetLocationView(APIView):
 
         return Response(serializer.data, status=status.HTTP_200_OK)
 
+# class DeleteUpdateLocationView(APIView):
+#     permission_classes=[IsAuthenticated,IsCLerk]
+
+#     def delete(self,request,pk):
+#         attendancelocation=get_object_or_404(AttendanceLocation,pk=pk)
+#         attendancelocation.delete()
+#         return Response(
+#             {"message": "Location deleted successfully"},
+#              status=status.HTTP_204_NO_CONTENT
+#         )
+
+#     def put(self,pk):
+#         attendancelocation=get_object_or_404(AttendanceLocation,pk=pk)
+#         serializer=AttendanceLocationSerializer(attendancelocation,data=request.data)
+#         if serializer.is_valid():
+#             serializer.save()
+#             return Response(serializer.data)
+#         return Response(serializer.errors)
+
+    
 
 class AttendanceView(ModelViewSet):
     queryset = Attendance.objects.all()
@@ -3992,7 +4019,7 @@ from .models import StudentAttendance
 
 
 class StudentAttendanceView(APIView):
-
+    permission_classes=[IsAuthenticated]
     def get(self, request):
 
         queryset = StudentAttendance.objects.filter(
@@ -4625,3 +4652,105 @@ class StaffFaceVerifyView(APIView):
             "confidence": confidence,
             "raw_response": result
         })
+
+class ParentCreateView(APIView):
+
+    def post(self, request):
+
+        serializer = ParentCreateSerializer(
+            data=request.data
+        )
+
+        if serializer.is_valid():
+
+            parent = serializer.save()
+
+            return Response(
+                {
+                    "message": "Parent created successfully",
+                    "parent_id": parent.id,
+                },
+                status=status.HTTP_201_CREATED,
+            )
+
+        return Response(
+            serializer.errors,
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+
+
+class StudentDocumentViews(APIView):
+    def get_permissions(self):
+        if self.request.method == "GET":
+            return [IsAuthenticated(), Isparent()]
+        return [IsAuthenticated(), Isteacher()]
+
+    def get(self,request):
+        parent=get_object_or_404(Parent,user=request.user)
+        studentdocument=StudentDocument.objects.filter(student__parent=parent)
+        serializer=StudentDocumentSerializer(studentdocument,many=True)
+        return Response(serializer.data)
+    
+    def post(self,request):
+        serializer=StudentDocumentSerializer(data=request.data)
+
+        if serializer.is_valid():
+            serializer.save(school=request.user.school,uploaded_by=request.user.staff)
+            return Response(serializer.data)
+        return Response(serializer.errors,status=404)
+
+
+
+class StudentNotificationView(APIView):
+    permission_classes=[IsAuthenticated]
+    # def get_permissions(self):
+    #     if self.request.method == "GET":
+    #         return [IsAuthenticated(), Isparent()]
+    #     return [IsAuthenticated(), Isteacher()]
+
+    def get(self,request):
+        parent=get_object_or_404(Parent,user=request.user)
+        print(parent)
+        notification=StudentNotification.objects.filter(student__parent=parent).order_by("-created_at")
+        print(notification)
+        serializer=StudentNotificationSerializer(notification,many=True)
+        return Response(serializer.data)
+    
+    def post(self,request):
+        serializer=StudentNotificationSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save(school=request.user.school,created_by=request.user.staff)
+            return Response(serializer.data)
+        return Response(serializer.errors,status=404)
+
+
+class ExamView(APIView):
+    permission_classes=[IsAuthenticated]
+    def get(self,request):
+        school = request.user.parent_profile.school
+        print(school)
+        notifications = ExamNotification.objects.filter(
+            exam__school=school
+        ).order_by("-created_at")
+
+        serializer = ExamNotificationSerializer(notifications, many=True)
+        return Response(serializer.data)
+    
+    def post(self,request):
+        serializer=ExamSerializer(data=request.data)
+        if serializer.is_valid():
+            exam=serializer.save(school=request.user.school,created_by=request.user.staff,)
+            ExamNotification.objects.create(
+                exam=exam,
+                title=f"New Exam {exam.title}",
+                message=(
+                    f"Exam scheduled on {exam.exam_date} "
+                    f"from {exam.start_time} to {exam.end_time}"
+                )
+            )
+            return Response(serializer.data)
+        
+        return Response(serializer.errors,status=404)
+    
+   

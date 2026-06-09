@@ -178,6 +178,7 @@ urlpatterns = [
     
     #FOR ATTENDANCE LOCATION
     path('api/get-location/', GetLocationView.as_view()),
+    # path('api/delete-location/<int:pk>/',DeleteUpdateLocationView.as_view()),
     
     path('api/api-login/', LoginView.as_view()),
     
@@ -198,8 +199,10 @@ urlpatterns = [
      # To get remaining leave for staff when click on apply leave button for show remaining leave
      path('api/get-remaining-leaves/',GetRemainingLeaveView.as_view()),
      path('api/bulkstatus/<int:pk>/',BulkLeaveStatusView.as_view()),
-
-     
+    path('api/student-documents/',StudentDocumentViews.as_view(),name="student-documents"),
+    path('api/student-notification/',StudentNotificationView.as_view()),
+    path('api/exam-notification/',ExamView.as_view()),
+    path('parent-create/',ParentCreateView.as_view()),
 
     path('map/',TemplateView.as_view(template_name='map.html')),
     
@@ -208,20 +211,14 @@ urlpatterns = [
     
     # path('in/',TemplateView.as_view(template_name='index.html')),
     path('api/import-students/',upload_students.as_view()),
-   
     path('api/today/',TodayAttendanceStatusView.as_view()),
-   
-    
     path('api/razor/order/',RazorpayOrderView.as_view()),
-    
     path('api/payment/verify/',VerifyPaymentView.as_view()),
-    
     path('api/my-fees/', MyStudentFeeView.as_view()),
     path('api/student-fee/razor/order/', StudentFeeRazorpayOrderView.as_view()),
     path('api/student-fee/razor/verify/', StudentFeeRazorpayVerifyView.as_view()),
     path('api/offline/payment/',OffilinePaymentView.as_view()),
     path('api/get_receipt/<int:student_id>/<int:form_id>/',get_receipt),
-    
     path('api/schoollist/',SchoolListView.as_view()),
     path('face-enroll/',StaffFaceEnrollView.as_view()),
     path('face-verify/',StaffFaceVerifyView.as_view()),
