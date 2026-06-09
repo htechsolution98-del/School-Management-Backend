@@ -133,7 +133,7 @@ class StaffRemainingLeaveSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = StaffRemainingLeave
-        fields = ["id", "staff", "staff_name", "leave_type", "total_levaes", "remaining_leaves", ]
+        fields = ["id", "staff", "staff_name", "leave_type", "total_levaes", "remaining_leaves" ]
         read_only_fields = ["id"]
 
 
@@ -420,15 +420,14 @@ class CertificateRequestSerializer(serializers.ModelSerializer):
         
         
 class ClerkCertificateRequestSerializer(serializers.ModelSerializer):
-    # student_name = serializers.CharField(source="student.user.username", read_only=True)
+    student_name = serializers.CharField(source="student.user.username", read_only=True)
     certificate_type_name = serializers.CharField(source="certificate_type.name", read_only=True)
 
     class Meta:
         model = CertificateRequest
-        fields = [
-            "id",
-            # "student",
-            # "student_name",
+        fields = ["id",
+            "student",
+            "student_name",
             "certificate_type",
             "certificate_type_name",
             "status",

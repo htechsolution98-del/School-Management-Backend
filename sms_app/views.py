@@ -413,8 +413,7 @@ class LoginView(APIView):
                 "school_id": response_data["school_id"],
                 "school_slug": response_data["school_slug"],
                 "roles": response_data["roles"],
-                "modules": response_data["modules"],
-                "access":response_data['access']
+                "modules": response_data["modules"]
             },
             status=status.HTTP_200_OK,
         )

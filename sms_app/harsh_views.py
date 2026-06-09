@@ -8,7 +8,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import BasePermission
 from .harsh_serializer import *
-from rest_framework.generics import GenericAPIView, ListCreateAPIView
+from rest_framework.generics import GenericAPIView, ListCreateAPIView, ListAPIView
 from rest_framework import status
 from rest_framework.exceptions import ValidationError
 from rest_framework.decorators import action
@@ -149,7 +149,26 @@ class ChangeLeaveView(ModelViewSet): # for approving day wise APPROVAL
             )
 
         return super().update(request, *args, **kwargs)
+    
+    
+class GetStaffRemainingleave(ListAPIView):
+    permission_classes = [IsAuthenticated]
 
+    def get(self, request):
+        # leave_template = request.data.get("leave_template")
+        user = request.user
+
+        staff = Staff.objects.filter(user=user).first()
+        queryset = StaffRemainingLeave.objects.filter(
+            staff=staff, school=user.school
+            # , leave_template=leave_template
+        )
+
+        serializer = StaffRemainingLeaveSerializer(queryset, many=True)
+        return Response(serializer.data)
+    
+    
+    
 
 class GetRemainingLeaveView(APIView): # perticular staff leave request
     permission_classes = [IsAuthenticated]
@@ -275,62 +294,34 @@ class CertificateTypeSerializer(ModelViewSet): #for create, read, update, delete
         
 
 
-# class CertificateRequestViewSet(ModelViewSet):
-#     serializer_class = CertificateRequestSerializer
-#     permission_classes = [IsAuthenticated]
-
-#     def get_queryset(self):
-#         student = Student.objects.filter(user=self.request.user).first()
-#         if not student:
-#             return CertificateRequest.objects.none()
-
-#         return CertificateRequest.objects.filter(student=student)
-
-#     def perform_create(self, serializer):
-#         student = Student.objects.filter(user=self.request.user).first()
-
-#         if not student:
-#             raise ValidationError("Student profile not found.")
-        
-#         if CertificateRequest.objects.filter(
-#                 student=student,
-#                 certificate_type=serializer.validated_data["certificate_type"],
-#                 status="PENDING"
-#             ).exists():
-            
-#             raise ValidationError("Request already pending.")
-
-#         serializer.save(student=student)
-
-
 class CertificateRequestViewSet(ModelViewSet):
     serializer_class = CertificateRequestSerializer
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        staff = Staff.objects.filter(user=self.request.user).first()
-
-        if not staff:
+        student = Student.objects.filter(user=self.request.user).first()
+        if not student:
             return CertificateRequest.objects.none()
 
-        return CertificateRequest.objects.filter(
-            school=staff.school
-        )
-        
+        return CertificateRequest.objects.filter(student=student, school=student.school)
+
     def perform_create(self, serializer):
-        staff = Staff.objects.filter(user=self.request.user).first()
+        student = Student.objects.filter(user=self.request.user).first()
 
-        if not staff:
-            raise ValidationError("Staff not found")
-
-        # OPTIONAL RULE: only teachers can create
-        if staff.category != "TEACHER":
-            raise ValidationError("Only teachers can create requests")
-
-        serializer.save(
-            school=staff.school
-        )
+        if not student:
+            raise ValidationError("Student profile not found.")
         
+        if CertificateRequest.objects.filter(
+                student=student,
+                school=student.school,
+                certificate_type=serializer.validated_data["certificate_type"],
+                status="PENDING"
+            ).exists():
+            
+            raise ValidationError("Request already pending.")
+
+        serializer.save(student=student)
+      
         
 
 
