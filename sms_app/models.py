@@ -2116,7 +2116,7 @@ class CertificateType(models.Model):
     
     
 class CertificateRequest(models.Model):
-    # student = models.ForeignKey(Student, on_delete=models.CASCADE)
+    student = models.ForeignKey(Student, on_delete=models.CASCADE, null=True)
     certificate_type = models.ForeignKey(CertificateType, on_delete=models.CASCADE)
     school = models.ForeignKey(School, on_delete=models.CASCADE, null=True)
 

@@ -223,7 +223,10 @@ urlpatterns = [
      path('api/admission/form/link/',ShareFormLink), #to get active form link for admission form fill up
      
      # To get remaining leave for staff when click on apply leave button for show remaining leave
-     path('api/get-remaining-leaves/',GetRemainingLeaveView.as_view()),
+     path('api/get-leave-requests/',GetRemainingLeaveView.as_view()),
+     
+     
+     path('api/get-remaining-leaves/',GetStaffRemainingleave.as_view()),
      
      
     #  path('api/leave-type/', LeaveTypeGenericView.as_view()),
