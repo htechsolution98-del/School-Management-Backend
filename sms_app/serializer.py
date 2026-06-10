@@ -25,6 +25,7 @@ from django.contrib.auth.models import Group
 from rest_framework import serializers
 from django.db.models import Q, Sum
 from django.contrib.auth import get_user_model
+from django.utils.timezone import now
 import cv2
 import numpy as np
 User = get_user_model()
@@ -4492,6 +4493,11 @@ class HomeworkSerializer(serializers.ModelSerializer):
             )
 
         return attrs
+    
+    def validate_due_date(self, value):
+        if value < date.today():
+            raise serializers.ValidationError("Due date cannot be in the past.")
+        return value
 
     def create(self, validated_data):
         request = self.context.get("request")
@@ -4926,3 +4932,23 @@ class ExamNotificationSerializer(serializers.ModelSerializer):
     class Meta:
         model=ExamNotification
         fields=["exam","title","message"]
+
+class HomeworkSubmissionSerializer(serializers.ModelSerializer):
+    class Meta():
+        model=HomeworkSubmission
+        fields=["student","homework","file","submitted_at"]
+        read_only_fields=["submitted_at"]
+
+    def validate(self, attrs):
+        homework = attrs.get("homework")
+
+        if homework and homework.due_date:
+            submission_date = now().date()   # ✅ only DATE, no time
+            due_date = homework.due_date
+
+            if submission_date > due_date:
+                raise serializers.ValidationError(
+                    "You cannot submit homework after the due date."
+                )
+
+        return attrs

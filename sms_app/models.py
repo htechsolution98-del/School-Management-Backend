@@ -2334,6 +2334,7 @@ class Exam(models.Model):
     school = models.ForeignKey(School, on_delete=models.CASCADE)
     created_by = models.ForeignKey(Staff, on_delete=models.CASCADE)  # principal
 
+
     title = models.CharField(max_length=255)
     description = models.TextField()
 
@@ -2353,3 +2354,16 @@ class ExamNotification(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True)
     
+
+
+class HomeworkSubmission(models.Model):
+    homework=models.ForeignKey(Homework,on_delete=models.CASCADE)
+    student=models.ForeignKey(Student,on_delete=models.CASCADE,related_name='submission')
+    file = models.FileField(upload_to='homework_submissions/')
+    submitted_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('homework', 'student')
+
+    def __str__(self):
+        return f"{self.student} - {self.homework}"

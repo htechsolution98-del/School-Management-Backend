@@ -169,7 +169,7 @@ router.register(r'student-fee-payment', StudentFeePaymentViewSet, basename='stud
 
 
 router.register(r'homework', HomeworkViewSet, basename='homework')
-router.register(r'homework-submission', HomeworkSubmissionViewSet, basename='homework-submission')
+
 
 router.register(r'studentget', StudentGetView, basename='studentget')
 
@@ -252,6 +252,10 @@ urlpatterns = [
     path('face-enroll/',StaffFaceEnrollView.as_view()),
     path('face-verify/',StaffFaceVerifyView.as_view()),
     path('perstaff-leave/',GetRemainingLeavePerStaffView.as_view()),
+    path('homework-submission/',HomeworkSubmissionView.as_view()),
+    path('api/student-documents/',StudentDocumentView.as_view()),
+    path('api/exam-notification/',ExamView.as_view()),
+    path('api/attendance-notification/',StudentNotificationView.as_view()),
     # ITS FOR GET STIDENT FOR ATTENDANSE
     
     path(
