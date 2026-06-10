@@ -2106,8 +2106,19 @@ class CertificateRequest(models.Model):
     class Meta:
         db_table = "certificate_request"
         
-# class Certificate(models.Model):
-#     student = 
+        
+        
+class Certificate(models.Model):
+    request = models.OneToOneField(CertificateRequest,on_delete=models.CASCADE,related_name="certificate")
+
+    certificate_number = models.CharField(max_length=50,unique=True)
+
+    file = models.FileField(upload_to="certificates/")
+
+    issued_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "certificate"
     
 
 

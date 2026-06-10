@@ -187,7 +187,7 @@ router.register(r"certificate-type", CertificateTypeSerializer, basename="certif
 router.register(r"certificate-request", CertificateRequestViewSet, basename="certificate-request")
 
 
-router.register(r"certificate-request-status", ClerkCertificateRequestViewSet, basename="certificate-request-status")
+router.register(r"clerk-certificate-request", ClerkCertificateRequestViewSet, basename="clerk-certificate-request")
 
 
 

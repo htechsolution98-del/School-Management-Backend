@@ -294,37 +294,138 @@ class CertificateTypeSerializer(ModelViewSet): #for create, read, update, delete
         
 
 
+# class CertificateRequestViewSet(ModelViewSet):
+#     serializer_class = CertificateRequestSerializer
+#     permission_classes = [IsAuthenticated]
+
+#     def get_queryset(self):
+#         student = Student.objects.filter(user=self.request.user).first()
+#         if not student:
+#             return CertificateRequest.objects.none()
+
+#         return CertificateRequest.objects.filter(student=student, school=student.school)
+
+#     def perform_create(self, serializer):
+#         student = Student.objects.filter(user=self.request.user).first()
+
+#         if not student:
+#             raise ValidationError("Student profile not found.")
+        
+#         if CertificateRequest.objects.filter(
+#                 student=student,
+#                 school=student.school,
+#                 certificate_type=serializer.validated_data["certificate_type"],
+#                 status="PENDING"
+#             ).exists():
+            
+#             raise ValidationError("Request already pending.")
+
+#         serializer.save(student=student)
+      
+        
+
+
+# class ClerkCertificateRequestViewSet(ModelViewSet):
+#     serializer_class = ClerkCertificateRequestSerializer
+#     permission_classes = [IsAuthenticated, IsCLerk]
+
+#     def get_queryset(self):
+#         staff = Staff.objects.filter(
+#             user=self.request.user,
+#             category="CLERK"
+#         ).first()
+
+#         if not staff:
+#             return CertificateRequest.objects.none()
+
+#         queryset = CertificateRequest.objects.filter(
+#             certificate_type__school=staff.school
+#         ).select_related("certificate_type")
+
+#         status = self.request.query_params.get("status")
+#         if status:
+#             queryset = queryset.filter(status=status.upper())
+
+#         return queryset
+
+#     def perform_update(self, serializer):
+#         staff = Staff.objects.filter(
+#             user=self.request.user,
+#             category="CLERK"
+#         ).first()
+
+#         if not staff:
+#             raise ValidationError("Clerk profile not found.")
+
+#         instance = self.get_object()
+
+#         # Only allow status change if PENDING
+#         if instance.status != "PENDING":
+#             raise ValidationError("Request already processed.")
+
+#         new_status = serializer.validated_data.get("status")
+
+#         if new_status not in ["APPROVED", "REJECTED"]:
+#             raise ValidationError("Invalid status value.")
+
+#         serializer.save()
+
+
+
+
 class CertificateRequestViewSet(ModelViewSet):
     serializer_class = CertificateRequestSerializer
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        student = Student.objects.filter(user=self.request.user).first()
+        student = Student.objects.filter(
+            user=self.request.user
+        ).first()
+
         if not student:
             return CertificateRequest.objects.none()
 
-        return CertificateRequest.objects.filter(student=student, school=student.school)
+        return CertificateRequest.objects.filter(
+            student=student
+        ).select_related(
+            "certificate_type"
+        ).prefetch_related(
+            "certificate"
+        )
 
     def perform_create(self, serializer):
-        student = Student.objects.filter(user=self.request.user).first()
+        student = Student.objects.filter(
+            user=self.request.user
+        ).first()
 
         if not student:
-            raise ValidationError("Student profile not found.")
-        
+            raise ValidationError(
+                "Student profile not found."
+            )
+
+        certificate_type = serializer.validated_data[
+            "certificate_type"
+        ]
+
         if CertificateRequest.objects.filter(
-                student=student,
-                school=student.school,
-                certificate_type=serializer.validated_data["certificate_type"],
-                status="PENDING"
-            ).exists():
-            
-            raise ValidationError("Request already pending.")
+            student=student,
+            certificate_type=certificate_type,
+            status="PENDING"
+        ).exists():
 
-        serializer.save(student=student)
-      
+            raise ValidationError(
+                "Request already pending."
+            )
+
+        serializer.save(
+            student=student,
+            school=student.school
+        )
         
-
-
+        
+        
+        
+        
 class ClerkCertificateRequestViewSet(ModelViewSet):
     serializer_class = ClerkCertificateRequestSerializer
     permission_classes = [IsAuthenticated, IsCLerk]
@@ -339,33 +440,53 @@ class ClerkCertificateRequestViewSet(ModelViewSet):
             return CertificateRequest.objects.none()
 
         queryset = CertificateRequest.objects.filter(
-            certificate_type__school=staff.school
-        ).select_related("certificate_type")
+            school=staff.school
+        ).select_related(
+            "student",
+            "certificate_type"
+        )
 
         status = self.request.query_params.get("status")
+
         if status:
-            queryset = queryset.filter(status=status.upper())
+            queryset = queryset.filter(
+                status=status.upper()
+            )
 
         return queryset
 
     def perform_update(self, serializer):
-        staff = Staff.objects.filter(
-            user=self.request.user,
-            category="CLERK"
-        ).first()
-
-        if not staff:
-            raise ValidationError("Clerk profile not found.")
-
         instance = self.get_object()
 
-        # Only allow status change if PENDING
         if instance.status != "PENDING":
-            raise ValidationError("Request already processed.")
+            raise ValidationError(
+                "Request already processed."
+            )
 
-        new_status = serializer.validated_data.get("status")
+        status = serializer.validated_data.get("status")
 
-        if new_status not in ["APPROVED", "REJECTED"]:
-            raise ValidationError("Invalid status value.")
+        uploaded_file = serializer.validated_data.get("certificate_file")
 
-        serializer.save()
+        if status == "APPROVED":
+
+            if not uploaded_file:
+                raise ValidationError(
+                    "Certificate PDF is required."
+                )
+
+            serializer.save(status="APPROVED")
+
+            Certificate.objects.create(
+                request=instance,
+                certificate_number=f"CERT-{uuid4().hex[:8].upper()}",
+                file=uploaded_file
+            )
+
+        elif status == "REJECTED":
+
+            serializer.save(status="REJECTED")
+
+        else:
+            raise ValidationError(
+                "Status must be APPROVED or REJECTED."
+            )

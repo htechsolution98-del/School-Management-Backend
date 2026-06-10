@@ -412,26 +412,84 @@ class CerificateTypeSerializer(serializers.ModelSerializer):
         
         
         
+# class CertificateRequestSerializer(serializers.ModelSerializer):
+#     class Meta:
+#         model = CertificateRequest
+#         fields = "__all__"
+#         read_only_fields = ["student", "status"]
+        
+        
+# class ClerkCertificateRequestSerializer(serializers.ModelSerializer):
+#     student_name = serializers.CharField(source="student.user.username", read_only=True)
+#     certificate_type_name = serializers.CharField(source="certificate_type.name", read_only=True)
+
+#     class Meta:
+#         model = CertificateRequest
+#         fields = ["id",
+#             "student",
+#             "student_name",
+#             "certificate_type",
+#             "certificate_type_name",
+#             "status",
+#             "created_at",
+#         ]
+        
+
+
 class CertificateRequestSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = CertificateRequest
-        fields = "__all__"
-        read_only_fields = ["student", "status"]
-        
-        
-class ClerkCertificateRequestSerializer(serializers.ModelSerializer):
-    student_name = serializers.CharField(source="student.user.username", read_only=True)
-    certificate_type_name = serializers.CharField(source="certificate_type.name", read_only=True)
+    certificate_type_name = serializers.CharField(source="certificate_type.name",read_only=True)
+
+    certificate_file = serializers.SerializerMethodField()
 
     class Meta:
         model = CertificateRequest
-        fields = ["id",
+        fields = [
+            "id",
+            "certificate_type",
+            "certificate_type_name",
+            "status",
+            "certificate_file",
+            "created_at",
+        ]
+
+        read_only_fields = [
+            "student",
+            "status",
+        ]
+
+    def get_certificate_file(self, obj):
+        if hasattr(obj, "certificate"):
+            return obj.certificate.file.url
+        return None
+    
+    
+    
+class ClerkCertificateRequestSerializer(serializers.ModelSerializer):
+    student_name = serializers.CharField(
+        source="student.user.username",
+        read_only=True
+    )
+
+    certificate_type_name = serializers.CharField(
+        source="certificate_type.name",
+        read_only=True
+    )
+
+    certificate_file = serializers.FileField(
+        write_only=True,
+        required=False
+    )
+
+    class Meta:
+        model = CertificateRequest
+
+        fields = [
+            "id",
             "student",
             "student_name",
             "certificate_type",
             "certificate_type_name",
             "status",
+            "certificate_file",
             "created_at",
         ]
-        
-    
