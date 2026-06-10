@@ -47,7 +47,9 @@ INSTALLED_APPS = [
     
     "corsheaders",
     "drf_yasg",
+    "channels",
 ]
+ASGI_APPLICATION = "sms.asgi.application"
 ALLOWED_HOSTS = ['*']  # for testing
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
@@ -85,6 +87,15 @@ import os
 
 
 REDIS_URL = os.getenv("REDIS_URL")
+
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        "CONFIG": {
+            "hosts": [REDIS_URL],
+        },
+    },
+}
 
 if not REDIS_URL:
     REDIS_URL = "redis://127.0.0.1:6379/1"
@@ -155,6 +166,8 @@ RAZOR_PAY_SECRET_KEY = 'tOuPZYUHmzksgtc0370q89fO'
 
 from pathlib import Path
 
+
+from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # DATABASES = {
@@ -165,20 +178,27 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # }
 
 
+
+
 import dj_database_url
+DATABASE_URL = os.environ.get("DATABASE_URL")
 
 DATABASES = {
-    'default': dj_database_url.config(
-        default=os.environ.get("DATABASE_URL"),
-        conn_max_age=600,
-    )
+    "default": dj_database_url.parse(DATABASE_URL)
 }
+# DATABASES = {
+#     'default': dj_database_url.config(
+#         default=os.environ.get("DATABASE_URL"),
+#         conn_max_age=600,
+#     )
+# }
 
 # 🔥 FORCE SSL PROPERLY
 # DATABASES['default']['OPTIONS'] = {
 #     'sslmode':'require',
 #     'connect_timeout': 10,
 # }
+
 # Password validation
 # https://docs.djangoproject.com/en/6.0/ref/settings/#auth-password-validators
 
@@ -232,3 +252,7 @@ EMAIL_HOST_USER = 'yash.error.1@gmail.com'
 EMAIL_HOST_PASSWORD = 'zjsartihpvaqfvpi'
 
 DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
+
+FACEPP_API_KEY='bjE_bVqsDDgX6ekpuqdDjwZnnydn27zG'
+
+FACEPP_API_SECRET='waQF9vWlZyH-HQtqKJezJlX7vAAjNYY4'
