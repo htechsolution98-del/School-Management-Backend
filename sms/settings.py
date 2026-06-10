@@ -47,7 +47,9 @@ INSTALLED_APPS = [
     
     "corsheaders",
     "drf_yasg",
+    "channels",
 ]
+ASGI_APPLICATION = "sms.asgi.application"
 ALLOWED_HOSTS = ['*']  # for testing
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
@@ -85,6 +87,15 @@ import os
 
 
 REDIS_URL = os.getenv("REDIS_URL")
+
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        "CONFIG": {
+            "hosts": [REDIS_URL],
+        },
+    },
+}
 
 if not REDIS_URL:
     REDIS_URL = "redis://127.0.0.1:6379/1"

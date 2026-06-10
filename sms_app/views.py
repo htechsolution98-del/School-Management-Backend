@@ -43,7 +43,8 @@ from django.contrib.auth.models import Group
 
 from django.conf import settings
 from django.db import transaction
-
+from asgiref.sync import async_to_sync
+from channels.layers import get_channel_layer
 from rest_framework.views import APIView
 from rest_framework.generics import RetrieveAPIView
 from rest_framework.response import Response
@@ -4512,7 +4513,7 @@ class ExamView(APIView):
         serializer=ExamSerializer(data=request.data)
         if serializer.is_valid():
             exam=serializer.save(school=request.user.school,created_by=request.user.staff,)
-            ExamNotification.objects.create(
+            notification=ExamNotification.objects.create(
                 exam=exam,
                 title=f"New Exam {exam.title}",
                 message=(
@@ -4520,6 +4521,17 @@ class ExamView(APIView):
                     f"from {exam.start_time} to {exam.end_time}"
                 )
             )
+            channel_layer = get_channel_layer()
+
+            async_to_sync(channel_layer.group_send)(
+            "parents",
+            {
+                "type": "send_notification",
+                "notification_id": notification.id,
+                "title": notification.title,
+                "message": notification.message,
+            }
+        )
             return Response(serializer.data)
         
         return Response(serializer.errors,status=404)
