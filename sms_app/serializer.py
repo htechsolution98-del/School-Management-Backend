@@ -4921,7 +4921,7 @@ class StudentDocumentSerializer(serializers.ModelSerializer):
 class StudentNotificationSerializer(serializers.ModelSerializer):
     class Meta:
         model=StudentNotification
-        fields=["student","notification_type","title","message"]
+        fields=["notification_type","title","message"]
 
 class ExamSerializer(serializers.ModelSerializer):
     class Meta:
@@ -4943,7 +4943,7 @@ class HomeworkSubmissionSerializer(serializers.ModelSerializer):
         homework = attrs.get("homework")
 
         if homework and homework.due_date:
-            submission_date = now().date()   # ✅ only DATE, no time
+            submission_date = now().date() 
             due_date = homework.due_date
 
             if submission_date > due_date:
