@@ -409,7 +409,8 @@ class LoginView(APIView):
                 "school_id": response_data["school_id"],
                 "school_slug": response_data["school_slug"],
                 "roles": response_data["roles"],
-                "modules": response_data["modules"]
+                "modules": response_data["modules"],
+                "access_token":access_token
             },
             status=status.HTTP_200_OK,
         )
@@ -4508,11 +4509,16 @@ class ExamView(APIView):
         serializer = ExamNotificationSerializer(notifications, many=True)
         return Response(serializer.data)
     
-    def post(self,request):
-        serializer=ExamSerializer(data=request.data)
+    def post(self, request):
+        serializer = ExamSerializer(data=request.data)
+
         if serializer.is_valid():
-            exam=serializer.save(school=request.user.school,created_by=request.user.staff,)
-            notification=ExamNotification.objects.create(
+            exam = serializer.save(
+                school=request.user.school,
+                created_by=request.user.staff,
+            )
+
+            notification = ExamNotification.objects.create(
                 exam=exam,
                 title=f"New Exam {exam.title}",
                 message=(
@@ -4520,20 +4526,24 @@ class ExamView(APIView):
                     f"from {exam.start_time} to {exam.end_time}"
                 )
             )
+
             channel_layer = get_channel_layer()
 
+            group_name = f"school_{exam.school.id}_parents"   # ✅ FIXED
+
             async_to_sync(channel_layer.group_send)(
-            "parents",
-            {
-                "type": "send_notification",
-                "notification_id": notification.id,
-                "title": notification.title,
-                "message": notification.message,
-            }
-        )
+                group_name,
+                {
+                    "type": "send_notification",
+                    "notification_id": notification.id,
+                    "title": notification.title,
+                    "message": notification.message,
+                }
+            )
+
             return Response(serializer.data)
-        
-        return Response(serializer.errors,status=404)
+
+        return Response(serializer.errors, status=404)
 
 class HomeworkSubmissionView(APIView):
     # permission_classes=[Isstudent]

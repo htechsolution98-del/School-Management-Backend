@@ -33,6 +33,8 @@ DEBUG = True
 # Application definition
 
 INSTALLED_APPS = [
+    "channels",
+    "daphne",
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -47,7 +49,7 @@ INSTALLED_APPS = [
     
     "corsheaders",
     "drf_yasg",
-    "channels",
+    
 ]
 ASGI_APPLICATION = "sms.asgi.application"
 ALLOWED_HOSTS = ['*']  # for testing
@@ -92,7 +94,7 @@ CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
         "CONFIG": {
-            "hosts": [REDIS_URL],
+            "hosts": ["redis://127.0.0.1:6379/0"]
         },
     },
 }
