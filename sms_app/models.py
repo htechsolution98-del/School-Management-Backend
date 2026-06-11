@@ -2048,59 +2048,60 @@ class Homework(models.Model):
         return f"{self.title}"
 
 
-class HomeworkSubmission(models.Model):
-    STATUS_CHOICES = [
-        ("pending", "Pending"),
-        ("submitted", "Submitted"),
-        ("late", "Late Submission"),
-        ("checked", "Checked"),
-    ]
+# class HomeworkSubmission(models.Model):
+#     STATUS_CHOICES = [
+#         ("pending", "Pending"),
+#         ("submitted", "Submitted"),
+#         ("late", "Late Submission"),
+#         ("checked", "Checked"),
+#     ]
 
-    school = models.ForeignKey(
-        "School", on_delete=models.CASCADE, related_name="homework_submissions"
-    )
+#     school = models.ForeignKey(
+#         "School", on_delete=models.CASCADE, related_name="homework_submissions"
+#     )
 
-    homework = models.ForeignKey(
-        "Homework", on_delete=models.CASCADE, related_name="submissions"
-    )
+#     homework = models.ForeignKey(
+#         "Homework", on_delete=models.CASCADE, related_name="submissions"
+#     )
 
-    student = models.ForeignKey(
-        "Student", on_delete=models.CASCADE, related_name="homework_submissions"
-    )
+#     student = models.ForeignKey(
+#         "Student", on_delete=models.CASCADE, related_name="homework_submissions"
+#     )
 
-    attachment = models.FileField(
-        upload_to="homework/submissions/", null=True, blank=True
-    )
+#     attachment = models.FileField(
+#         upload_to="homework/submissions/", null=True, blank=True
+#     )
 
-    submitted_at = models.DateTimeField(null=True, blank=True)
+#     submitted_at = models.DateTimeField(null=True, blank=True)
 
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
+#     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
 
-    marks = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+#     marks = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
 
-    teacher_remark = models.TextField(null=True, blank=True)
+#     teacher_remark = models.TextField(null=True, blank=True)
 
-    checked_by = models.ForeignKey(
-        "Staff",
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="checked_homeworks",
-    )
+#     checked_by = models.ForeignKey(
+#         "Staff",
+#         on_delete=models.SET_NULL,
+#         null=True,
+#         blank=True,
+#         related_name="checked_homeworks",
+#     )
 
-    checked_at = models.DateTimeField(null=True, blank=True)
+#     checked_at = models.DateTimeField(null=True, blank=True)
 
-    created_at = models.DateTimeField(auto_now_add=True)
+#     created_at = models.DateTimeField(auto_now_add=True)
 
-    updated_at = models.DateTimeField(auto_now=True)
+#     updated_at = models.DateTimeField(auto_now=True)
 
-    class Meta:
-        db_table = "homework_submission"
-        unique_together = ["homework", "student"]
-        ordering = ["-created_at"]
+#     class Meta:
+#         db_table = "homework_submission"
+#         unique_together = ["homework", "student"]
+#         ordering = ["-created_at"]
 
-    def __str__(self):
-        return f"{self.student}"
+#     def __str__(self):
+#         return f"{self.student}"n
+
     
     
 class CertificateType(models.Model):
