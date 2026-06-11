@@ -4529,7 +4529,7 @@ class ExamView(APIView):
 
             channel_layer = get_channel_layer()
 
-            group_name = f"school_{exam.school.id}_parents"   # ✅ FIXED
+            group_name = f"school_{exam.school.id}_parents" 
 
             async_to_sync(channel_layer.group_send)(
                 group_name,
@@ -4546,13 +4546,11 @@ class ExamView(APIView):
         return Response(serializer.errors, status=404)
 
 class HomeworkSubmissionView(APIView):
-    # permission_classes=[Isstudent]
+    permission_classes=[Isstudent]
     def post(self,request):
         serializer=HomeworkSubmissionSerializer(data=request.data)
-        print("Before is_valid")
         if serializer.is_valid():
-            print("After is_valid")
-            serializer.save()
+            serializer.save(student=request.user)
             print("After save")
             return Response(serializer.data)
         return Response(serializer.errors,status=404)
