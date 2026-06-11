@@ -3810,11 +3810,37 @@ class StudentAttendanceView(APIView):
 
         serializer.is_valid(raise_exception=True)
 
-        serializer.save()
+        attendance=serializer.save()
+        if attendance.is_present:
+            status_text = "Present"
+        elif attendance.is_absent:
+            status_text = "Absent"
+        else:
+            status_text = "Not Marked"
+        notification=StudentNotification.objects.create(
+        school=request.user.school,
+        student=attendance.student,
+        created_by=request.user.staff,
+        notification_type="ATTENDANCE",
+        title="Attendance Marked",
+        message=f"Your child attendance has been marked as {status_text} on {attendance.attendance_date}"
+    )
+        channel_layer = get_channel_layer()
+
+        async_to_sync(channel_layer.group_send)(
+        f"school_{attendance.school.id}_attendance",
+        
+        {
+            "type": "attendance_message",
+            "notification_id": notification.id,
+            "title": notification.title,
+            "message": notification.message,
+        }
+    )
 
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
-
+      
 # from .homework_serializer import (
 #     HomeworkSerializer,
 #     GetHomeworkSerializer,
@@ -4486,12 +4512,6 @@ class StudentNotificationView(APIView):
         serializer=StudentNotificationSerializer(notification,many=True)
         return Response(serializer.data)
     
-    def post(self,request):
-        serializer=StudentNotificationSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save(school=request.user.school,created_by=request.user.staff)
-            return Response(serializer.data)
-        return Response(serializer.errors,status=404)
 
 
 class ExamView(APIView):

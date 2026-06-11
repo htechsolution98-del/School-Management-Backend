@@ -57,3 +57,55 @@ class EventNotificationConsumer(AsyncWebsocketConsumer):
             return user.staff.school.id
 
         return None
+
+
+
+
+
+class AttendanceNotificationConsumer(AsyncWebsocketConsumer):
+
+    async def connect(self):
+        self.user = self.scope["user"]
+        print("USER:", self.user)
+        if self.user.is_anonymous:
+            print("ANONYMOUS USER:")
+            await self.close()
+            return
+
+        school_id = await self.get_school_id()
+        print("School ID:", school_id)
+        if school_id is None:
+            print("NO PARENT PROFILE WAS FOUND")
+            await self.close()
+            return
+
+        self.group_name = f"school_{school_id}_attendance"
+
+        await self.channel_layer.group_add(
+            self.group_name,
+            self.channel_name
+        )
+        print("Connected to:", self.group_name)
+
+        await self.accept()
+
+    async def disconnect(self, close_code):
+        if hasattr(self, "group_name"):
+            await self.channel_layer.group_discard(
+                self.group_name,
+                self.channel_name
+            )
+
+    async def attendance_message(self, event):
+        await self.send(
+            text_data=json.dumps({
+                "title": event["title"],
+                "message": event["message"],
+            })
+        )
+
+    @database_sync_to_async
+    def get_school_id(self):
+        if hasattr(self.user, "parent_profile"):
+            return self.user.parent_profile.school_id
+        return None

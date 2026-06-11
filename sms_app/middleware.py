@@ -5,9 +5,6 @@ from channels.db import database_sync_to_async
 
 
 class JWTAuthMiddleware:
-    """
-    Middleware for JWT authentication in Django Channels WebSocket
-    """
 
     def __init__(self, app):
         self.app = app
@@ -17,20 +14,25 @@ class JWTAuthMiddleware:
 
         token = None
 
-        # 1. Try Authorization header
+        print("HEADERS:", scope.get("headers"))
+
         for key, value in scope.get("headers", []):
             if key == b"authorization":
                 auth = value.decode()
-                if "Bearer" in auth:
-                    token = auth.split(" ")[1]
+                print("AUTH:", auth)
 
-        # 2. Try query params (fallback)
+                if auth.startswith("Bearer "):
+                    token = auth.split(" ")[1]
+                    print("TOKEN:", token)
+
         if not token:
             query_string = scope.get("query_string", b"").decode()
             params = parse_qs(query_string)
             token = params.get("token", [None])[0]
 
         scope["user"] = await self.get_user(token)
+
+        print("USER:", scope["user"])
 
         return await self.app(scope, receive, send)
 
@@ -41,8 +43,15 @@ class JWTAuthMiddleware:
 
         try:
             jwt_auth = JWTAuthentication()
+
             validated_token = jwt_auth.get_validated_token(token)
+            print("VALIDATED TOKEN:", validated_token)
+
             user = jwt_auth.get_user(validated_token)
+            print("USER FOUND:", user)
+
             return user
-        except:
+
+        except Exception as e:
+            print("JWT ERROR:", str(e))
             return AnonymousUser()
