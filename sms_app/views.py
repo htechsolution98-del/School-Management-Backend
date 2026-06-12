@@ -352,9 +352,14 @@ class LoginView(APIView):
 
         user = serializer.validated_data["user"]
         
+        # user_block = User.objects.filter(username=user).first()
+        # print("...........",user_block)
+        
         staff = Staff.objects.filter(user=user).first()
+        print("sssssssss", staff)
 
         if staff:
+            # with transaction.atomic():
             carry_forward_leave(staff)
 
         # =====================================

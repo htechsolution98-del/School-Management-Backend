@@ -138,17 +138,6 @@ router.register(r'get-student',GetStudentView,basename='get-student')
 # FOR ATTENDANCE TRACKING METHOD [GET,POST,PUT,DELETE]
 router.register(r'attendance', AttendanceView, basename='attendance') 
 
-router.register(r'leave-type', LeaveTypeView, basename='leave-type')# For leave template tracking METHOD [GET,POST,PUT,DELETE]
-
-
-
-router.register(r'leave-template', LeaveTemplateView, basename='leave-template')# For leave template tracking METHOD [GET,POST,PUT,DELETE]
-router.register(r'leave-request', LeaveRequestView, basename='leave-request')# 
-
-router.register(r'get-leave-requests', GetLeaveRequestView, basename='get-leave-requests')# For get leave request for principle with filter [school filter add remainig]
-
-router.register(r'change-leave-status', ChangeLeaveView, basename='change-leave-status')# For approve leave request for principle METHOD [PUT]
-
 router.register(r'announcements', AnnouncementView, basename='announcements')# For managing announcements
 router.register(r'get-announcements', GetAnnouncementView, basename='get-announcements')# For get announcement for student,staff with filter [school filter add remainig]   
 router.register(r'razardata', RazarDataView, basename='razardata')# For get announcement for student,staff with filter [school filter add remainig]   
@@ -192,6 +181,20 @@ router.register(r"clerk-certificate-request", ClerkCertificateRequestViewSet, ba
 
 
 
+router.register(r"leave-templates", LeaveTemplateViewSet, basename="leave-templates")
+
+router.register(r"leave-types", LeaveTypeViewSet, basename="leave-types")
+
+router.register(r'leave-request', LeaveRequestView, basename='leave-request') 
+
+router.register(r'get-leave-requests', GetLeaveRequestView, basename='get-leave-requests')# For get leave request for principle with filter [school filter add remainig]
+
+router.register(r'change-leave-status', ChangeLeaveView, basename='change-leave-status')# For approve leave request for principle METHOD [PUT]
+
+
+
+
+
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -221,19 +224,18 @@ urlpatterns = [
      
      path('api/admission/form/link/',ShareFormLink), #to get active form link for admission form fill up
      
+     
+     
+     path('api/get-remaining-leaves/',GetStaffRemainingleave.as_view()),  
+     
      # To get remaining leave for staff when click on apply leave button for show remaining leave
-     path('api/get-leave-requests/',GetRemainingLeaveView.as_view()),
+     path('api/get-leave-requests-staff/',GetStaffLeaveRequest.as_view()),
      
-     
-     path('api/get-remaining-leaves/',GetStaffRemainingleave.as_view()),
-     
-     
-    #  path('api/leave-type/', LeaveTypeGenericView.as_view()),
-     
-    #  path('api/carry-forward/', LeaveCarryForward.as_view()),
      
      path("api/approve-all-leave/<int:pk>/",ChangeAllLeaveView.as_view()),
      
+
+
 
     path('map/',TemplateView.as_view(template_name='map.html')),
     

@@ -5,7 +5,7 @@ import uuid
 from django.contrib.auth.models import AbstractUser
 from django.utils import timezone
 from django.utils.text import slugify
-
+from django.core.validators import MinValueValidator
 from django.conf import settings
 
 
@@ -92,6 +92,10 @@ class SchoolFeature(models.Model):
     class Meta:
         unique_together = ("school", "feature")
         db_table = "school_feature"
+        
+    def __str__(self):
+        return self.feature.name
+    
 
 
 # ------------MODUL LIST------------
@@ -569,6 +573,9 @@ class Student(models.Model):
 
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    
+    def __str__(self):
+        return f"{self.gr_no}"
 
     class Meta:
         db_table = "student"
@@ -1016,7 +1023,7 @@ class AttendanceLocation(models.Model):
         db_table = "attendance_location"
 
 
-class Attendance(models.Model):
+class Attendance(models.Model): 
 
     school = models.ForeignKey(
         School, on_delete=models.CASCADE, null=True, blank=True, db_index=True
@@ -1053,49 +1060,48 @@ class Attendance(models.Model):
     
     
 
-class LeaveType(models.Model):
-    name = models.CharField(max_length=100, null=True, blank=True)
+class LeaveTemplate(models.Model):
+    TIMELINE_CHOICES = [
+        ("MONTHLY", "Monthly"),
+        ("QUARTERLY", "Quarterly"),
+        ("SEMI_ANNUAL", "Semi-Annual"),
+        ("ANNUAL", "Annual"),
+    ]
+    # name = models.CharField(max_length=100, null=True, blank=True)
+    time_line = models.CharField(max_length=20, choices=TIMELINE_CHOICES, null=True, blank=True)
     school = models.ForeignKey(School, on_delete=models.CASCADE, null=True)
     
     def __str__(self):
-        return self.name
+        return f"{self.school} - {self.time_line}"
     
     class Meta:
-        db_table = "leave_type"
+        db_table = "leave_template"
 
 
-class LeaveTemplate(models.Model):
-    # TIMELINE_CHOICES = [
-    #     ("MONTHLY", "Monthly"),
-    #     ("QUARTERLY", "Quarterly"),
-    #     ("SEMI_ANNUAL", "Semi-Annual"),
-    #     ("ANNUAL", "Annual"),
-    # ]
+class LeaveType(models.Model):
 
-    school = models.ForeignKey(
-        School, on_delete=models.CASCADE, null=True, blank=True, db_index=True
-    )
-    staff = models.ForeignKey(
-        Staff, on_delete=models.CASCADE, null=True, blank=True, db_index=True
-    )
-    # time_line = models.CharField(
-    #     max_length=20, choices=TIMELINE_CHOICES, null=True, blank=True
-    # )
-    leave_type = models.ForeignKey(LeaveType, on_delete=models.CASCADE, null=True)
+
+    leave_type = models.CharField(max_length=100, null=True)
+    leave_template = models.ForeignKey(LeaveTemplate, on_delete=models.CASCADE, null=True, related_name="leave_types")
     leave_num = models.IntegerField(null=True, blank=True)
+    category = models.ForeignKey(SchoolFeature, on_delete=models.CASCADE, null=True)
+    is_carry_forward = models.BooleanField(default=False)
+    
     created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
-    time_line = models.CharField(max_length=20,default="MONTHLY")
+    
 
     def __str__(self):
-        return f"{self.staff.name} - {self.leave_type}"
+        return f"{self.category.feature.name} - {self.leave_type}"
 
     class Meta:
-        db_table = "leave_template"
+        db_table = "leave_type"
         
         constraints = [
             models.UniqueConstraint(
-                fields=["school", "staff", "leave_type"],
-                name="unique_staff_leave_type"
+                # FIX: original referenced "school" and "staff" which don't exist on this model.
+                # Correct unique combination: same leave type + category within one template.
+                fields=["leave_template", "leave_type", "category"],
+                name="unique_leave_type_per_template_category",
             )
         ]
 
@@ -1117,6 +1123,7 @@ class LeaveRequest(models.Model):
     updated_at = models.DateTimeField(
         auto_now=True, null=True, blank=True
     )  # at a time no nedd this
+    is_paid = models.BooleanField(default=False, help_text="If True, salary will be deducted for approved days of this leave request.")
 
     def __str__(self):
         # return f"{self.staff.name} - {self.leave_type} - {self.status}"
@@ -1159,6 +1166,7 @@ class LeavePerDay(models.Model):
         db_table = "leave_per_day"
 
 
+
 class StaffRemainingLeave(models.Model):
     school = models.ForeignKey(
         School, on_delete=models.CASCADE, null=True, blank=True, db_index=True
@@ -1167,8 +1175,11 @@ class StaffRemainingLeave(models.Model):
     leave_template = models.ForeignKey(
         LeaveTemplate, on_delete=models.CASCADE, null=True, blank=True
     )
+    leave_type = models.ForeignKey(
+        LeaveType, on_delete=models.CASCADE, null=True, blank=True
+    )
     total_levaes = models.IntegerField(null=True, blank=True)
-    remaining_leaves = models.IntegerField(null=True, blank=True)
+    remaining_leaves = models.PositiveIntegerField(null=True, blank=True)
     
     month = models.IntegerField(default=timezone.now().month)
     
@@ -1177,19 +1188,10 @@ class StaffRemainingLeave(models.Model):
     def __str__(self):
         return f"{self.staff} - {self.leave_template}"
     
-    # def apply_carry_forward(self):
-    #     self.remaining_leaves += self.leave_template.leave_num
-    #     self.save()
 
     class Meta:
         db_table = "staff_remaining_leave"
         
-        # constraints = [
-        #     models.UniqueConstraint(
-        #         fields=["staff", "leave_template", "month", "year"],
-        #         name="unique_staff_leave_month_year"
-        #     )
-        # ]
 
 
 class Announcement(models.Model):
