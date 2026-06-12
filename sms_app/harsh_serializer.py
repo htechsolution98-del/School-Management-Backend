@@ -88,9 +88,25 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
     )
     class Meta:
         model = LeaveRequest
-        fields = ["id","start_date","end_date", "total_days","reason", "created_at", "updated_at","school", "staff","leave_type","leave_type_name",]
+        fields = ["id","start_date","end_date", "total_days","reason", "created_at", "updated_at","school", "staff","leave_type","leave_type_name"]
         read_only_fields = ["school", "staff", "total_days", "approved_by"]
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        request = self.context.get("request")
+        if request:
+            staff = Staff.objects.filter(
+                user=request.user,
+                school=request.user.school
+            ).first()
+
+            if staff:
+                self.fields["leave_type"].queryset = LeaveType.objects.filter(
+                    category__feature__name=staff.category,
+                    leave_template__school=request.user.school
+                )
+    
     def create(self, validated_data):
         start_date = validated_data.get("start_date")
         end_date = validated_data.get("end_date")
@@ -149,9 +165,6 @@ class GetLeavePerDaySerializer(serializers.ModelSerializer):
 class GetLeaveRequestSerializer(serializers.ModelSerializer):
     leave_days = GetLeavePerDaySerializer(many=True, read_only=True)
     remaining_leaves = serializers.SerializerMethodField()
-    leave_type_name = serializers.CharField(
-        source="leave_type.name", read_only=True
-    )
     
     staff_name = serializers.CharField(source="staff.name", read_only=True)
 
@@ -162,7 +175,6 @@ class GetLeaveRequestSerializer(serializers.ModelSerializer):
             "staff",
             "staff_name",
             "leave_type",
-            "leave_type_name",
             "reason",
             "total_days",
             "start_date",
@@ -186,6 +198,18 @@ class GetLeaveRequestSerializer(serializers.ModelSerializer):
             staff=obj.staff, school=obj.school
         )
         return StaffRemainingLeaveSerializer(queryset, many=True).data
+    
+    
+    def validate(self, attrs):
+        staff = attrs["staff"]
+        leave_type = attrs["leave_type"]
+
+        if leave_type.category.feature.name != staff.category:
+            raise serializers.ValidationError(
+                "This leave type is not available for the selected staff category."
+            )
+
+        return attrs
 
 
 from django.db.models import F
@@ -212,24 +236,24 @@ class ChangeLeavePerDaySerializer(serializers.ModelSerializer):
         new_status = attrs.get("status")
         instance = self.instance
 
-        # ✅ Check if status is already in a final state
+        #  Check if status is already in a final state
         if instance.status in ["CANCELLED"]:
             raise serializers.ValidationError(
                 f"Cannot change status from {instance.status}. This leave is already finalized."
             )
 
-        # ✅ Check invalid transitions
+        #  Check invalid transitions
         if instance.status == "REJECTED" and new_status in ["APPROVED"]:
             raise serializers.ValidationError("Cannot approve a rejected leave.")
 
-        # ✅ If changing to APPROVED, validate remaining leaves
+        #  If changing to APPROVED, validate remaining leaves
         if new_status == "APPROVED" and instance.status != "APPROVED":
             leave_request = instance.leave
             staff = leave_request.staff
             leave_type = leave_request.leave_type
 
             remaining_data = StaffRemainingLeave.objects.filter(
-                leave_template__leave_type=leave_type, staff=staff
+                leave_type=leave_type, staff=staff
             ).first()
 
             if not remaining_data:
@@ -237,10 +261,10 @@ class ChangeLeavePerDaySerializer(serializers.ModelSerializer):
                     f"No leave template found for {leave_type}."
                 )
 
-            if remaining_data.remaining_leaves <= 0:
-                raise serializers.ValidationError(
-                    f"Insufficient {leave_type} leaves. Remaining: {remaining_data.remaining_leaves}"
-                )
+            # if remaining_data.remaining_leaves <= 0:
+            #     raise serializers.ValidationError(
+            #         f"Insufficient {leave_type} leaves. Remaining: {remaining_data.remaining_leaves}"
+            #     )
 
         return attrs
 
@@ -254,26 +278,34 @@ class ChangeLeavePerDaySerializer(serializers.ModelSerializer):
         leave_type = leave_request.leave_type
 
         remaining_data = StaffRemainingLeave.objects.filter(
-            leave_template__leave_type=leave_type, staff=staff
+            leave_type=leave_type, staff=staff
         ).first()
 
-        # ✅ Case 1: PENDING/REJECTED → APPROVED (consume leaves)
+        # Case 1: PENDING/REJECTED → APPROVED (consume leaves)
         if new_status == "APPROVED" and old_status != "APPROVED":
             if remaining_data:
-                remaining_data.remaining_leaves -= 1
-                remaining_data.save()
+                if remaining_data.remaining_leaves <= 0:
+                    leave_request.is_paid = True
+                    leave_request.save()
+                    
+                else:
+                    remaining_data.remaining_leaves -= 1
+                    remaining_data.save()
+                
+                
             instance.approved_at = timezone.now()
 
-        # ✅ Case 2: APPROVED → REJECTED/CANCELLED (restore leaves)
+        # Case 2: APPROVED → REJECTED/CANCELLED (restore leaves)
         elif old_status == "APPROVED" and new_status in ["REJECTED", "CANCELLED"]:
             if remaining_data:
                 remaining_data.remaining_leaves += 1
                 remaining_data.save()
             instance.approved_at = None
 
-        # ✅ Case 3: Any other transition to REJECTED/CANCELLED (no leaves to restore)
+        #Case 3: Any other transition to REJECTED/CANCELLED (no leaves to restore)
         elif new_status in ["REJECTED", "CANCELLED"]:
             instance.approved_at = None
+            
 
         instance.status = new_status
         instance.save()
@@ -412,26 +444,253 @@ class CerificateTypeSerializer(serializers.ModelSerializer):
         
         
         
+# class CertificateRequestSerializer(serializers.ModelSerializer):
+#     class Meta:
+#         model = CertificateRequest
+#         fields = "__all__"
+#         read_only_fields = ["student", "status"]
+        
+        
+# class ClerkCertificateRequestSerializer(serializers.ModelSerializer):
+#     student_name = serializers.CharField(source="student.user.username", read_only=True)
+#     certificate_type_name = serializers.CharField(source="certificate_type.name", read_only=True)
+
+#     class Meta:
+#         model = CertificateRequest
+#         fields = ["id",
+#             "student",
+#             "student_name",
+#             "certificate_type",
+#             "certificate_type_name",
+#             "status",
+#             "created_at",
+#         ]
+        
+
+
 class CertificateRequestSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = CertificateRequest
-        fields = "__all__"
-        read_only_fields = ["student", "status"]
-        
-        
-class ClerkCertificateRequestSerializer(serializers.ModelSerializer):
-    student_name = serializers.CharField(source="student.user.username", read_only=True)
-    certificate_type_name = serializers.CharField(source="certificate_type.name", read_only=True)
+    """
+    Student-facing serializer.
+    Shows: request details, current status, and the certificate file URL if approved.
+    """
+    certificate_type_name = serializers.CharField(
+        source="certificate_type.name",
+        read_only=True
+    )
+    certificate_file = serializers.SerializerMethodField()
 
     class Meta:
         model = CertificateRequest
-        fields = ["id",
+        fields = [
+            "id",
+            "certificate_type",       # write (on create)
+            "certificate_type_name",  # read
+            "status",                 # read-only for student
+            "certificate_file",       # read-only, shows URL when approved
+            "created_at",
+        ]
+        read_only_fields = ["student", "status", "created_at"]
+
+    def get_certificate_file(self, obj):
+        """Return the certificate file URL once approved, else None."""
+        try:
+            return obj.certificate.file.url
+        except Certificate.DoesNotExist:
+            return None
+    
+    
+    
+class ClerkCertificateRequestSerializer(serializers.ModelSerializer):
+    """
+    Clerk-facing serializer.
+    Shows: student info, request details, status.
+    Accepts: status update (APPROVED / REJECTED).
+    Note: the actual file upload is handled via request.FILES in the viewset,
+    not through this serializer, to avoid multipart field conflicts.
+    """
+    student_name = serializers.CharField(
+        source="student.user.username",
+        read_only=True
+    )
+    certificate_type_name = serializers.CharField(
+        source="certificate_type.name",
+        read_only=True
+    )
+    certificate_file = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CertificateRequest
+        fields = [
+            "id",
             "student",
             "student_name",
             "certificate_type",
             "certificate_type_name",
             "status",
+            "certificate_file",   # clerk can see the uploaded file too
             "created_at",
         ]
+        read_only_fields = [
+            "student",
+            "certificate_type",
+            "created_at",
+        ]
+
+    def get_certificate_file(self, obj):
+        try:
+            return obj.certificate.file.url
+        except Certificate.DoesNotExist:
+            return None
         
+        
+        
+        
+        
+class NewLeaveTypeSerializer(serializers.ModelSerializer):
+    category_name = serializers.SerializerMethodField(read_only=True)
+ 
+    class Meta:
+        model = LeaveType
+        fields = [
+            "id",
+            "leave_type",
+            "leave_template",
+            "leave_num",
+            "category",
+            "category_name",
+            "created_at",
+            "is_carry_forward"
+        ]
+        read_only_fields = ["id", "created_at"]
+ 
+    def get_category_name(self, obj):
+        if obj.category and hasattr(obj.category, "feature"):
+            return obj.category.feature.name
+        return None
+ 
+    def get_fields(self):
+        fields = super().get_fields()
+        request = self.context.get("request")
+        if request and request.user:
+            school = getattr(request.user, "school", None)
+            if school:
+                # Restrict category choices to only this school's SchoolFeature objects
+                fields["category"].queryset = fields["category"].queryset.filter(school=school)
+                fields["leave_template"].queryset = fields["leave_template"].queryset.filter(school=school)
+        return fields
+ 
+    def validate(self, attrs):
+        instance = self.instance
+        leave_template = attrs.get("leave_template") or (instance.leave_template if instance else None)
+        leave_type     = attrs.get("leave_type")     or (instance.leave_type     if instance else None)
+        category       = attrs.get("category")       or (instance.category       if instance else None)
+ 
+        if leave_template:
+            qs = LeaveType.objects.filter(
+                leave_template=leave_template,
+                leave_type=leave_type,
+                category=category,
+            )
+            if instance:
+                qs = qs.exclude(pk=instance.pk)
+            if qs.exists():
+                raise serializers.ValidationError(
+                    "A leave type with this name already exists for the given template and category."
+                )
+        return attrs
+    
+    
+    def create(self, validated_data):
+ 
+        leave_type_obj = LeaveType.objects.create(**validated_data)
+ 
+        school        = leave_type_obj.leave_template.school if leave_type_obj.leave_template else None
+        category_name = leave_type_obj.category.feature.name.upper() if leave_type_obj.category else None
+ 
+        if school and category_name:
+            now      = timezone.now()
+            staff_qs = Staff.objects.filter(school=school, category=category_name, is_active=True)
+ 
+            StaffRemainingLeave.objects.bulk_create(
+                [
+                    StaffRemainingLeave(
+                        school=school,
+                        staff=staff,
+                        leave_template=leave_type_obj.leave_template,
+                        leave_type=leave_type_obj,
+                        total_levaes=leave_type_obj.leave_num,
+                        remaining_leaves=leave_type_obj.leave_num,
+                        month=now.month,
+                        year=now.year,
+                    )
+                    for staff in staff_qs
+                ],
+                ignore_conflicts=True,
+            )
+ 
+        return leave_type_obj
+ 
+ 
+class NewLeaveTemplateSerializer(serializers.ModelSerializer):
+    leave_types = NewLeaveTypeSerializer(many=True, read_only=True, source="leavetype_set")
+ 
+    class Meta:
+        model = LeaveTemplate
+        # Removed "name" — template is identified by time_line + school, name is redundant
+        fields = ["id", "time_line", "school", "leave_types"]
+        read_only_fields = ["id", "school"]
+ 
+    def validate(self, attrs):
+        instance = self.instance
+        time_line = attrs.get("time_line") or (instance.time_line if instance else None)
+        school    = attrs.get("school")    or (instance.school    if instance else None)
+ 
+        qs = LeaveTemplate.objects.filter(time_line=time_line, school=school)
+        if instance:
+            qs = qs.exclude(pk=instance.pk)
+        if qs.exists():
+            raise serializers.ValidationError(
+                {"time_line": "A leave template with this timeline already exists for this school."}
+            )
+        return attrs
+ 
+ 
+class LeaveTemplateBulkCreateSerializer(serializers.Serializer):
+    """
+    Create a LeaveTemplate and all its LeaveTypes in one shot.
+ 
+    POST /leave-templates/bulk_create/
+    {
+        "time_line": "ANNUAL",
+        "leave_types": [
+            {"leave_type": "Sick Leave",   "leave_num": 20, "category": 3},
+            {"leave_type": "Casual Leave", "leave_num": 12, "category": 3}
+        ]
+    }
+    """
+ 
+    time_line = serializers.ChoiceField(choices=LeaveTemplate.TIMELINE_CHOICES, required=False, allow_null=True)
+    leave_types = NewLeaveTypeSerializer(many=True, required=False, default=list)
+ 
+    def validate(self, attrs):
+        school = self.context.get("school")
+        time_line = attrs.get("time_line")
+        if school and time_line and LeaveTemplate.objects.filter(time_line=time_line, school=school).exists():
+            raise serializers.ValidationError(
+                {"time_line": "A leave template with this timeline already exists for this school."}
+            )
+        return attrs
+ 
+    def create(self, validated_data):
+        leave_types_data = validated_data.pop("leave_types", [])
+        school = self.context["school"]
+        template = LeaveTemplate.objects.create(school=school, **validated_data)
+        lt_serializer = LeaveTypeSerializer()
+        for lt_data in leave_types_data:
+            lt_data.pop("leave_template", None)
+            lt_serializer.create({**lt_data, "leave_template": template})
+        return template
+    
+    
+    
     

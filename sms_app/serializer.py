@@ -25,9 +25,11 @@ from django.contrib.auth.models import Group
 from rest_framework import serializers
 from django.db.models import Q, Sum
 from django.contrib.auth import get_user_model
-from django.utils.timezone import now
-import cv2
+from sms_app.harsh_views import get_approved_paid_leave_days
 import numpy as np
+import cv2
+from django.utils.timezone import now
+
 User = get_user_model()
 
 
@@ -3450,10 +3452,13 @@ class GenerateStaffSalaryPaymentSerializer(serializers.ModelSerializer):
         half_days = attendance_qs.filter(is_present=True, is_half_day=True).count()
         absent_days = max(working_days - present_count - half_days, 0)
         present_days = Decimal(present_count) + (Decimal(half_days) / Decimal("2"))
-        attendance_deduction = (
-            (Decimal(absent_days) * per_day_salary)
-            + (Decimal(half_days) * per_day_salary / Decimal("2"))
-        ).quantize(Decimal("0.01"))
+        # attendance_deduction = (
+        #     (Decimal(absent_days) * per_day_salary)
+        #     + (Decimal(half_days) * per_day_salary / Decimal("2"))
+        # ).quantize(Decimal("0.01"))
+        
+        approved_paid_days = get_approved_paid_leave_days(staff, month_start, month_end)
+        attendance_deduction = Decimal(approved_paid_days) * per_day_salary
 
         total_earnings = Decimal("0.00")
         component_deductions = Decimal("0.00")
