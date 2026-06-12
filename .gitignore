@@ -42,3 +42,5 @@ dist/
 # Python cache
 *.pyc
 *.pyo
+
+architecture.md
