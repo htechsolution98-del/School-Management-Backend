@@ -26,6 +26,9 @@ from rest_framework import serializers
 from django.db.models import Q, Sum
 from django.contrib.auth import get_user_model
 from sms_app.harsh_views import get_approved_paid_leave_days
+import numpy as np
+import cv2
+from django.utils.timezone import now
 
 User = get_user_model()
 
@@ -2493,7 +2496,285 @@ class AttendanceSerializer(serializers.ModelSerializer):
                 return attendance
 
             return attendance
-        
+
+
+class LeaveTemplateSerializer(serializers.ModelSerializer):
+
+    class Meta:
+        model = LeaveTemplate
+        fields = "__all__"
+        read_only_fields = ["school"]
+
+    def validate_leave_num(self, value):
+        if value <= 0:
+            raise serializers.ValidationError(
+                "Leave number must be greater than zero."
+            )
+        return value
+
+    def validate_leave_type(self, value):
+        if not value or not value.strip():
+            raise serializers.ValidationError(
+                "Leave type cannot be empty."
+            )
+        return value.strip()
+
+    def validate(self, attrs):
+        request = self.context.get("request")
+
+        if not request or not hasattr(request, "user"):
+            raise serializers.ValidationError(
+                "Request user is required."
+            )
+
+        school = getattr(request.user, "school", None)
+
+        if not school:
+            raise serializers.ValidationError(
+                "User school is not configured."
+            )
+
+        staff = attrs.get("staff")
+        leave_type = attrs.get("leave_type")
+        time_line = attrs.get("time_line")
+
+        qs = LeaveTemplate.objects.filter(
+            school=school,
+            staff=staff,
+            leave_type=leave_type,
+            time_line=time_line,
+        )
+
+        # Ignore current record during update
+        if self.instance:
+            qs = qs.exclude(pk=self.instance.pk)
+
+        if qs.exists():
+            raise serializers.ValidationError(
+                "This leave template already exists for this staff."
+            )
+
+        return attrs
+
+    def create(self, validated_data):
+        school = self.context["request"].user.school
+
+        leave_template = LeaveTemplate.objects.create(
+            # school=school,
+            **validated_data
+        )
+
+        StaffRemainingLeave.objects.create(
+            school=school,
+            staff=leave_template.staff,
+            leave_template=leave_template,
+            month=timezone.now().month,
+            year=timezone.now().year,
+            total_leaves=leave_template.leave_num,
+            remaining_leaves=leave_template.leave_num,
+        )
+
+        return leave_template
+
+
+# ADD SERIALIZE FOR LEAVE DROWPOWN IN THROUGH LeaveTemplate MODEL
+from datetime import timedelta
+
+
+class LeaveRequestSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = LeaveRequest
+        fields = "__all__"
+        read_only_fields = ["school", "staff", "total_days", "approved_by"]
+
+    def create(self, validated_data):
+        start_date = validated_data.get("start_date")
+        end_date = validated_data.get("end_date")
+        school = self.context.get("request").user.school
+        user = self.context.get("request").user
+
+        if end_date < start_date:
+            raise serializers.ValidationError("End date cannot be before start date.")
+
+        # ✅ calculate total days
+        total_days = (end_date - start_date).days + 1
+        validated_data["total_days"] = total_days
+        validated_data["school"] = school
+
+        staff = Staff.objects.filter(user=user, school=school).first()
+        validated_data["staff"] = staff
+
+        # ✅ create main LeaveRequest first
+        leave_request = LeaveRequest.objects.create(**validated_data)
+
+        # ✅ now create LeavePerDay entries
+        current = start_date
+        while current <= end_date:
+            LeavePerDay.objects.create(
+                school=school,
+                leave=leave_request,  # ✅ correct instance
+                date=current,  # store as DateField (recommended)
+            )
+            current += timedelta(days=1)
+
+        return leave_request
+
+
+class StaffRemainingLeaveSerializer(serializers.ModelSerializer):
+    leave_type = serializers.CharField(
+        source="leave_template.leave_type", read_only=True
+    )
+
+    class Meta:
+        model = StaffRemainingLeave
+        fields = ["id", "staff", "leave_type", "total_leaves", "month","year","remaining_leaves"]
+        read_only_fields = ["id"]
+
+
+class GetLeavePerDaySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = LeavePerDay
+        fields = ["id", "date", "school", "leave", "status", "approved_at"]
+        read_only_fields = ["id", "date", "school", "leave"]
+
+
+class GetLeaveRequestSerializer(serializers.ModelSerializer):
+    leave_days = GetLeavePerDaySerializer(many=True, read_only=True)
+    remaining_leaves = serializers.SerializerMethodField()
+
+    class Meta:
+        model = LeaveRequest
+        fields = [
+            "id",
+            "staff",
+            "leave_type",
+            "reason",
+            "total_days",
+            "start_date",
+            "end_date",
+            "created_at",
+            "updated_at",
+            "leave_days",
+            "remaining_leaves",
+        ]
+        read_only_fields = [
+            "school",
+            "staff",
+            "leave_type",
+            "total_days",
+            "leave_days",
+            "remaining_leaves",
+        ]
+
+    def get_remaining_leaves(self, obj):
+        queryset = StaffRemainingLeave.objects.filter(
+            staff=obj.staff, school=obj.school
+        )
+        return StaffRemainingLeaveSerializer(queryset, many=True).data
+
+
+from django.db.models import F
+
+
+class ChangeLeavePerDaySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = LeavePerDay
+        fields = ["status"]
+
+    def validate_status(self, value):
+        valid_statuses = ["PENDING", "APPROVED", "REJECTED", "CANCELLED"]
+        if value not in valid_statuses:
+            raise serializers.ValidationError(
+                f"Invalid status. Valid options are: {', '.join(valid_statuses)}"
+            )
+        return value
+
+    def validate(self, attrs):
+        request = self.context.get("request")
+        if not request or not hasattr(request, "user"):
+            raise serializers.ValidationError("Request user is required.")
+
+        new_status = attrs.get("status")
+        instance = self.instance
+
+        # ✅ Check if status is already in a final state
+        if instance.status in ["CANCELLED"]:
+            raise serializers.ValidationError(
+                f"Cannot change status from {instance.status}. This leave is already finalized."
+            )
+
+        # ✅ Check invalid transitions
+        if instance.status == "REJECTED" and new_status in ["APPROVED"]:
+            raise serializers.ValidationError("Cannot approve a rejected leave.")
+
+        # ✅ If changing to APPROVED, validate remaining leaves
+        if new_status == "APPROVED" and instance.status != "APPROVED":
+            leave_request = instance.leave
+            staff = leave_request.staff
+            leave_type = leave_request.leave_type
+
+            remaining_data = StaffRemainingLeave.objects.filter(
+                leave_template__leave_type=leave_type, staff=staff
+            ).first()
+
+            if not remaining_data:
+                raise serializers.ValidationError(
+                    f"No leave template found for {leave_type}."
+                )
+
+            if remaining_data.remaining_leaves <= 0:
+                raise serializers.ValidationError(
+                    f"Insufficient {leave_type} leaves. Remaining: {remaining_data.remaining_leaves}"
+                )
+
+        return attrs
+
+    def update(self, instance, validated_data):
+        user = self.context["request"].user
+        new_status = validated_data.get("status")
+        old_status = instance.status
+
+        leave_request = instance.leave
+        staff = leave_request.staff
+        leave_type = leave_request.leave_type
+
+        remaining_data = StaffRemainingLeave.objects.filter(
+            leave_template__leave_type=leave_type, staff=staff
+        ).first()
+
+        # ✅ Case 1: PENDING/REJECTED → APPROVED (consume leaves)
+        if new_status == "APPROVED" and old_status != "APPROVED":
+            if remaining_data:
+                remaining_data.remaining_leaves -= 1
+                remaining_data.save()
+            instance.approved_at = timezone.now()
+
+        # ✅ Case 2: APPROVED → REJECTED/CANCELLED (restore leaves)
+        elif old_status == "APPROVED" and new_status in ["REJECTED", "CANCELLED"]:
+            if remaining_data:
+                remaining_data.remaining_leaves += 1
+                remaining_data.save()
+            instance.approved_at = None
+
+        # ✅ Case 3: Any other transition to REJECTED/CANCELLED (no leaves to restore)
+        elif new_status in ["REJECTED", "CANCELLED"]:
+            instance.approved_at = None
+
+        instance.status = new_status
+        instance.save()
+
+        return instance
+class BulkLeaveStatusSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(
+        choices=["APPROVED", "REJECTED"]
+    )
+
+
+# class
+class GetRemainingLeaveSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = StaffRemainingLeave
+        fields = ["leave_template"]
 
 
 class AnnouncementTargetSerializer(serializers.ModelSerializer):
@@ -4090,9 +4371,7 @@ class StudentAttendanceSerializer(serializers.ModelSerializer):
         model = StudentAttendance
         fields = [
             "id",
-            "school",
             "student",
-            "attendance_by",
             "is_present",
             "is_absent",
             "attendance_date",
@@ -4131,7 +4410,22 @@ class StudentAttendanceSerializer(serializers.ModelSerializer):
         validated_data["school"] = request.user.school
         validated_data["attendance_by"] = request.user.staff
 
-        return super().create(validated_data)
+        attendance = super().create(validated_data)
+
+        StudentNotification.objects.create(
+            school=attendance.school,
+            student=attendance.student,
+            created_by=request.user.staff,
+            notification_type="ATTENDANCE",
+            title="Attendance Updated",
+            message=(
+                f"{attendance.student.name} marked "
+                f"{'Present' if attendance.is_present else 'Absent'} "
+                f"on {attendance.attendance_date}"
+            )
+        )
+
+        return attendance
 
 
 from rest_framework import serializers
@@ -4204,6 +4498,11 @@ class HomeworkSerializer(serializers.ModelSerializer):
             )
 
         return attrs
+    
+    def validate_due_date(self, value):
+        if value < date.today():
+            raise serializers.ValidationError("Due date cannot be in the past.")
+        return value
 
     def create(self, validated_data):
         request = self.context.get("request")
@@ -4536,3 +4835,125 @@ class StudentGetSerializer(serializers.ModelSerializer):
     class Meta:
         model = Student
         fields = ["id","surname", "name", "father_name", "mother_name", "school_class","class_name"]
+
+class StaffFaceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model=StaffFace
+        fields=["id","face_image","is_enrolled"]
+        read_only_fields=["is_enrolled"]
+      
+    def validate_face_image(self, image):
+        image_bytes = np.asarray(bytearray(image.read()), dtype=np.uint8)
+
+        img = cv2.imdecode(image_bytes, cv2.IMREAD_COLOR)
+
+        if img is None:
+            raise serializers.ValidationError(
+                "Invalid image file."
+            )
+
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+        face_cascade = cv2.CascadeClassifier(
+            cv2.data.haarcascades +
+            "haarcascade_frontalface_default.xml"
+        )
+
+        faces = face_cascade.detectMultiScale(
+            gray,
+            scaleFactor=1.1,
+            minNeighbors=5
+        )
+
+        if len(faces) == 0:
+            raise serializers.ValidationError(
+                "No face detected."
+            )
+
+        if len(faces) > 1:
+            raise serializers.ValidationError(
+                "Multiple faces detected."
+            )
+
+        image.seek(0)
+
+        return image
+    
+    def create(self, validated_data):
+            request = self.context["request"]
+            staff = Staff.objects.get(user=request.user)
+
+            face, created = StaffFace.objects.get_or_create(
+                staff=staff,
+                defaults=validated_data
+            )
+
+            if not created:
+                face.face_image = validated_data["face_image"]
+                
+            face.is_enrolled = True 
+            face.save()
+
+            return face
+
+class ParentCreateSerializer(serializers.Serializer):
+    username = serializers.CharField()
+    email = serializers.EmailField()
+    password = serializers.CharField(write_only=True)
+
+    def create(self, validated_data):
+
+        user = User.objects.create_user(
+            username=validated_data["username"],
+            email=validated_data["email"],
+            password=validated_data["password"],
+        )
+
+        parent = Parent.objects.create(
+            user=user
+        )
+
+        return parent
+
+class StaffFaceVerifySerializer(serializers.Serializer):
+    image=serializers.ImageField()
+    
+class StudentDocumentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model=StudentDocument
+        fields=["student","document_type","title","description","document"]
+
+class StudentNotificationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model=StudentNotification
+        fields=["notification_type","title","message"]
+
+class ExamSerializer(serializers.ModelSerializer):
+    class Meta:
+        model=Exam
+        fields=["title","description","exam_date","start_time","end_time","class_group"]
+
+class ExamNotificationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model=ExamNotification
+        fields=["exam","title","message"]
+
+class HomeworkSubmissionSerializer(serializers.ModelSerializer):
+    class Meta():
+        model=HomeworkSubmission
+        fields=["student","homework","file","submitted_at"]
+        read_only_fields=["submitted_at"]
+
+    def validate(self, attrs):
+        homework = attrs.get("homework")
+
+        if homework and homework.due_date:
+            submission_date = now().date() 
+            due_date = homework.due_date
+
+            if submission_date > due_date:
+                raise serializers.ValidationError(
+                    "You cannot submit homework after the due date."
+                )
+
+        return attrs

@@ -71,6 +71,9 @@ class School(models.Model):
 
         super().save(*args, **kwargs)
 
+    def __str__(self):
+        return self.name
+
 
 # -----------SCHOLL FEATURE---------
 class Feature(models.Model):
@@ -297,6 +300,7 @@ class Division(models.Model):
         School, on_delete=models.CASCADE, null=True, blank=True, db_index=True
     )
 
+    
     SchoolClass = models.ForeignKey(SchoolClass, on_delete=models.CASCADE)
     division = models.CharField(null=True, blank=True, max_length=20)
     capacity = models.IntegerField(null=True, blank=True)
@@ -529,7 +533,16 @@ class AdmissionDocument(models.Model):
 
 
 # # ======this is modified======
+class Parent(models.Model):
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="parent_profile",
+    )
+    school = models.ForeignKey(School, on_delete=models.CASCADE,default=1)
 
+    class Meta:
+        db_table = "parent"
 
 class Student(models.Model):
 
@@ -538,10 +551,12 @@ class Student(models.Model):
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE, null=True, blank=True
     )
+    # parent=models.ForeignKey(Parent,on_delete=models.CASCADE,null=True,blank=True)
 
     admission = models.OneToOneField(  # VERY IMPORTANT
         "Admission", on_delete=models.SET_NULL, null=True, blank=True
     )
+    parent=models.ForeignKey(Parent,on_delete=models.CASCADE,null=True,blank=True)
 
     # Identity
     surname = models.CharField(max_length=100, blank=True, null=True)
@@ -635,15 +650,7 @@ class TempUser(models.Model):
         db_table = "temp_user"
 
 
-class Parent(models.Model):
-    user = models.OneToOneField(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
-        related_name="parent_profile",
-    )
 
-    class Meta:
-        db_table = "parent"
 
 
 class RazorPayData(models.Model):
@@ -1035,7 +1042,6 @@ class Attendance(models.Model):
     date_time = models.DateTimeField(null=True, blank=True)
     is_present = models.BooleanField(default=False)
     is_half_day = models.BooleanField(default=False)
-
     check_in = models.DateTimeField(null=True, blank=True)
     check_out = models.DateTimeField(null=True, blank=True)
 
@@ -1191,7 +1197,6 @@ class StaffRemainingLeave(models.Model):
 
     class Meta:
         db_table = "staff_remaining_leave"
-        
 
 
 class Announcement(models.Model):
@@ -1531,12 +1536,13 @@ class SalaryComponent(models.Model):
     )
 
     name = models.CharField(max_length=255)  # DA, HRA, PF
-    component_type = models.CharField(max_length=20, choices=COMPONENT_TYPE)
+    component_type = models.CharField(max_length=20, choices=COMPONENT_TYPE) # Deduction,Earning
     is_active = models.BooleanField(default=True)
     school = models.ForeignKey(School, on_delete=models.CASCADE)
 
     class Meta:
         db_table = "salary_component"
+
 
 
 class StaffSalaryComponent(models.Model):
@@ -1971,6 +1977,7 @@ class StudentAttendance(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True)
 
+
     class Meta:
         db_table = "student_attendance"
         unique_together = ("student", "attendance_date")
@@ -2021,59 +2028,60 @@ class Homework(models.Model):
         return f"{self.title}"
 
 
-class HomeworkSubmission(models.Model):
-    STATUS_CHOICES = [
-        ("pending", "Pending"),
-        ("submitted", "Submitted"),
-        ("late", "Late Submission"),
-        ("checked", "Checked"),
-    ]
+# class HomeworkSubmission(models.Model):
+#     STATUS_CHOICES = [
+#         ("pending", "Pending"),
+#         ("submitted", "Submitted"),
+#         ("late", "Late Submission"),
+#         ("checked", "Checked"),
+#     ]
 
-    school = models.ForeignKey(
-        "School", on_delete=models.CASCADE, related_name="homework_submissions"
-    )
+#     school = models.ForeignKey(
+#         "School", on_delete=models.CASCADE, related_name="homework_submissions"
+#     )
 
-    homework = models.ForeignKey(
-        "Homework", on_delete=models.CASCADE, related_name="submissions"
-    )
+#     homework = models.ForeignKey(
+#         "Homework", on_delete=models.CASCADE, related_name="submissions"
+#     )
 
-    student = models.ForeignKey(
-        "Student", on_delete=models.CASCADE, related_name="homework_submissions"
-    )
+#     student = models.ForeignKey(
+#         "Student", on_delete=models.CASCADE, related_name="homework_submissions"
+#     )
 
-    attachment = models.FileField(
-        upload_to="homework/submissions/", null=True, blank=True
-    )
+#     attachment = models.FileField(
+#         upload_to="homework/submissions/", null=True, blank=True
+#     )
 
-    submitted_at = models.DateTimeField(null=True, blank=True)
+#     submitted_at = models.DateTimeField(null=True, blank=True)
 
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
+#     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
 
-    marks = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+#     marks = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
 
-    teacher_remark = models.TextField(null=True, blank=True)
+#     teacher_remark = models.TextField(null=True, blank=True)
 
-    checked_by = models.ForeignKey(
-        "Staff",
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="checked_homeworks",
-    )
+#     checked_by = models.ForeignKey(
+#         "Staff",
+#         on_delete=models.SET_NULL,
+#         null=True,
+#         blank=True,
+#         related_name="checked_homeworks",
+#     )
 
-    checked_at = models.DateTimeField(null=True, blank=True)
+#     checked_at = models.DateTimeField(null=True, blank=True)
 
-    created_at = models.DateTimeField(auto_now_add=True)
+#     created_at = models.DateTimeField(auto_now_add=True)
 
-    updated_at = models.DateTimeField(auto_now=True)
+#     updated_at = models.DateTimeField(auto_now=True)
 
-    class Meta:
-        db_table = "homework_submission"
-        unique_together = ["homework", "student"]
-        ordering = ["-created_at"]
+#     class Meta:
+#         db_table = "homework_submission"
+#         unique_together = ["homework", "student"]
+#         ordering = ["-created_at"]
 
-    def __str__(self):
-        return f"{self.student}"
+#     def __str__(self):
+#         return f"{self.student}"n
+
     
     
 class CertificateType(models.Model):
@@ -2136,3 +2144,218 @@ class Certificate(models.Model):
 # except Exception:
 #     # import-time may fail in some management commands; ignore silently
 #     pass
+
+
+class StaffFace(models.Model):
+    staff=models.OneToOneField(Staff,on_delete=models.CASCADE,related_name="face")
+    face_image=models.ImageField(upload_to="staff-faces/")
+    is_enrolled = models.BooleanField(default=False)
+    created_at=models.DateTimeField(auto_now_add=True)
+    updated_at=models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Face - {self.staff.name}"
+
+
+class StudentParent(models.Model):
+
+    RELATIONSHIP_CHOICES = [
+        ("FATHER", "Father"),
+        ("MOTHER", "Mother"),
+        ("GUARDIAN", "Guardian"),
+    ]
+
+    student = models.ForeignKey(
+        Student,
+        on_delete=models.CASCADE,
+        related_name="parent_mappings",
+    )
+
+    parent = models.ForeignKey(
+        Parent,
+        on_delete=models.CASCADE,
+        related_name="student_mappings",
+    )
+
+    relationship = models.CharField(
+        max_length=20,
+        choices=RELATIONSHIP_CHOICES,
+    )
+
+    is_primary = models.BooleanField(default=False)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "student_parent"
+        unique_together = ("student", "parent")
+
+
+class StudentDocument(models.Model):
+
+    DOCUMENT_TYPES = [
+        ("RESULT", "Result"),
+        ("REPORT_CARD", "Report Card"),
+        ("CERTIFICATE", "Certificate"),
+        ("ACHIEVEMENT", "Achievement"),
+        ("OTHER", "Other"),
+    ]
+
+    school = models.ForeignKey(
+        School,
+        on_delete=models.CASCADE
+    )
+
+    student = models.ForeignKey(
+        Student,
+        on_delete=models.CASCADE,
+        related_name="student_documents",
+    )
+
+    uploaded_by = models.ForeignKey(
+        Staff,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="uploaded_documents",
+    )
+
+    document_type = models.CharField(
+        max_length=20,
+        choices=DOCUMENT_TYPES,
+    )
+
+    title = models.CharField(max_length=255)
+
+    description = models.TextField(
+        null=True,
+        blank=True,
+    )
+
+    document = models.FileField(
+        upload_to="student_documents/",
+    )
+
+    academic_year = models.ForeignKey(
+        AcademicYear,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+
+    is_visible_to_parent = models.BooleanField(
+        default=True
+    )
+
+    uploaded_at = models.DateTimeField(
+        auto_now_add=True
+    )
+
+    updated_at = models.DateTimeField(
+        auto_now=True
+    )
+
+    class Meta:
+        db_table = "student_document"
+        ordering = ["-uploaded_at"]
+
+    def __str__(self):
+        return f"{self.student.name} - {self.title}"
+    
+from django.db import models
+
+
+class StudentNotification(models.Model):
+
+    NOTIFICATION_TYPES = (
+        ("ATTENDANCE", "Attendance"),
+        ("PROGRESS", "Progress"),
+        ("DOCUMENT", "Document"),
+        ("EXAM", "Exam"),
+        ("HOMEWORK", "Homework"),
+        ("GENERAL", "General"),
+    )
+
+    school = models.ForeignKey(
+        School,
+        on_delete=models.CASCADE
+    )
+
+    student = models.ForeignKey(
+        Student,
+        on_delete=models.CASCADE,
+        related_name="notifications"
+    )
+
+    created_by = models.ForeignKey(
+        Staff,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True
+    )
+
+    notification_type = models.CharField(
+        max_length=20,
+        choices=NOTIFICATION_TYPES
+    )
+
+    title = models.CharField(
+        max_length=255
+    )
+
+    message = models.TextField()
+
+    is_read = models.BooleanField(
+        default=False
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True
+    )
+
+    class Meta:
+        db_table = "student_notification"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.student.name} - {self.title}"
+    
+
+# Exam or Event Notification
+class Exam(models.Model):
+    school = models.ForeignKey(School, on_delete=models.CASCADE)
+    created_by = models.ForeignKey(Staff, on_delete=models.CASCADE)  # principal
+
+
+    title = models.CharField(max_length=255)
+    description = models.TextField()
+
+    exam_date = models.DateField()
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+
+    class_group = models.ForeignKey(SchoolClass, on_delete=models.CASCADE)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+class ExamNotification(models.Model):
+    exam = models.ForeignKey(Exam, on_delete=models.CASCADE)
+
+    title = models.CharField(max_length=255)
+    message = models.TextField()
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+
+
+class HomeworkSubmission(models.Model):
+    homework=models.ForeignKey(Homework,on_delete=models.CASCADE)
+    student=models.ForeignKey(Student,on_delete=models.CASCADE,related_name='submission')
+    file = models.FileField(upload_to='homework_submissions/')
+    submitted_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('homework', 'student')
+
+    def __str__(self):
+        return f"{self.student} - {self.homework}"

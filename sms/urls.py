@@ -18,7 +18,7 @@ from django.contrib import admin
 from django.urls import path
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from rest_framework.routers import DefaultRouter
-from sms_app.views import *
+
 from django.urls import include
 from django.views.generic import TemplateView
 
@@ -29,6 +29,7 @@ from drf_yasg import openapi
 
 from django.conf import settings
 from django.conf.urls.static import static
+from sms_app.views import *
 
 
 from sms_app.harsh_views import *
@@ -158,7 +159,7 @@ router.register(r'student-fee-payment', StudentFeePaymentViewSet, basename='stud
 
 
 router.register(r'homework', HomeworkViewSet, basename='homework')
-router.register(r'homework-submission', HomeworkSubmissionViewSet, basename='homework-submission')
+
 
 router.register(r'studentget', StudentGetView, basename='studentget')
 
@@ -202,11 +203,12 @@ urlpatterns = [
     path('api/',include(router.urls)),
     path('api/dashboard-count/', DashboardCountAPIView.as_view(), name='dashboard-count'),
     path('api/access/',CustomLoginView.as_view()),  
-        
+    
     path('api/refresh/',TokenRefreshView.as_view()),
     
     #FOR ATTENDANCE LOCATION
     path('api/get-location/', GetLocationView.as_view()),
+    # path('api/delete-location/<int:pk>/',DeleteUpdateLocationView.as_view()),
     
     path('api/api-login/', LoginView.as_view()),
     
@@ -244,22 +246,22 @@ urlpatterns = [
     
     # path('in/',TemplateView.as_view(template_name='index.html')),
     path('api/import-students/',upload_students.as_view()),
-   
     path('api/today/',TodayAttendanceStatusView.as_view()),
-   
-    
     path('api/razor/order/',RazorpayOrderView.as_view()),
-    
     path('api/payment/verify/',VerifyPaymentView.as_view()),
-    
     path('api/my-fees/', MyStudentFeeView.as_view()),
     path('api/student-fee/razor/order/', StudentFeeRazorpayOrderView.as_view()),
     path('api/student-fee/razor/verify/', StudentFeeRazorpayVerifyView.as_view()),
     path('api/offline/payment/',OffilinePaymentView.as_view()),
     path('api/get_receipt/<int:student_id>/<int:form_id>/',get_receipt),
-    
     path('api/schoollist/',SchoolListView.as_view()),
-    
+    path('face-enroll/',StaffFaceEnrollView.as_view()),
+    path('face-verify/',StaffFaceVerifyView.as_view()),
+    path('perstaff-leave/',GetRemainingLeavePerStaffView.as_view()),
+    path('homework-submission/',HomeworkSubmissionView.as_view()),
+    path('api/student-documents/',StudentDocumentView.as_view()),
+    path('api/exam-notification/',ExamView.as_view()),
+    path('api/attendance-notification/',StudentNotificationView.as_view()),
     # ITS FOR GET STIDENT FOR ATTENDANSE
     
     path(
