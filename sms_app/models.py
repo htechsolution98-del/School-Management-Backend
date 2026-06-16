@@ -529,16 +529,18 @@ class AdmissionDocument(models.Model):
 
 
 # # ======this is modified======
-class Parent(models.Model):
-    user = models.OneToOneField(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
-        related_name="parent_profile",
-    )
-    school = models.ForeignKey(School, on_delete=models.CASCADE,default=1)
+# class Parent(models.Model):
+#     user = models.OneToOneField(
+#         settings.AUTH_USER_MODEL,
+#         on_delete=models.CASCADE,
+#         related_name="parent_profile",
+#     )
+#     school = models.ForeignKey(School, on_delete=models.CASCADE,default=1)
 
-    class Meta:
-        db_table = "parent"
+#     class Meta:
+#         db_table = "parent"
+
+
 
 class Student(models.Model):
 
@@ -547,12 +549,10 @@ class Student(models.Model):
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE, null=True, blank=True
     )
-    # parent=models.ForeignKey(Parent,on_delete=models.CASCADE,null=True,blank=True)
 
     admission = models.OneToOneField(  # VERY IMPORTANT
         "Admission", on_delete=models.SET_NULL, null=True, blank=True
     )
-    parent=models.ForeignKey(Parent,on_delete=models.CASCADE,null=True,blank=True)
 
     # Identity
     surname = models.CharField(max_length=100, blank=True, null=True)
@@ -568,7 +568,12 @@ class Student(models.Model):
         SchoolClass, on_delete=models.CASCADE, null=True, blank=True
     )
 
-    division = models.CharField(max_length=20, null=True, blank=True)
+    division = models.ForeignKey(
+        Division,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True
+    )
 
     admission_date = models.DateField(blank=True, null=True)
     gr_no = models.CharField(max_length=100, blank=True, null=True)
@@ -593,6 +598,17 @@ class Student(models.Model):
                 name="unique_school_gr_no",
             )
         ]
+
+class Perents(models.Model):
+    school = models.ForeignKey(
+        School, on_delete=models.CASCADE, null=True, blank=True, db_index=True
+    )
+
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    perents_of = models.ForeignKey(Student, on_delete=models.CASCADE)
+
+    class Meta:
+        db_table = "parents"
 
 
 class StudentVerify(models.Model):
@@ -636,6 +652,7 @@ class TempUser(models.Model):
     # username = models.CharField(max_length=150, unique=True)
     # mobile_number = models.CharField(max_length=15, unique=True)
     email = models.EmailField(blank=True, null=True)
+    
 
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -713,16 +730,7 @@ class RazorPayData(models.Model):
 #     uploaded_at = models.DateTimeField(auto_now_add=True)
 
 
-class Perents(models.Model):
-    school = models.ForeignKey(
-        School, on_delete=models.CASCADE, null=True, blank=True, db_index=True
-    )
 
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
-    perents_of = models.ForeignKey(Student, on_delete=models.CASCADE)
-
-    class Meta:
-        db_table = "parents"
 
 
 class StudentFieldValue(models.Model):
@@ -2166,38 +2174,38 @@ class StaffFace(models.Model):
         return f"Face - {self.staff.name}"
 
 
-class StudentParent(models.Model):
+# class StudentParent(models.Model):
 
-    RELATIONSHIP_CHOICES = [
-        ("FATHER", "Father"),
-        ("MOTHER", "Mother"),
-        ("GUARDIAN", "Guardian"),
-    ]
+#     RELATIONSHIP_CHOICES = [
+#         ("FATHER", "Father"),
+#         ("MOTHER", "Mother"),
+#         ("GUARDIAN", "Guardian"),
+#     ]
 
-    student = models.ForeignKey(
-        Student,
-        on_delete=models.CASCADE,
-        related_name="parent_mappings",
-    )
+#     student = models.ForeignKey(
+#         Student,
+#         on_delete=models.CASCADE,
+#         related_name="parent_mappings",
+#     )
 
-    parent = models.ForeignKey(
-        Parent,
-        on_delete=models.CASCADE,
-        related_name="student_mappings",
-    )
+#     parent = models.ForeignKey(
+#         Parent,
+#         on_delete=models.CASCADE,
+#         related_name="student_mappings",
+#     )
 
-    relationship = models.CharField(
-        max_length=20,
-        choices=RELATIONSHIP_CHOICES,
-    )
+#     relationship = models.CharField(
+#         max_length=20,
+#         choices=RELATIONSHIP_CHOICES,
+#     )
 
-    is_primary = models.BooleanField(default=False)
+#     is_primary = models.BooleanField(default=False)
 
-    created_at = models.DateTimeField(auto_now_add=True)
+#     created_at = models.DateTimeField(auto_now_add=True)
 
-    class Meta:
-        db_table = "student_parent"
-        unique_together = ("student", "parent")
+#     class Meta:
+#         db_table = "student_parent"
+#         unique_together = ("student", "parent")
 
 
 class StudentDocument(models.Model):
@@ -2368,3 +2376,27 @@ class HomeworkSubmission(models.Model):
 
     def __str__(self):
         return f"{self.student} - {self.homework}"
+
+
+class MonthlyProgressReport(models.Model):
+
+    school=models.ForeignKey(School,on_delete=models.CASCADE)
+    student=models.ForeignKey(Student,on_delete=models.CASCADE,related_name='monthly_reports')
+    created_by=models.ForeignKey(Staff,on_delete=models.CASCADE)
+    month=models.PositiveSmallIntegerField()
+    year=models.PositiveSmallIntegerField()
+    attendance_percentage=models.DecimalField(max_digits=5, decimal_places=2,default=0)
+    overall_score=models.DecimalField(max_digits=5, decimal_places=2,default=0)
+    discipline=models.PositiveSmallIntegerField(default=0)
+    communication_skills=models.PositiveSmallIntegerField(default=0)
+    emotional_development=models.PositiveSmallIntegerField(default=0)
+    social_development=models.PositiveSmallIntegerField(default=0)
+    freindly_with_others=models.PositiveSmallIntegerField(default=0)
+    remark=models.TextField(max_length=100)
+    created_at=models.DateTimeField(auto_now_add=True)
+    class Meta:
+        db_table = "monthly_progress_report"
+        ordering = ["-created_at"]
+        unique_together = ("student","month","year")
+    def __str__(self):
+        return f"{self.student} - {self.month}/{self.year}"

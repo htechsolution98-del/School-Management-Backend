@@ -4351,7 +4351,7 @@ class StudentSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Student
-        fields = ["id", "surname", "name", "gr_no"]
+        fields = ["id", "surname", "name", "gr_no","parent"]
 
 
 # serializers.py
@@ -4952,3 +4952,56 @@ class HomeworkSubmissionSerializer(serializers.ModelSerializer):
                 )
 
         return attrs
+    
+
+class MonthlyProgressReportSerializer(serializers.ModelSerializer):
+    grade = serializers.SerializerMethodField()
+    class Meta:
+        model=MonthlyProgressReport
+        fields='__all__'
+        read_only_fields=["school","attendance_percentage","created_by","overall_score"]
+
+    def create(self,validated_data):
+            student=validated_data["student"]
+            month=validated_data["month"]
+            year=validated_data["year"]
+            
+            attendance_records=StudentAttendance.objects.filter(
+                student=student,
+                attendance_date__month=month,
+                attendance_date__year=year
+            )
+            10*5/100
+            total_days=attendance_records.count()
+            present_days=attendance_records.filter(is_present=True).count()
+            attendance_percentage=(
+                (present_days/total_days)*100
+                if total_days > 0 else 0)
+            validated_data["attendance_percentage"]=attendance_percentage
+
+            overall_score = round(
+                (attendance_percentage+
+                 validated_data["discipline"]+
+                 validated_data["communication_skills"]+
+                 validated_data["emotional_development"]+
+                 validated_data["social_development"]+
+                 validated_data["freindly_with_others"]
+                 )/6,2)
+            validated_data["overall_score"]=overall_score
+            return MonthlyProgressReport.objects.create(**validated_data)
+    
+    def get_grade(self,obj):
+            score=obj.overall_score
+            if score >=90:
+                return "A+"
+            elif score >=80 and score<90:
+                return "B"
+            elif score>=70 and score<80:
+                return "C"
+            elif score>=60 and score<70:
+                return "D"
+            
+
+        
+
+    

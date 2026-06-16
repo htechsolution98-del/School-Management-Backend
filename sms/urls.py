@@ -259,6 +259,11 @@ urlpatterns = [
     path('api/student-documents/',StudentDocumentView.as_view()),
     path('api/exam-notification/',ExamView.as_view()),
     path('api/attendance-notification/',StudentNotificationView.as_view()),
+    path('api/monthly-report/',MonthlyProgressReportView.as_view()),
+    path('api/duefeesview/',DueFeesView.as_view()),
+    path('api/payment-history/',PaymentHistoryView.as_view()),
+    path('api/fee-payment/',FeesPaymentView.as_view()),
+    path('api/verify-payment/',VerifypaymentView.as_view()),
     # ITS FOR GET STIDENT FOR ATTENDANSE
     
     path(

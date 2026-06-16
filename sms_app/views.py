@@ -1,6 +1,6 @@
 from django.shortcuts import redirect, render
 from django.urls import reverse
-
+from django.db.models import Q
 from rest_framework.viewsets import ModelViewSet
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -31,7 +31,6 @@ from rest_framework import status
 from rest_framework.viewsets import ModelViewSet
 from rest_framework.response import Response
 from django.core.cache import cache
-from django.db import transaction
 from rest_framework.permissions import IsAuthenticated
 
 from sms_app.models import *
@@ -90,7 +89,7 @@ import pandas as pd
 from datetime import datetime
 from decimal import Decimal
 from django.contrib.auth import get_user_model
-
+from django.db import transaction
 # from yourapp.models import Student, SchoolClass, School
 
 User = get_user_model()
@@ -531,7 +530,7 @@ class Isparent(BasePermission):
         return (
             request.user
             and request.user.is_authenticated
-            
+            and request.user.groups.filter(name="parents").exists()
         )
 
 class Isteacher(BasePermission):
@@ -3788,57 +3787,84 @@ from .models import StudentAttendance
 
 
 class StudentAttendanceView(APIView):
-    permission_classes=[IsAuthenticated]
+    permission_classes = [IsAuthenticated]
+
     def get(self, request):
 
-        queryset = StudentAttendance.objects.filter(
-            school=request.user.school
-        ).select_related(
-            "student",
-            "attendance_by",
+        queryset = (
+            StudentAttendance.objects
+            .filter(school=request.user.school)
+            .select_related(
+                "student",
+                "attendance_by",
+            )
         )
 
-        serializer = StudentAttendanceSerializer(queryset, many=True)
+        serializer = StudentAttendanceSerializer(
+            queryset,
+            many=True
+        )
 
         return Response(serializer.data)
 
     def post(self, request):
 
         serializer = StudentAttendanceSerializer(
-            data=request.data, context={"request": request}
+            data=request.data,
+            context={"request": request}
         )
 
         serializer.is_valid(raise_exception=True)
 
-        attendance=serializer.save()
+        attendance = serializer.save()
+
         if attendance.is_present:
             status_text = "Present"
         elif attendance.is_absent:
             status_text = "Absent"
         else:
             status_text = "Not Marked"
-        notification=StudentNotification.objects.create(
-        school=request.user.school,
-        student=attendance.student,
-        created_by=request.user.staff,
-        notification_type="ATTENDANCE",
-        title="Attendance Marked",
-        message=f"Your child attendance has been marked as {status_text} on {attendance.attendance_date}"
-    )
+
+        notification = StudentNotification.objects.create(
+            school=attendance.school,
+            student=attendance.student,
+            created_by=request.user.staff,
+            notification_type="ATTENDANCE",
+            title="Attendance Marked",
+            message=(
+                f"Your child's attendance has been marked as "
+                f"{status_text} on {attendance.attendance_date}"
+            )
+        )
+
+        group_name = (
+            f"school_{attendance.school_id}"
+            f"_student_{attendance.student_id}"
+            f"_attendance"
+        )
+
+        print("Sending attendance notification to:", group_name)
+
         channel_layer = get_channel_layer()
 
         async_to_sync(channel_layer.group_send)(
-        f"school_{attendance.school.id}_attendance",
-        
-        {
-            "type": "attendance_message",
-            "notification_id": notification.id,
-            "title": notification.title,
-            "message": notification.message,
-        }
-    )
+            group_name,
+            {
+                "type": "attendance_message",
+                "notification_id": notification.id,
+                "title": notification.title,
+                "message": notification.message,
+            }
+        )
 
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        print("Attendance notification sent.")
+
+        response_serializer = StudentAttendanceSerializer(attendance)
+
+        return Response(
+            response_serializer.data,
+            status=status.HTTP_201_CREATED
+        )
 
       
 # from .homework_serializer import (
@@ -4498,72 +4524,129 @@ class StudentDocumentView(APIView):
 
 
 class StudentNotificationView(APIView):
-    # permission_classes=[IsAuthenticated]
-    def get_permissions(self):
-         if self.request.method == "GET":
-             return [IsAuthenticated(), Isparent()]
-         return [IsAuthenticated(), Isteacher()]
 
-    def get(self,request):
-        parent=get_object_or_404(Parent,user=request.user)
-        print(parent)
-        notification=StudentNotification.objects.filter(student__parent=parent).order_by("-created_at")
-        print(notification)
-        serializer=StudentNotificationSerializer(notification,many=True)
+    def get_permissions(self):
+
+        if self.request.method == "GET":
+            return [IsAuthenticated(), Isparent()]
+
+        return [IsAuthenticated(), Isteacher()]
+
+    def get(self, request):
+
+        student_ids = (
+            Perents.objects.filter(
+                user=request.user
+            )
+            .values_list(
+                "perents_of_id",
+                flat=True
+            )
+        )
+
+        notifications = (
+            StudentNotification.objects.filter(
+                student_id__in=student_ids
+            )
+            .order_by("-created_at")
+        )
+
+        serializer = StudentNotificationSerializer(
+            notifications,
+            many=True
+        )
+
         return Response(serializer.data)
-    
 
 
 class ExamView(APIView):
+
     def get_permissions(self):
         if self.request.method == "GET":
-             return [IsAuthenticated(), Isparent(),Isstudent()]
+            return [IsAuthenticated(), Isparent()]
         return [IsAuthenticated(), Isteacher()]
-    def get(self,request):
-        school = request.user.parent_profile.school
-        print(school)
-        notifications = ExamNotification.objects.filter(
-            exam__school=school
-        ).order_by("-created_at")
 
-        serializer = ExamNotificationSerializer(notifications, many=True)
+    def get(self, request):
+
+        student_ids = (
+            Perents.objects.filter(
+                user=request.user
+            )
+            .values_list(
+                "perents_of_id",
+                flat=True
+            )
+        )
+
+        class_ids = (
+            Student.objects.filter(
+                id__in=student_ids
+            )
+            .values_list(
+                "school_class_id",
+                flat=True
+            )
+        )
+
+        notifications = (
+            ExamNotification.objects.filter(
+                exam__class_group_id__in=class_ids
+            )
+            .select_related("exam")
+            .order_by("-created_at")
+        )
+
+        serializer = ExamNotificationSerializer(
+            notifications,
+            many=True
+        )
+
         return Response(serializer.data)
-    
+
     def post(self, request):
+
         serializer = ExamSerializer(data=request.data)
 
-        if serializer.is_valid():
-            exam = serializer.save(
-                school=request.user.school,
-                created_by=request.user.staff,
+        if not serializer.is_valid():
+            return Response(
+                serializer.errors,
+                status=status.HTTP_400_BAD_REQUEST
             )
 
-            notification = ExamNotification.objects.create(
-                exam=exam,
-                title=f"New Exam {exam.title}",
-                message=(
-                    f"Exam scheduled on {exam.exam_date} "
-                    f"from {exam.start_time} to {exam.end_time}"
-                )
+        exam = serializer.save(
+            school=request.user.school,
+            created_by=request.user.staff,
+        )
+
+        notification = ExamNotification.objects.create(
+            exam=exam,
+            title=f"New Exam: {exam.title}",
+            message=(
+                f"Exam scheduled on {exam.exam_date} "
+                f"from {exam.start_time} to {exam.end_time}"
             )
+        )
 
-            channel_layer = get_channel_layer()
+        channel_layer = get_channel_layer()
 
-            group_name = f"school_{exam.school.id}_parents" 
+        group_name = (
+    f"school_{exam.school_id}_class_{exam.class_group_id}_parents"
+)
 
-            async_to_sync(channel_layer.group_send)(
-                group_name,
-                {
-                    "type": "send_notification",
-                    "notification_id": notification.id,
-                    "title": notification.title,
-                    "message": notification.message,
-                }
-            )
+        async_to_sync(channel_layer.group_send)(
+            group_name,
+            {
+                "type": "send_notification",
+                "notification_id": notification.id,
+                "title": notification.title,
+                "message": notification.message,
+            }
+        )
 
-            return Response(serializer.data)
-
-        return Response(serializer.errors, status=404)
+        return Response(
+            ExamSerializer(exam).data,
+            status=status.HTTP_201_CREATED
+        )
 
 class HomeworkSubmissionView(APIView):
     permission_classes=[Isstudent]
@@ -4574,4 +4657,278 @@ class HomeworkSubmissionView(APIView):
             print("After save")
             return Response(serializer.data)
         return Response(serializer.errors,status=404)
-   
+    
+class MonthlyProgressReportView(APIView):
+    permission_classes = [Isteacher]
+
+    def post(self, request):
+
+        serializer = MonthlyProgressReportSerializer(
+            data=request.data
+        )
+
+        if serializer.is_valid():
+
+            report = serializer.save(
+                school=request.user.school,
+                created_by=request.user.staff
+            )
+
+            data = MonthlyProgressReportSerializer(report).data
+
+            channel_layer = get_channel_layer()
+
+            group_name = progress_group(
+                report.school.id,
+                report.student.id
+            )
+
+            async_to_sync(
+                channel_layer.group_send
+            )(
+                group_name,
+                {
+                    "type": "progressreport_message",
+                    "student": report.student.id,
+                    "month": report.month,
+                    "year": report.year,
+                    "attendance_percentage": round(
+                        float(report.attendance_percentage), 2
+                    ),
+                    "overall_score": round(
+                        float(report.overall_score), 2
+                    ),
+                    "grade": data["grade"],
+                    "discipline": report.discipline,
+                    "communication_skills": report.communication_skills,
+                    "emotional_development": report.emotional_development,
+                    "social_development": report.social_development,
+                    "freindly_with_others": report.freindly_with_others,
+                    "remark": report.remark,
+                }
+            )
+
+            return Response(
+                serializer.data,
+                status=status.HTTP_201_CREATED
+            )
+
+        return Response(
+            serializer.errors,
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+
+
+def progress_group(school_id, student_id):
+    return f"school_{school_id}_student_{student_id}_progress-report"
+
+
+
+class DueFeesView(APIView):
+    permission_classes = [IsAuthenticated, Isparent]
+
+    def get(self, request):
+
+        student_ids = (
+            Perents.objects.filter(
+                user=request.user
+            )
+            .values_list(
+                "perents_of_id",
+                flat=True
+            )
+        )
+
+        fees = StudentFee.objects.filter(
+            student_id__in=student_ids,
+            status__in=["pending", "partial"]
+        )
+
+        total_due = sum(
+            fee.amount - fee.paid_amount
+            for fee in fees
+        )
+
+        serializer = StudentFeeSerializer(
+            fees,
+            many=True
+        )
+
+        return Response({
+            "total_due": total_due,
+            "fees": serializer.data
+        })
+    
+
+class PaymentHistoryView(APIView):
+
+    permission_classes = [IsAuthenticated, Isparent]
+
+    def get(self, request):
+
+        student_ids = Perents.objects.filter(
+            user=request.user
+        ).values_list(
+            "perents_of_id",
+            flat=True
+        )
+
+        payment_history = StudentFeePayment.objects.filter(
+            student_fee__student_id__in=student_ids
+        ).order_by("-payment_date")
+
+        serializer = StudentFeePaymentSerializer(
+            payment_history,
+            many=True
+        )
+
+        return Response(serializer.data)
+    
+class FeesPaymentView(APIView):
+    permission_classes = [Isparent]
+
+    def post(self, request):
+
+        fee_id = request.data.get("fee_id")
+
+        student_ids = Perents.objects.filter(
+            user=request.user
+        ).values_list(
+            "perents_of_id",
+            flat=True
+        )
+
+        try:
+            fee = StudentFee.objects.get(
+                id=fee_id,
+                student_id__in=student_ids
+            )
+
+        except StudentFee.DoesNotExist:
+            return Response(
+                {"error": "Fee record not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        amount_due = fee.amount - fee.paid_amount
+
+        if amount_due <= 0:
+            return Response(
+                {"error": "Fee already paid"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        client = razorpay.Client(
+            auth=(
+                settings.RAZOR_PAY_KEY_ID,
+                settings.RAZOR_PAY_SECRET_KEY
+            )
+        )
+
+        order = client.order.create({
+            "amount": int(amount_due * 100),
+            "currency": "INR",
+        })
+
+        return Response({
+            "order_id": order["id"],
+            "amount_payable": amount_due,
+            "key": settings.RAZOR_PAY_KEY_ID,
+        })
+    
+class VerifypaymentView(APIView):
+    permission_classes = [IsAuthenticated, Isparent]
+
+    def post(self, request):
+
+        fee_id = request.data.get("fee_id")
+        razorpay_order_id = request.data.get("razorpay_order_id")
+        razorpay_payment_id = request.data.get("razorpay_payment_id")
+        razorpay_signature = request.data.get("razorpay_signature")
+
+        student_ids = Perents.objects.filter(
+            user=request.user
+        ).values_list(
+            "perents_of_id",
+            flat=True
+        )
+
+        try:
+            fee = StudentFee.objects.get(
+                id=fee_id,
+                student_id__in=student_ids
+            )
+
+        except StudentFee.DoesNotExist:
+            return Response(
+                {"error": "Fee record not found"},
+                status=404
+            )
+
+        client = razorpay.Client(
+            auth=(
+                settings.RAZOR_PAY_KEY_ID,
+                settings.RAZOR_PAY_SECRET_KEY
+            )
+        )
+
+        if StudentFeePayment.objects.filter(
+            razorpay_payment_id=razorpay_payment_id
+        ).exists():
+            return Response(
+                {"error": "Payment already verified"},
+                status=400
+            )
+
+        try:
+            client.utility.verify_payment_signature({
+                "razorpay_order_id": razorpay_order_id,
+                "razorpay_payment_id": razorpay_payment_id,
+                "razorpay_signature": razorpay_signature
+            })
+
+        except Exception as e:
+            print("RAZORPAY ERROR:", str(e))
+
+            return Response(
+                {"error": str(e)},
+                status=400
+            )
+
+        amount_due = fee.amount - fee.paid_amount
+
+        with transaction.atomic():
+
+            StudentFeePayment.objects.create(
+                student_fee=fee,
+                student=fee.student,
+                school=fee.school,
+                amount=amount_due,
+                payment_mode="online",
+                transaction_id=razorpay_payment_id,
+                razorpay_order_id=razorpay_order_id,
+                razorpay_payment_id=razorpay_payment_id,
+                razorpay_signature=razorpay_signature,
+                payment_date=timezone.now(),
+                is_verified=True,
+                verified_by=request.user,
+                verified_at=timezone.now(),
+            )
+
+            fee.paid_amount += amount_due
+
+            if fee.paid_amount >= fee.amount:
+                fee.status = "paid"
+            elif fee.paid_amount > 0:
+                fee.status = "partial"
+            else:
+                fee.status = "pending"
+
+            fee.save()
+
+        return Response({
+            "message": "Payment verified successfully",
+            "amount_paid": amount_due,
+            "fee_status": fee.status
+        })
