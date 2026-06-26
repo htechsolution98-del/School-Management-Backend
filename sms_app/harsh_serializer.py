@@ -443,40 +443,9 @@ class CerificateTypeSerializer(serializers.ModelSerializer):
         read_only_fields = ['school']    
         
         
-        
-# class CertificateRequestSerializer(serializers.ModelSerializer):
-#     class Meta:
-#         model = CertificateRequest
-#         fields = "__all__"
-#         read_only_fields = ["student", "status"]
-        
-        
-# class ClerkCertificateRequestSerializer(serializers.ModelSerializer):
-#     student_name = serializers.CharField(source="student.user.username", read_only=True)
-#     certificate_type_name = serializers.CharField(source="certificate_type.name", read_only=True)
-
-#     class Meta:
-#         model = CertificateRequest
-#         fields = ["id",
-#             "student",
-#             "student_name",
-#             "certificate_type",
-#             "certificate_type_name",
-#             "status",
-#             "created_at",
-#         ]
-        
-
 
 class CertificateRequestSerializer(serializers.ModelSerializer):
-    """
-    Student-facing serializer.
-    Shows: request details, current status, and the certificate file URL if approved.
-    """
-    certificate_type_name = serializers.CharField(
-        source="certificate_type.name",
-        read_only=True
-    )
+    certificate_type_name = serializers.CharField(source="certificate_type.name",read_only=True)
     certificate_file = serializers.SerializerMethodField()
 
     class Meta:
@@ -492,7 +461,6 @@ class CertificateRequestSerializer(serializers.ModelSerializer):
         read_only_fields = ["student", "status", "created_at"]
 
     def get_certificate_file(self, obj):
-        """Return the certificate file URL once approved, else None."""
         try:
             return obj.certificate.file.url
         except Certificate.DoesNotExist:
@@ -501,21 +469,8 @@ class CertificateRequestSerializer(serializers.ModelSerializer):
     
     
 class ClerkCertificateRequestSerializer(serializers.ModelSerializer):
-    """
-    Clerk-facing serializer.
-    Shows: student info, request details, status.
-    Accepts: status update (APPROVED / REJECTED).
-    Note: the actual file upload is handled via request.FILES in the viewset,
-    not through this serializer, to avoid multipart field conflicts.
-    """
-    student_name = serializers.CharField(
-        source="student.user.username",
-        read_only=True
-    )
-    certificate_type_name = serializers.CharField(
-        source="certificate_type.name",
-        read_only=True
-    )
+    student_name = serializers.CharField(source="student.user.username",read_only=True)
+    certificate_type_name = serializers.CharField(source="certificate_type.name",read_only=True)
     certificate_file = serializers.SerializerMethodField()
 
     class Meta:
@@ -694,3 +649,84 @@ class LeaveTemplateBulkCreateSerializer(serializers.Serializer):
     
     
     
+class StudentAttendanceListSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = StudentAttendance
+        fields = '__all__'
+        
+        
+class SyllabusListSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Syllabus
+        fields = '__all__'
+        
+class SchoolClassSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SchoolClass
+        fields = '__all__'
+        
+        
+class ExamViewSerializer(serializers.ModelSerializer):
+    class Meta:
+        model=Exam
+        fields=["title","description", "subject","exam_date","start_time","end_time","class_group"]
+        
+        
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        request = self.context.get("request")
+
+        if request:
+            staff = Staff.objects.filter(user=request.user).first()
+
+            if staff:
+                self.fields["subject"].queryset = Subject.objects.filter(
+                    school=staff.school
+                )
+
+                self.fields["class_group"].queryset = SchoolClass.objects.filter(
+                    school=staff.school
+                )
+                
+                
+    def validate(self, attrs):
+        request = self.context.get("request")
+        staff = Staff.objects.filter(user=request.user).first()
+
+        if attrs["subject"].school != staff.school:
+            raise serializers.ValidationError(
+                {"subject": "Invalid subject for your school."}
+            )
+
+        if attrs["class_group"].school != staff.school:
+            raise serializers.ValidationError(
+                {"class_group": "Invalid class group for your school."}
+            )
+
+        return attrs
+    
+    
+    
+
+class BookManageSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Book
+        fields = '__all__'
+        read_only_fields = ['school', 'available_copies', 'status']
+        
+        
+
+class LateBookFeesSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = LateBookFees
+        fields = '__all__'
+        read_only_fields = ['school']
+        
+        
+
+class BookIssuedSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = BookIssued
+        fields = '__all__'
+        read_only_fields = ['school']

@@ -355,7 +355,6 @@ class LoginView(APIView):
         # print("...........",user_block)
         
         staff = Staff.objects.filter(user=user).first()
-        print("sssssssss", staff)
 
         if staff:
             # with transaction.atomic():
@@ -417,8 +416,7 @@ class LoginView(APIView):
                 "school_id": response_data["school_id"],
                 "school_slug": response_data["school_slug"],
                 "roles": response_data["roles"],
-                "modules": response_data["modules"],
-                "access_token":access_token
+                "modules": response_data["modules"]
             },
             status=status.HTTP_200_OK,
         )
@@ -558,6 +556,7 @@ class IsTempUser(BasePermission):
             and request.user.is_authenticated
             and request.user.groups.filter(name="temp_user").exists()
         )
+
 
 
 class HasModuleAccess(BasePermission):
@@ -2160,6 +2159,8 @@ class SetDivisionView(ModelViewSet):
                 capacity=capacity,
             )
             divisions.append(obj)
+        
+        assign_student_divisions()
 
         #  Clear Cache (SAFE)
         try:
@@ -2226,10 +2227,10 @@ def assign_student_divisions():
 
         # Assign divisions (round-robin)
         for index, student in enumerate(students):
-            student.division = divisions[index % division_len].division
+            student.division_id = divisions[index % division_len].id
 
         # Bulk update for performance
-        Student.objects.bulk_update(students, ["division"])
+        Student.objects.bulk_update(students, ["division_id"])
 
 
 # ==================================================================
@@ -3876,7 +3877,10 @@ class HomeworkViewSet(ModelViewSet):
     queryset = Homework.objects.all()
 
     def get_student_division_name(self, student):
-        division_name = (student.division or "").strip()
+        # division_name = (student.division or "").strip()
+        if not student.division:
+            return ""
+        return (student.division.division or "").strip()
 
         # if "(" in division_name and ")" in division_name:
         #     division_name = division_name.rsplit("(", 1)[-1].split(")", 1)[0].strip()
@@ -3899,21 +3903,37 @@ class HomeworkViewSet(ModelViewSet):
         )
 
         # If user is a student, only show homework for their division
+        # if self.is_student():
+        #     try:
+        #         student = self.request.user.student
+        #         division_name = self.get_student_division_name(student)
+
+        #         if not student.school_class_id or not division_name:
+        #             return queryset.none()
+
+        #         queryset = queryset.filter(
+        #             division__SchoolClass_id=student.school_class_id,
+        #             division__division__iexact=division_name,
+        #             is_active=True,
+        #         )
+                
+        #     except Student.DoesNotExist:
+        #         queryset = queryset.none()
+                
         if self.is_student():
             try:
                 student = self.request.user.student
-                division_name = self.get_student_division_name(student)
-
-                if not student.school_class_id or not division_name:
-                    return queryset.none()
-
-                queryset = queryset.filter(
-                    division__SchoolClass_id=student.school_class_id,
-                    division__division__iexact=division_name,
-                    is_active=True,
-                )
             except Student.DoesNotExist:
-                queryset = queryset.none()
+                return queryset.none()
+
+            if not student.school_class_id or not student.division_id:
+                return queryset.none()
+
+            queryset = queryset.filter(
+                division__SchoolClass_id=student.school_class_id,
+                division_id=student.division_id,
+                is_active=True,
+            )
 
         return queryset.order_by("-assigned_date")
 

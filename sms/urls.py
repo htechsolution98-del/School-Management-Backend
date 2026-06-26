@@ -195,6 +195,13 @@ router.register(r'change-leave-status', ChangeLeaveView, basename='change-leave-
 
 
 
+router.register(r'library-book-management', BookManageView, basename='library-book-management')
+
+router.register(r'late-book-fees', LateBookFeesViews, basename='late-book-fees')
+
+
+
+
 
 
 urlpatterns = [
@@ -275,6 +282,20 @@ urlpatterns = [
         StudentAttendanceView.as_view(),
         name="student-attendance"
     ),
+    
+    
+    path('api/specific-student-attendance/', StudentAttendanceListView.as_view()), # student see their attendance
+    
+    path('api/syllabus-student/', SyllabusListView.as_view()), # student see syallabus
+    
+    path('api/examtimetable-view/', ExamViewSet.as_view()),
+    
+    path('api/examtimetable/', ExamCreateViewSet.as_view()),
+    
+    path("api/classes/<int:class_id>/subjects/",SubjectByClassAPIView.as_view()),
+    
+    path("api/classes/",SchoolClassesView.as_view()),
+    
     # path('api/razardata/',RazarDataView.as_view()),
     
     path('api/webhook/',RazorpayWebhookView.as_view()),

@@ -4,7 +4,7 @@ from .models import *
 from .serializer import *
 from rest_framework.viewsets import ModelViewSet
 from rest_framework.permissions import IsAuthenticated
-from rest_framework.views import APIView
+from rest_framework.views import APIView;
 from rest_framework.response import Response
 from rest_framework.permissions import BasePermission
 from .harsh_serializer import *
@@ -32,7 +32,22 @@ class Isstudent(BasePermission):
             and request.user.groups.filter(name="student").exists()
         )
         
-
+class Isteacher(BasePermission):
+    def has_permission(self, request, view):
+        return (
+            request.user
+            and request.user.is_authenticated
+            and request.user.groups.filter(name="TEACHER").exists()
+        )
+   
+   
+class IsLibrarian(BasePermission):     
+    def has_permission(self, request, view):
+        return (
+            request.user
+            and request.user.is_authenticated
+            and request.user.groups.filter(name="LIBRARIAN").exists()
+        )
 
 
 CARRY_MONTHS = {
@@ -177,7 +192,7 @@ class CertificateTypeSerializer(ModelViewSet): #for create, read, update, delete
 class CertificateRequestViewSet(ModelViewSet):
     """Student-facing viewset: create requests, view status & certificate."""
     serializer_class = CertificateRequestSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, Isstudent]
     http_method_names = ["get", "post", "head", "options"]  # Students can't update/delete
 
     def get_queryset(self):
@@ -271,6 +286,9 @@ class ClerkCertificateRequestViewSet(ModelViewSet):
                 certificate_number=f"CERT-{uuid4().hex[:8].upper()}",
                 file=file
             )
+            
+            
+            instance.refresh_from_db()
 
         elif new_status == "REJECTED":
             serializer.save(status="REJECTED")
@@ -307,16 +325,6 @@ def get_clerk_school(request):
 
 # LeaveTemplate ViewSet
 class LeaveTemplateViewSet(ModelViewSet):
-    """
-    GET    /leave-templates/               list
-    POST   /leave-templates/               create
-    POST   /leave-templates/bulk_create/   create template + leave types together
-    GET    /leave-templates/<pk>/          retrieve
-    PUT    /leave-templates/<pk>/          update
-    PATCH  /leave-templates/<pk>/          partial_update
-    DELETE /leave-templates/<pk>/          destroy
-    """
- 
     permission_classes = [IsAuthenticated]
     serializer_class = NewLeaveTemplateSerializer
  
@@ -334,19 +342,6 @@ class LeaveTemplateViewSet(ModelViewSet):
  
     @action(detail=False, methods=["post"], url_path="bulk_create")
     def bulk_create(self, request):
-        """
-        Create a LeaveTemplate and multiple LeaveTypes in one request.
- 
-        POST /leave-templates/bulk_create/
-        {
-            "name": "Annual Policy 2025",
-            "time_line": "ANNUAL",
-            "leave_types": [
-                {"leave_type": "Sick Leave",   "leave_num": 20, "category": 3},
-                {"leave_type": "Casual Leave", "leave_num": 12, "category": 4}
-            ]
-        }
-        """
         school = get_clerk_school(request)
         serializer = LeaveTemplateBulkCreateSerializer(
             data=request.data,
@@ -363,14 +358,6 @@ class LeaveTemplateViewSet(ModelViewSet):
  
  
 class LeaveTypeViewSet(ModelViewSet):
-    """
-    GET    /leave-types/               list  (optionally filter by ?template=<id>)
-    POST   /leave-types/               create
-    GET    /leave-types/<pk>/          retrieve
-    PUT    /leave-types/<pk>/          update
-    PATCH  /leave-types/<pk>/          partial_update
-    DELETE /leave-types/<pk>/          destroy
-    """
  
     permission_classes = [IsAuthenticated]
     serializer_class = NewLeaveTypeSerializer
@@ -547,3 +534,243 @@ def get_approved_paid_leave_days(staff, start_date, end_date):
         date__range=(start_date, end_date),
         leave__is_paid=True  # ← Filter by is_paid on the leave request
     ).count()
+    
+    
+    
+    
+    
+# class StudentAttendanceListView(GenericAPIView):
+#     serializer_class = StudentAttendanceListSerializer
+    
+#     def get(self, request):
+        
+#         user = self.request.user
+        
+#         student = Student.objects.filter(user=user).first()
+        
+#         StudentAttendance.objects.filter(student = student)
+    
+    
+    
+    
+class StudentAttendanceListView(ListAPIView):
+    serializer_class = StudentAttendanceListSerializer
+    
+    def get_queryset(self):
+        
+        user = self.request.user
+        
+        student = Student.objects.filter(user=user).first()
+        
+        qs = StudentAttendance.objects.filter(student = student)
+        
+        
+        return qs
+    
+    
+class SyllabusListView(ListAPIView):
+    serializer_class = SyllabusListSerializer
+    permission_classes=[IsAuthenticated, Isstudent]
+    
+    def get_queryset(self):
+        
+        user = self.request.user
+        
+        student = Student.objects.filter(user=user).first()
+        
+        
+        qs = Syllabus.objects.filter(division = student.division, school=student.school)
+        # qs = Syllabus.objects.filter(school=student.school)
+        
+        
+        return qs
+
+
+class ExamViewSet(ListAPIView):
+    serializer_class = ExamViewSerializer
+    permission_classes = [IsAuthenticated, Isstudent]
+    
+    def get_queryset(self):
+        
+        student = Student.objects.filter(user=self.request.user).first()
+
+        qs = Exam.objects.filter(school=student.school, class_group=student.school_class)
+        
+        return qs
+    
+class ExamCreateViewSet(GenericAPIView):
+    serializer_class = ExamViewSerializer
+    permission_classes = [IsAuthenticated, Isteacher]
+    
+    def post(self, request, *args, **kwargs):
+        staff = Staff.objects.filter(user=self.request.user).first()
+        
+        serializer = self.get_serializer(data=request.data)
+        
+        if serializer.is_valid():
+            title = serializer.validated_data['title']
+            description = serializer.validated_data['description']
+            subject = serializer.validated_data['subject']
+            exam_date = serializer.validated_data['exam_date']
+            start_time = serializer.validated_data['start_time']
+            end_time = serializer.validated_data['end_time']
+            class_group = serializer.validated_data['class_group']
+
+
+            exam = Exam.objects.create(
+                school = staff.school,
+                created_by = staff,
+                title = title,
+                description = description,
+                subject = subject,
+                exam_date= exam_date,
+                start_time = start_time,
+                end_time = end_time,
+                class_group = class_group
+            )
+            
+            exam.save()
+            
+            return Response({
+                "detail":"exam scheduled"
+            })
+        
+        return Response(serializer.errors)
+    
+    
+    
+class SubjectByClassAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, class_id):
+        subjects = Subject.objects.filter(
+            division__SchoolClass_id=class_id
+        ).distinct()
+
+        data = [
+            {
+                "id": subject.id,
+                "name": subject.name
+            }
+            for subject in subjects
+        ]
+
+        return Response(data)
+    
+    
+    
+class SchoolClassesView(ListAPIView):
+    queryset = SchoolClass.objects.all()
+    serializer_class = SchoolClassSerializer
+    
+    def get_queryset(self):
+        
+        staff = Staff.objects.filter(user=self.request.user).first()
+        
+        
+        return SchoolClass.objects.filter(school = staff.school)
+    
+    
+    
+class BookManageView(ModelViewSet):
+    serializer_class = BookManageSerializer
+
+    permission_classes = [IsAuthenticated, IsLibrarian]
+    
+    def get_queryset(self):
+        
+        staff = Staff.objects.filter(user=self.request.user).first()
+        
+        return Book.objects.filter(school=staff.school)
+    
+    
+    
+    def perform_create(self, serializer):
+        
+        staff = Staff.objects.filter(user=self.request.user).first()
+        # school = School.objects.filter(login_id = self.request.user).first()
+        
+
+        title = serializer.validated_data.get("title")
+        author = serializer.validated_data.get("author")
+        category = serializer.validated_data.get("category")
+        total_copies = serializer.validated_data.get("total_copies")
+        
+        book_already= Book.objects.filter(school=staff.school, title=title, author=author).first()
+        
+        
+        if book_already is not None:
+            raise ValidationError(f"Book Already exists id = {book_already.pk}")
+        
+        
+        serializer.save(school = staff.school,available_copies=total_copies)
+        
+    
+    
+    def perform_destroy(self, instance):
+        
+        if not instance.total_copies == instance.available_copies:
+            raise ValidationError("Can't Delete Beacause Book Issued To Someone First Take That Back")
+        
+        return super().perform_destroy(instance)
+    
+    
+    
+    def perform_update(self, serializer):
+        
+        read_only_value = self.request.data.get('available_copies')
+        
+        if read_only_value is not None:
+            serializer.save(available_copies = read_only_value)
+        
+        else:
+            serializer.save()
+            
+            
+            
+            
+class LateBookFeesViews(ModelViewSet):
+    serializer_class = LateBookFeesSerializer
+    permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        
+        staff = Staff.objects.filter(user=self.request.user).first()
+        
+        latebookfees = LateBookFees.objects.filter(school=staff.school)
+        
+        return latebookfees
+    
+    def perform_create(self, serializer):
+        
+        staff = Staff.objects.filter(user=self.request.user).first()
+        
+        latefee_already = LateBookFees.objects.filter(school=staff.school).exists()
+        
+        if latefee_already:
+            raise ValidationError("Already Fees Decided if you want to change edit it")
+                
+        serializer.save(school=staff.school)
+        
+        
+        
+
+class BookIssuedView(ModelViewSet):
+    serializer_class = BookIssuedSerializer
+
+    def get_queryset(self):
+        
+        staff = Staff.objects.filter(user=self.request.user).first()
+        
+        book_issued = BookIssued.objects.filter(school=staff.school)
+        
+        return book_issued
+    
+    
+    def perform_create(self, serializer):
+        
+        staff = Staff.objects.filter(user=self.request.user).first()
+        
+        
+        
+        return super().perform_create(serializer)
