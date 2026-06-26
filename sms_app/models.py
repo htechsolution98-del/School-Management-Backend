@@ -556,7 +556,7 @@ class Student(models.Model):
     admission = models.OneToOneField(  # VERY IMPORTANT
         "Admission", on_delete=models.SET_NULL, null=True, blank=True
     )
-    parent=models.ForeignKey(Parent,on_delete=models.CASCADE,null=True,blank=True)
+    # parent=models.ForeignKey(Parent,on_delete=models.CASCADE,null=True,blank=True)
 
     # Identity
     surname = models.CharField(max_length=100, blank=True, null=True)
@@ -572,7 +572,7 @@ class Student(models.Model):
         SchoolClass, on_delete=models.CASCADE, null=True, blank=True
     )
 
-    division = models.CharField(max_length=20, null=True, blank=True)
+    division = models.ForeignKey(Division, on_delete=models.CASCADE, null=True)
 
     admission_date = models.DateField(blank=True, null=True)
     gr_no = models.CharField(max_length=100, blank=True, null=True)
@@ -842,12 +842,9 @@ class Syllabus(models.Model):
         School, on_delete=models.CASCADE, null=True, blank=True, db_index=True
     )
 
-    division = models.ForeignKey(
-        "Division", on_delete=models.CASCADE, related_name="syllabi"
-    )
-    subject = models.ForeignKey(
-        "Subject", on_delete=models.CASCADE, related_name="syllabi"
-    )
+    division = models.ForeignKey("Division", on_delete=models.CASCADE, related_name="syllabi")
+    
+    subject = models.ForeignKey("Subject", on_delete=models.CASCADE, related_name="syllabi")
     syllabus_file = models.FileField(upload_to="syllabus/")
 
     def __str__(self):
@@ -2330,6 +2327,7 @@ class Exam(models.Model):
     title = models.CharField(max_length=255)
     description = models.TextField()
 
+    subject = models.ForeignKey(Subject, on_delete=models.CASCADE, null=True)
     exam_date = models.DateField()
     start_time = models.TimeField()
     end_time = models.TimeField()
@@ -2359,3 +2357,71 @@ class HomeworkSubmission(models.Model):
 
     def __str__(self):
         return f"{self.student} - {self.homework}"
+    
+    
+    
+    
+    
+class Book(models.Model):
+    school = models.ForeignKey(School, on_delete=models.CASCADE)
+    title = models.CharField(max_length=255)
+    author = models.CharField(max_length=255)
+    category = models.CharField(max_length=100)
+
+    total_copies = models.PositiveIntegerField(default=1)
+    available_copies = models.PositiveIntegerField(default=1)
+
+    status = models.BooleanField(default=True)  
+    # True = Available, False = Not Available
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return self.title
+    
+    
+    def save(self, *args, **kwargs):
+        if self.available_copies > 0:
+            self.status = True
+        else:
+            self.status = False
+        super().save(*args, **kwargs)
+        
+    class Meta:
+        db_table = "book"
+        
+
+
+class LateBookFees(models.Model):
+    school = models.ForeignKey(School, on_delete=models.CASCADE)
+    fees = models.IntegerField() # perday penalty
+    
+    def __str__(self):
+        return f"{self.school.name}-perday fees:{self.fees}"
+    
+    class Meta:
+        db_table ="late_book_return_fees"
+        
+
+
+class BookIssued(models.Model):
+    school = models.ForeignKey(School, on_delete=models.CASCADE)
+    book = models.ForeignKey(Book, on_delete=models.CASCADE)
+    student = models.ForeignKey(Student, on_delete=models.CASCADE)
+    book_issued_date = models.DateTimeField()
+    due_date = models.DateTimeField()
+    actual_return_date = models.DateTimeField(null=True,blank=True)
+    late_fees = models.DecimalField(max_digits=10,decimal_places=2, default=0)
+    is_late = models.BooleanField(default=False)
+    STATUS_CHOICES=[
+        ("ISSUED","Issued"),
+        ("RETURNED", "RETURNED"),
+    ]
+    status = models.CharField(max_length=10,choices=STATUS_CHOICES, default="ISSUED")
+    
+    def __str__(self):
+        return f"{self.student.name}-{self.book.title}"
+    
+    class Meta:
+        db_table = "book_issued"
