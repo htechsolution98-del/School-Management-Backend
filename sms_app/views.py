@@ -4476,30 +4476,30 @@ class StaffFaceVerifyView(APIView):
             "raw_response": result
         })
 
-class ParentCreateView(APIView):
+# class ParentCreateView(APIView):
 
-    def post(self, request):
+#     def post(self, request):
 
-        serializer = ParentCreateSerializer(
-            data=request.data
-        )
+#         serializer = ParentCreateSerializer(
+#             data=request.data
+#         )
 
-        if serializer.is_valid():
+#         if serializer.is_valid():
 
-            parent = serializer.save()
+#             parent = serializer.save()
 
-            return Response(
-                {
-                    "message": "Parent created successfully",
-                    "parent_id": parent.id,
-                },
-                status=status.HTTP_201_CREATED,
-            )
+#             return Response(
+#                 {
+#                     "message": "Parent created successfully",
+#                     "parent_id": parent.id,
+#                 },
+#                 status=status.HTTP_201_CREATED,
+#             )
 
-        return Response(
-            serializer.errors,
-            status=status.HTTP_400_BAD_REQUEST,
-        )
+#         return Response(
+#             serializer.errors,
+#             status=status.HTTP_400_BAD_REQUEST,
+#         )
 
 
 
@@ -4510,7 +4510,7 @@ class StudentDocumentView(APIView):
         return [IsAuthenticated(), Isteacher()]
 
     def get(self,request):
-        parent=get_object_or_404(Parent,user=request.user)
+        parent=get_object_or_404(Perents,user=request.user)
         studentdocument=StudentDocument.objects.filter(student__parent=parent)
         serializer=StudentDocumentSerializer(studentdocument,many=True)
         return Response(serializer.data)
@@ -4533,7 +4533,7 @@ class StudentNotificationView(APIView):
          return [IsAuthenticated(), Isteacher()]
 
     def get(self,request):
-        parent=get_object_or_404(Parent,user=request.user)
+        parent=get_object_or_404(Perents,user=request.user)
         print(parent)
         notification=StudentNotification.objects.filter(student__parent=parent).order_by("-created_at")
         print(notification)
