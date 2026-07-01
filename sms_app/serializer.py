@@ -174,6 +174,7 @@ class LoginSerializer(serializers.Serializer):
             user = CustomUser.objects.filter(mobile=mobile).first()
             if not user:
                 user = CustomUser.objects.filter(username=mobile).first()
+                print(user.password)
 
         if not user or not user.check_password(password):
             raise serializers.ValidationError({"message": "Invalid credentials"})
@@ -1629,9 +1630,9 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
             # =========================
 
             if not student.user:
-                student_user = User.objects.create(username=gr_no, password = gr_no)
-                # student_user.set_password(gr_no)
-                
+                student_user = User.objects.create(username=gr_no)
+                student_user.set_password(gr_no)
+
                 student_user.save()
 
                 group, _ = Group.objects.get_or_create(name="student")
@@ -1704,12 +1705,12 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
 # ====================================================================
 
 
-class PrincipleVerifySerializr(serializers.ModelSerializer):
-    field_values = StudentFieldValueReadSerializer(many=True, read_only=True)
+# class PrincipleVerifySerializr(serializers.ModelSerializer):
+#     field_values = StudentFieldValueReadSerializer(many=True, read_only=True)
 
-    class Meta:
-        model = Student
-        fields = ["principle_verified", "principle_verified_at", "field_values"]
+#     class Meta:
+#         model = Student
+#         fields = ["principle_verified", "principle_verified_at", "field_values"]
 
 
 # =======set subject serializers========
@@ -1783,14 +1784,14 @@ class AssignClassSerializer(serializers.ModelSerializer):
 
 
 # ----------TO GET ADMISSION DATA TO TRUSTEE----------------
-class AdmissionDocumentReadSerializer(serializers.ModelSerializer):
-    document_label = serializers.CharField(
-        source="document_field.label", read_only=True
-    )
+# class AdmissionDocumentReadSerializer(serializers.ModelSerializer):
+#     document_label = serializers.CharField(
+#         source="document_field.label", read_only=True
+#     )
 
-    class Meta:
-        model = AdmissionDocument
-        fields = ["id", "document_field", "document_label", "file"]
+#     class Meta:
+#         model = AdmissionDocument
+#         fields = ["id", "document_field", "document_label", "file"]
 
 
 class GetAdmissionDataSerializer(serializers.ModelSerializer):

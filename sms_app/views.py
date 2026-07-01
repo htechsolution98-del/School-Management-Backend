@@ -1075,13 +1075,13 @@ class ClerkVerifyView(ModelViewSet):
         )
 
 
-class PrincipleVerifyView(ModelViewSet):
-    queryset = Student.objects.all()
-    serializer_class = PrincipleVerifySerializr
+# class PrincipleVerifyView(ModelViewSet):
+#     queryset = Student.objects.all()
+#     serializer_class = PrincipleVerifySerializr
 
-    def get_queryset(self):
-        school = self.request.user.school
-        return Student.objects.filter(clerk_verified=True, school=school)
+#     def get_queryset(self):
+#         school = self.request.user.school
+#         return Student.objects.filter(clerk_verified=True, school=school)
 
 
 # ======Fee Verify View =============

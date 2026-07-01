@@ -2397,11 +2397,13 @@ class LateBookFees(models.Model):
     school = models.ForeignKey(School, on_delete=models.CASCADE)
     fees = models.IntegerField() # perday penalty
     
+    grace_period_days = models.PositiveIntegerField(default=7)
+ 
     def __str__(self):
-        return f"{self.school.name}-perday fees:{self.fees}"
-    
+        return f"{self.school.name} - per-day fee: {self.fees}, grace: {self.grace_period_days}d"
+ 
     class Meta:
-        db_table ="late_book_return_fees"
+        db_table = "late_book_return_fees"
         
 
 
