@@ -2600,3 +2600,69 @@ class BudgetExpense(models.Model):
         db_table='budget_expense'
     
 
+class Book(models.Model):
+    school = models.ForeignKey(School, on_delete=models.CASCADE)
+    title = models.CharField(max_length=255)
+    author = models.CharField(max_length=255)
+    category = models.CharField(max_length=100)
+
+    total_copies = models.PositiveIntegerField(default=1)
+    available_copies = models.PositiveIntegerField(default=1)
+
+    status = models.BooleanField(default=True)  
+    # True = Available, False = Not Available
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return self.title
+    
+    
+    def save(self, *args, **kwargs):
+        if self.available_copies > 0:
+            self.status = True
+        else:
+            self.status = False
+        super().save(*args, **kwargs)
+        
+    class Meta:
+        db_table = "book"
+        
+
+
+class LateBookFees(models.Model):
+    school = models.ForeignKey(School, on_delete=models.CASCADE)
+    fees = models.IntegerField() # perday penalty
+    
+    grace_period_days = models.PositiveIntegerField(default=7)
+ 
+    def __str__(self):
+        return f"{self.school.name} - per-day fee: {self.fees}, grace: {self.grace_period_days}d"
+ 
+    class Meta:
+        db_table = "late_book_return_fees"
+        
+
+
+class BookIssued(models.Model):
+    school = models.ForeignKey(School, on_delete=models.CASCADE)
+    book = models.ForeignKey(Book, on_delete=models.CASCADE)
+    student = models.ForeignKey(Student, on_delete=models.CASCADE)
+    book_issued_date = models.DateTimeField()
+    due_date = models.DateTimeField()
+    actual_return_date = models.DateTimeField(null=True,blank=True)
+    late_fees = models.DecimalField(max_digits=10,decimal_places=2, default=0)
+    is_late = models.BooleanField(default=False)
+    STATUS_CHOICES=[
+        ("ISSUED","Issued"),
+        ("RETURNED", "RETURNED"),
+    ]
+    status = models.CharField(max_length=10,choices=STATUS_CHOICES, default="ISSUED")
+    
+    def __str__(self):
+        return f"{self.student.name}-{self.book.title}"
+    
+    class Meta:
+        db_table = "book_issued"
+
