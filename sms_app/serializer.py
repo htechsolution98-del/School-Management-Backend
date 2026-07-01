@@ -4891,24 +4891,24 @@ class StaffFaceSerializer(serializers.ModelSerializer):
 
             return face
 
-class ParentCreateSerializer(serializers.Serializer):
-    username = serializers.CharField()
-    email = serializers.EmailField()
-    password = serializers.CharField(write_only=True)
+# class ParentCreateSerializer(serializers.Serializer):
+#     username = serializers.CharField()
+#     email = serializers.EmailField()
+#     password = serializers.CharField(write_only=True)
 
-    def create(self, validated_data):
+#     def create(self, validated_data):
 
-        user = User.objects.create_user(
-            username=validated_data["username"],
-            email=validated_data["email"],
-            password=validated_data["password"],
-        )
+#         user = User.objects.create_user(
+#             username=validated_data["username"],
+#             email=validated_data["email"],
+#             password=validated_data["password"],
+#         )
 
-        parent = Parent.objects.create(
-            user=user
-        )
+#         parent = Parent.objects.create(
+#             user=user
+#         )
 
-        return parent
+#         return parent
 
 class StaffFaceVerifySerializer(serializers.Serializer):
     image=serializers.ImageField()
@@ -4936,8 +4936,8 @@ class ExamNotificationSerializer(serializers.ModelSerializer):
 class HomeworkSubmissionSerializer(serializers.ModelSerializer):
     class Meta():
         model=HomeworkSubmission
-        fields=["student","homework","file","submitted_at"]
-        read_only_fields=["submitted_at"]
+        fields=["homework","file","submitted_at"]
+        read_only_fields=["student","submitted_at"]
 
     def validate(self, attrs):
         homework = attrs.get("homework")
@@ -5002,6 +5002,56 @@ class MonthlyProgressReportSerializer(serializers.ModelSerializer):
                 return "D"
             
 
+class StudyMaterialSerializer(serializers.ModelSerializer):
+    class Meta:
+        model=StudyMaterial
+        fields=["subject","student_class","material_type","title","description","file"]
         
 
+class StockItemsSerializer(serializers.ModelSerializer):
+    class Meta:
+        model=StockItems
+        fields=["id","name","category","quantity","min_quantity"]
+
+class StockRequestSerializer(serializers.ModelSerializer):
+    class Meta:
+        model=StockRequest
+        fields=["stock_item","quantity","status","teacher"]  
+        read_only_fields=["teacher"] 
+        
+class AssetSerializer(serializers.ModelSerializer):
+    class Meta:
+        model=Asset
+        fields=["id","asset_name","category","asset_code","quantity","purchase_date","total_value"]
     
+class AssetMaintenanceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model=AssetMaintenance
+        fields=["id","asset","issue","maintance_date","status"]
+
+        
+class ProcurementSerializer(serializers.ModelSerializer):
+    class Meta:
+        model=Procurement
+        fields=["id","supplier","purchase_date","status"]
+
+class ProcurementItemSerializer(serializers.ModelSerializer):
+    class Meta:
+        model=ProcurementItem
+        fields=["id","procurement","stock_item","quantity","unit_price"]
+
+class LosspreventionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model=LossPrevention
+        fields=["id","maintenance","remark","replacement_cost","repair_cost","amount_saved"]
+
+class BudgetSerializer(serializers.ModelSerializer):
+    class Meta:
+        model=Budget
+        fields=["id","name","allocated_amount","financial_year","spent_amount","amount_left"]
+        read_only_fields=["spent_amount","amount_left"]
+
+class BudgetExpenseSerializer(serializers.ModelSerializer):
+    class Meta:
+        model=BudgetExpense
+        fields=["id","budget","expense_type","amount","description"]

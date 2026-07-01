@@ -166,11 +166,16 @@ router.register(r'staff-salary-payment', StaffSalaryPaymentViewSet, basename='st
 
 router.register(r'student-fee', StudentFeeViewSet, basename='student-fee')
 router.register(r'student-fee-payment', StudentFeePaymentViewSet, basename='student-fee-payment')
-
-
+router.register(r'asset',AssetViewSet,basename='asset')
+router.register(r'asset-maintenance',AssetMaintenanceViewSet,basename='asset-maintenance')
+router.register(r'procurement',ProcurementViewSet,basename='procurement')
+router.register(r'procurement-item',ProcurementItemViewSet,basename='procurement-item')
+router.register(r'stock-items',StockItemsViewset,basename='stock-items')
+router.register(r'stock-request',StockRequestViewset,basename='stock-request')
+router.register(r'loss-prevention',LossPreventionViewset,basename='loss-prevention')
+router.register(r'budget',BudgetViewset,basename='budget')
+router.register(r'budget-expense',BudgetExpenseViewset,basename='budget-expense')
 router.register(r'homework', HomeworkViewSet, basename='homework')
-
-
 router.register(r'studentget', StudentGetView, basename='studentget')
 
 
@@ -264,6 +269,9 @@ urlpatterns = [
     path('api/payment-history/',PaymentHistoryView.as_view()),
     path('api/fee-payment/',FeesPaymentView.as_view()),
     path('api/verify-payment/',VerifypaymentView.as_view()),
+    path('api/studymaterial/',StudyMaterialView.as_view()),
+    path("teacher/classes/",TeacherClassesView.as_view()),
+    
     # ITS FOR GET STIDENT FOR ATTENDANSE
     
     path(

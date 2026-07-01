@@ -541,6 +541,14 @@ class Isteacher(BasePermission):
             and request.user.groups.filter(name="TEACHER").exists()
         )
 
+class Isinventory(BasePermission):
+    def has_permission(self, request, view):
+        return (
+            request.user
+            and request.user.is_authenticated
+            and request.user.groups.filter(name="INVENTORY").exists()
+        )
+
 
 class IsTempUser(BasePermission):
     def has_permission(self, request, view):
@@ -4508,7 +4516,7 @@ class StudentDocumentView(APIView):
         return [IsAuthenticated(), Isteacher()]
 
     def get(self,request):
-        parent=get_object_or_404(Parent,user=request.user)
+        parent=get_object_or_404(Perents,user=request.user)
         studentdocument=StudentDocument.objects.filter(student__parent=parent)
         serializer=StudentDocumentSerializer(studentdocument,many=True)
         return Response(serializer.data)
@@ -4558,7 +4566,34 @@ class StudentNotificationView(APIView):
 
         return Response(serializer.data)
 
+class TeacherClassesView(APIView):
+    permission_classes = [IsAuthenticated, Isteacher]
 
+    def get(self, request):
+        assignments = (
+            AssignClass.objects.filter(
+                school=request.user.school,
+                teacher=request.user.staff
+            )
+            .select_related("division__SchoolClass")
+        )
+
+        data = []
+        added_classes = set()
+
+        for assignment in assignments:
+            school_class = assignment.division.SchoolClass
+
+            # Avoid duplicate classes
+            if school_class.id not in added_classes:
+                added_classes.add(school_class.id)
+
+                data.append({
+                    "class_id": school_class.id,
+                    "class_name": school_class.get_school_class_display(),
+                })
+
+        return Response(data)
 class ExamView(APIView):
 
     def get_permissions(self):
@@ -4653,7 +4688,7 @@ class HomeworkSubmissionView(APIView):
     def post(self,request):
         serializer=HomeworkSubmissionSerializer(data=request.data)
         if serializer.is_valid():
-            serializer.save(student=request.user)
+            serializer.save(student=request.user.student)
             print("After save")
             return Response(serializer.data)
         return Response(serializer.errors,status=404)
@@ -4661,13 +4696,54 @@ class HomeworkSubmissionView(APIView):
 class MonthlyProgressReportView(APIView):
     permission_classes = [Isteacher]
 
-    def post(self, request):
 
+    def get(self, request):
+        # Get divisions where the logged-in teacher is the class teacher
+        division_ids = AssignClass.objects.filter(
+            school=request.user.school,
+            teacher=request.user.staff,
+            is_class_teacher=True
+        ).values_list("division_id", flat=True)
+
+        students = Student.objects.filter(
+            school=request.user.school,
+            division_id__in=division_ids
+)
+
+        data = [
+            {
+                "id": student.id,
+                "name": f"{student.name} {student.surname}".strip()
+            }
+            for student in students
+        ]
+
+        return Response(data, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        
         serializer = MonthlyProgressReportSerializer(
             data=request.data
         )
 
         if serializer.is_valid():
+            student = serializer.validated_data["student"]
+
+            # Check if logged-in teacher is the class teacher
+            is_class_teacher = AssignClass.objects.filter(
+                school=request.user.school,
+                teacher=request.user.staff,
+                division=student.division,
+                is_class_teacher=True
+            ).exists()
+
+            if not is_class_teacher:
+                return Response(
+                    {
+                        "error": "Only the class teacher of this student's division can create a monthly progress report."
+                    },
+                    status=status.HTTP_403_FORBIDDEN
+                )
 
             report = serializer.save(
                 school=request.user.school,
@@ -4932,3 +5008,246 @@ class VerifypaymentView(APIView):
             "amount_paid": amount_due,
             "fee_status": fee.status
         })
+
+
+
+class StudyMaterialView(APIView):
+    permission_classes = [Isteacher]
+    def get(self, request):
+        assignments = AssignClass.objects.filter(
+            school=request.user.school,
+            teacher=request.user.staff
+        ).select_related(
+            "subject",
+            "division",
+            "division__SchoolClass"
+        )
+
+        data = []
+
+        for assignment in assignments:
+            data.append({
+                "subject_id": assignment.subject.id,
+                "subject_name": assignment.subject.name,
+                "class_id": assignment.division.SchoolClass.id,
+                "class_name": assignment.division.SchoolClass.get_school_class_display(),
+            })
+
+        return Response(data)
+
+    def post(self, request):
+        school = request.user.school
+        staff = request.user.staff
+
+        serializer = StudyMaterialSerializer(data=request.data)
+
+        if serializer.is_valid():
+            material = serializer.save(school=school, staff=staff)
+
+            channel_layer = get_channel_layer()
+
+            
+            group_name = f"student_{material.school.id}_class_{material.student_class.id}"
+
+            async_to_sync(channel_layer.group_send)(
+                group_name,
+                {
+                    "type": "studymaterial",
+
+                    "subject": str(material.subject),
+                    "student_class": str(material.student_class),
+                    "material_type": material.material_type,
+                    "title": material.title,
+                    "description": material.description,
+
+                    # ✅ always send URL, not file object
+                    "file": request.build_absolute_uri(material.file.url),
+                }
+            )
+
+            return Response(serializer.data, status=201)
+
+        return Response(serializer.errors, status=400)
+
+    
+class StockItemsViewset(ModelViewSet):
+    def get_permissions(self):
+        if self.request.method=='GET':
+            return [IsAuthenticated()]
+        else:
+            return [IsAuthenticated(),Isinventory()]
+
+    queryset=StockItems.objects.all()
+    serializer_class= StockItemsSerializer
+
+    def get_queryset(self):
+        return StockItems.objects.filter(school=self.request.user.school)
+        
+
+    def perform_create(self, serializer):
+        serializer.save(school=self.request.user.school)   
+
+    def perform_update(self, serializer):
+        return super().perform_update(serializer)
+    
+    def perform_destroy(self, instance):
+        return super().perform_destroy(instance)
+    
+
+
+class StockRequestViewset(ModelViewSet):
+    def get_permissions(self):
+        if self.request.method=='GET':
+            return [IsAuthenticated()]
+        elif self.request.method=='POST':
+            return [IsAuthenticated(),Isteacher()]
+        else:
+            return [IsAuthenticated(),Isinventory()]
+        
+    queryset=StockRequest.objects.all()
+    serializer_class=StockRequestSerializer
+
+    def get_queryset(self):
+        if self.request.user.groups.filter(name="INVENTORY").exists():
+            return StockRequest.objects.filter(school=self.request.user.school)
+
+        return StockRequest.objects.filter(teacher=self.request.user.staff)
+    def perform_create(self, serializer):
+        serializer.save(school=self.request.user.school,teacher=self.request.user.staff)
+
+    def  partial_update(self, serializer,pk):
+        try:
+            stock_request = StockRequest.objects.get(
+                pk=pk,
+                school=self.request.user.school
+            )
+        except StockRequest.DoesNotExist:
+            return Response(
+                {"error": "Stock request not found."},
+                status=status.HTTP_404_NOT_FOUND
+            ) #get item which we want to edit
+        status_value= self.request.data.get("status") # status of inventory manager
+        if status_value not in ["approved", "rejected"]:
+            return Response(
+                {"error": "Status must be 'approved' or 'rejected'."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        if status_value == "approved":
+
+            item = stock_request.stock_item
+
+            if item.quantity < stock_request.quantity:
+                return Response(
+                    {"error": "Insufficient stock available."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            item.quantity -= stock_request.quantity
+            item.save()
+
+        stock_request.status = status_value
+        stock_request.save()
+        serializer = StockRequestSerializer(stock_request)
+
+        return Response(serializer.data)
+    
+    
+
+    
+class AssetViewSet(ModelViewSet):
+    permission_classes=[Isinventory]
+    queryset=Asset.objects.all()
+    serializer_class=AssetSerializer
+
+    def get_queryset(self):
+       return Asset.objects.filter(school=self.request.user.school)
+   
+    def perform_create(self, serializer):
+       serializer.save(school=self.request.user.school)
+
+    def perform_update(self, serializer):
+        return super().perform_update(serializer)
+
+   
+
+class AssetMaintenanceViewSet(ModelViewSet):
+    permission_classes=[Isinventory]
+    queryset=AssetMaintenance.objects.all()
+    serializer_class=AssetMaintenanceSerializer
+
+    def get_queryset(self):
+       return AssetMaintenance.objects.filter(school=self.request.user.school)
+   
+    def perform_create(self, serializer):
+       serializer.save(school=self.request.user.school)
+
+    def partial_update(self, request, *args, **kwargs):
+        return super().partial_update(request, *args, **kwargs)
+    
+class ProcurementViewSet(ModelViewSet):
+    permission_classes=[Isinventory]
+    queryset=Procurement.objects.all()
+    serializer_class=ProcurementSerializer
+
+    def get_queryset(self):
+       return Procurement.objects.filter(school=self.request.user.school)
+   
+    def perform_create(self, serializer):
+       serializer.save(school=self.request.user.school)
+
+    def perform_update(self, serializer):
+        procurement = serializer.save()
+
+        if procurement.status == "received":
+            procurement.restock()
+        
+    
+class ProcurementItemViewSet(ModelViewSet):
+    permission_classes=[Isinventory]
+    queryset=ProcurementItem.objects.all()
+    serializer_class=ProcurementItemSerializer
+
+    def get_queryset(self):
+       return ProcurementItem.objects.filter(procurement__school=self.request.user.school)
+   
+    def perform_create(self, serializer):
+       serializer.save()
+
+    def partial_update(self, request, *args, **kwargs):
+        return super().partial_update(request, *args, **kwargs)
+
+
+class LossPreventionViewset(ModelViewSet):
+    queryset=LossPrevention.objects.all()
+    serializer_class=LosspreventionSerializer
+    permission_classes=[Isinventory]
+
+    def get_queryset(self):
+        return LossPrevention.objects.filter(school=self.request.user.school)
+    
+    def perform_create(self, serializer):
+        serializer.save(school=self.request.user.school)
+    
+
+class BudgetViewset(ModelViewSet):
+    queryset=Budget.objects.all()
+    serializer_class=BudgetSerializer
+    permission_classes=[Isinventory]
+
+    def get_queryset(self):
+        return Budget.objects.filter(school=self.request.user.school)
+    
+    def perform_create(self, serializer):
+        serializer.save(school=self.request.user.school)
+
+
+class BudgetExpenseViewset(ModelViewSet):
+    queryset=BudgetExpense.objects.all()
+    serializer_class=BudgetExpenseSerializer
+    permission_classes=[Isinventory]
+
+    def get_queryset(self):
+        return BudgetExpense.objects.filter(budget__school=self.request.user.school)
+    
+    def perform_create(self, serializer):
+        serializer.save()
