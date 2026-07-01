@@ -725,8 +725,24 @@ class LateBookFeesSerializer(serializers.ModelSerializer):
         
         
 
+# class BookIssuedSerializer(serializers.ModelSerializer):
+#     class Meta:
+#         model = BookIssued
+#         fields = '__all__'
+#         read_only_fields = ['school']
+
+
+ 
 class BookIssuedSerializer(serializers.ModelSerializer):
     class Meta:
         model = BookIssued
-        fields = '__all__'
-        read_only_fields = ['school']
+        fields = "__all__"
+        
+        read_only_fields = [
+            "school",
+            "book_issued_date",
+            "actual_return_date",
+            "late_fees",
+            "is_late",
+            "status",
+        ]

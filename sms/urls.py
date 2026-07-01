@@ -108,7 +108,7 @@ router.register(r'updateDocument', AdmissionDocumentViewSet, basename='updateDoc
 
 router.register(r'clerk_verify', ClerkVerifyView, basename='ClerkVerifyView') 
 
-router.register(r'PrincipleVerifyView', PrincipleVerifyView, basename='PrincipleVerifyView')
+# router.register(r'PrincipleVerifyView', PrincipleVerifyView, basename='PrincipleVerifyView')
 
 router.register(r'fee_verify', FeeVerifyView, basename='fee_verify')
 
@@ -195,9 +195,35 @@ router.register(r'change-leave-status', ChangeLeaveView, basename='change-leave-
 
 
 
-router.register(r'library-book-management', BookManageView, basename='library-book-management')
+# router.register(r'library-book-management', BookManageView, basename='library-book-management')
 
-router.register(r'late-book-fees', LateBookFeesViews, basename='late-book-fees')
+# router.register(r'late-book-fees', LateBookFeesViews, basename='late-book-fees')
+
+
+
+# router.register(r'book-view-student', BookViewStudent, basename='book-view-student')
+
+
+
+
+router.register(r"books/manage", BookManageView, basename="book-manage") # for book add clerk
+
+# Late fee policy: staff-side, one per school.
+router.register(r"late-fees", LateBookFeesViews, basename="late-fees")
+
+# Staff-side issuing + returning (counter operations).
+# DRF auto-generates /book-issued/<id>/return/ from the @action below.
+router.register(r"book-issued", BookIssuedView, basename="book-issued")
+
+# Student-side read-only catalogue browsing.
+router.register(r"books", BookViewStudent, basename="book-student")
+
+# Student-side issuing + own loan history.
+# DRF auto-generates /my-books/<id>/return/ from the @action below.
+router.register(r"my-books", BookIssueStudent, basename="book-issue-student")
+
+
+router.register(r"reports", ReportsView, basename="report")
 
 
 
@@ -286,15 +312,15 @@ urlpatterns = [
     
     path('api/specific-student-attendance/', StudentAttendanceListView.as_view()), # student see their attendance
     
-    path('api/syllabus-student/', SyllabusListView.as_view()), # student see syallabus
+    path('api/syllabus-student/', SyllabusListView.as_view()), # student see syallabus, for now study material
     
-    path('api/examtimetable-view/', ExamViewSet.as_view()),
+    path('api/examtimetable-view/', ExamViewSet.as_view()), # student see exam timetable
     
-    path('api/examtimetable/', ExamCreateViewSet.as_view()),
+    path('api/examtimetable/', ExamCreateViewSet.as_view()), # teacher create timetable
     
-    path("api/classes/<int:class_id>/subjects/",SubjectByClassAPIView.as_view()),
+    path("api/classes/<int:class_id>/subjects/",SubjectByClassAPIView.as_view()), # in timetable first select class than subjects
     
-    path("api/classes/",SchoolClassesView.as_view()),
+    path("api/classes/",SchoolClassesView.as_view()), # classes to see for examtimetable
     
     # path('api/razardata/',RazarDataView.as_view()),
     
