@@ -188,9 +188,9 @@ router.register(r"leave-types", LeaveTypeViewSet, basename="leave-types")
 
 router.register(r'leave-request', LeaveRequestView, basename='leave-request') 
 
-router.register(r'get-leave-requests', GetLeaveRequestView, basename='get-leave-requests')# For get leave request for principle with filter [school filter add remainig]
+router.register(r'get-leave-requests', GetLeaveRequestView, basename='get-leave-requests')# For get leave request for clerk with filter [school filter add remainig]
 
-router.register(r'change-leave-status', ChangeLeaveView, basename='change-leave-status')# For approve leave request for principle METHOD [PUT]
+router.register(r'change-leave-status', ChangeLeaveView, basename='change-leave-status')# For approve leave request for clerk METHOD [PUT]
 
 
 
@@ -206,17 +206,17 @@ router.register(r'change-leave-status', ChangeLeaveView, basename='change-leave-
 
 
 
-router.register(r"books/manage", BookManageView, basename="book-manage") # for book add clerk
+router.register(r"books/manage", BookManageView, basename="book-manage") # for add remove update or manage book by librarian
 
 # Late fee policy: staff-side, one per school.
 router.register(r"late-fees", LateBookFeesViews, basename="late-fees")
 
 # Staff-side issuing + returning (counter operations).
 # DRF auto-generates /book-issued/<id>/return/ from the @action below.
-router.register(r"book-issued", BookIssuedView, basename="book-issued")
+router.register(r"book-issued", BookIssuedView, basename="book-issued") #librarian see all book issued and status also issue book to someone and mark return
 
 # Student-side read-only catalogue browsing.
-router.register(r"books", BookViewStudent, basename="book-student")
+router.register(r"books", BookViewStudent, basename="book-student") 
 
 # Student-side issuing + own loan history.
 # DRF auto-generates /my-books/<id>/return/ from the @action below.
@@ -261,13 +261,13 @@ urlpatterns = [
      
      
      
-     path('api/get-remaining-leaves/',GetStaffRemainingleave.as_view()),  
+     path('api/get-remaining-leaves/',GetStaffRemainingleave.as_view()),  # staff see remaining leave
      
      # To get remaining leave for staff when click on apply leave button for show remaining leave
      path('api/get-leave-requests-staff/',GetStaffLeaveRequest.as_view()),
      
      
-     path("api/approve-all-leave/<int:pk>/",ChangeAllLeaveView.as_view()),
+     path('api/approve-all-leave/<int:pk>/',ChangeAllLeaveView.as_view()), # clerk approve all day at once
      
 
 

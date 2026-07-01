@@ -4912,24 +4912,24 @@ class StaffFaceSerializer(serializers.ModelSerializer):
 
             return face
 
-class ParentCreateSerializer(serializers.Serializer):
-    username = serializers.CharField()
-    email = serializers.EmailField()
-    password = serializers.CharField(write_only=True)
+# class ParentCreateSerializer(serializers.Serializer):
+#     username = serializers.CharField()
+#     email = serializers.EmailField()
+#     password = serializers.CharField(write_only=True)
 
-    def create(self, validated_data):
+#     def create(self, validated_data):
 
-        user = User.objects.create_user(
-            username=validated_data["username"],
-            email=validated_data["email"],
-            password=validated_data["password"],
-        )
+#         user = User.objects.create_user(
+#             username=validated_data["username"],
+#             email=validated_data["email"],
+#             password=validated_data["password"],
+#         )
 
-        parent = Parent.objects.create(
-            user=user
-        )
+#         parent = Parent.objects.create(
+#             user=user
+#         )
 
-        return parent
+#         return parent
 
 class StaffFaceVerifySerializer(serializers.Serializer):
     image=serializers.ImageField()

@@ -533,16 +533,16 @@ class AdmissionDocument(models.Model):
 
 
 # # ======this is modified======
-class Parent(models.Model):
-    user = models.OneToOneField(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
-        related_name="parent_profile",
-    )
-    school = models.ForeignKey(School, on_delete=models.CASCADE,default=1)
+# class Parent(models.Model):
+#     user = models.OneToOneField(
+#         settings.AUTH_USER_MODEL,
+#         on_delete=models.CASCADE,
+#         related_name="parent_profile",
+#     )
+#     school = models.ForeignKey(School, on_delete=models.CASCADE,default=1)
 
-    class Meta:
-        db_table = "parent"
+#     class Meta:
+#         db_table = "parent"
 
 class Student(models.Model):
 
@@ -2154,38 +2154,38 @@ class StaffFace(models.Model):
         return f"Face - {self.staff.name}"
 
 
-class StudentParent(models.Model):
+# class StudentParent(models.Model):
 
-    RELATIONSHIP_CHOICES = [
-        ("FATHER", "Father"),
-        ("MOTHER", "Mother"),
-        ("GUARDIAN", "Guardian"),
-    ]
+#     RELATIONSHIP_CHOICES = [
+#         ("FATHER", "Father"),
+#         ("MOTHER", "Mother"),
+#         ("GUARDIAN", "Guardian"),
+#     ]
 
-    student = models.ForeignKey(
-        Student,
-        on_delete=models.CASCADE,
-        related_name="parent_mappings",
-    )
+#     student = models.ForeignKey(
+#         Student,
+#         on_delete=models.CASCADE,
+#         related_name="parent_mappings",
+#     )
 
-    parent = models.ForeignKey(
-        Parent,
-        on_delete=models.CASCADE,
-        related_name="student_mappings",
-    )
+#     parent = models.ForeignKey(
+#         Parent,
+#         on_delete=models.CASCADE,
+#         related_name="student_mappings",
+#     )
 
-    relationship = models.CharField(
-        max_length=20,
-        choices=RELATIONSHIP_CHOICES,
-    )
+#     relationship = models.CharField(
+#         max_length=20,
+#         choices=RELATIONSHIP_CHOICES,
+#     )
 
-    is_primary = models.BooleanField(default=False)
+#     is_primary = models.BooleanField(default=False)
 
-    created_at = models.DateTimeField(auto_now_add=True)
+#     created_at = models.DateTimeField(auto_now_add=True)
 
-    class Meta:
-        db_table = "student_parent"
-        unique_together = ("student", "parent")
+#     class Meta:
+#         db_table = "student_parent"
+#         unique_together = ("student", "parent")
 
 
 class StudentDocument(models.Model):
