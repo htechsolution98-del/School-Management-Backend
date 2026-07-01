@@ -931,9 +931,16 @@ class TempUserAdmissionViewSet(ReadOnlyModelViewSet):
 
 
 class TempUserListViewSet(ReadOnlyModelViewSet):
-    queryset = TempUser.objects.select_related("user").all()
+
     serializer_class = TempUserListSerializer
     permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        print("School:", self.request.user.school)
+
+        return TempUser.objects.select_related("user").filter(
+            user__school=self.request.user.school
+        )
 
     @action(
         detail=False,
