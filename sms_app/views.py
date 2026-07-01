@@ -950,7 +950,7 @@ class TempUserListViewSet(ReadOnlyModelViewSet):
     )
     
     def deactivate_all(self, request):
-        User.objects.filter(groups__name="temp_user").update(is_active=False)
+        User.objects.filter(groups__name="temp_user", school=request.user.school).update(is_active=False)
         return Response(
             {"message": "All temp users have been deactivated."},
             status=status.HTTP_200_OK,
@@ -3776,9 +3776,10 @@ class AttendanceStudentAPIView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        
         # GET STUDENTS
         students = Student.objects.filter(
-            school=school, division=assign_class.division.division
+            school=school, division=assign_class.division.id
         ).order_by("gr_no")
 
         serializer = StudentSerializer(students, many=True)
@@ -3880,7 +3881,7 @@ class HomeworkViewSet(ModelViewSet):
     - student-homework: Students view homework for their division
     """
 
-    # permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated]
     queryset = Homework.objects.all()
 
     def get_student_division_name(self, student):

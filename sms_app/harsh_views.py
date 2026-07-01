@@ -557,6 +557,7 @@ def get_approved_paid_leave_days(staff, start_date, end_date):
     
 class StudentAttendanceListView(ListAPIView):
     serializer_class = StudentAttendanceListSerializer
+    permission_classes = [IsAuthenticated]
     
     def get_queryset(self):
         
