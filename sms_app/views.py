@@ -950,7 +950,7 @@ class TempUserListViewSet(ReadOnlyModelViewSet):
     )
     
     def deactivate_all(self, request):
-        User.objects.filter(groups__name="temp_user").update(is_active=False)
+        User.objects.filter(groups__name="temp_user", school=request.user.school).update(is_active=False)
         return Response(
             {"message": "All temp users have been deactivated."},
             status=status.HTTP_200_OK,
