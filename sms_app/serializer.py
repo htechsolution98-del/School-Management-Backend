@@ -25,9 +25,11 @@ from django.contrib.auth.models import Group
 from rest_framework import serializers
 from django.db.models import Q, Sum
 from django.contrib.auth import get_user_model
-from django.utils.timezone import now
-import cv2
+from sms_app.harsh_views import get_approved_paid_leave_days
 import numpy as np
+import cv2
+from django.utils.timezone import now
+
 User = get_user_model()
 
 
@@ -172,6 +174,7 @@ class LoginSerializer(serializers.Serializer):
             user = CustomUser.objects.filter(mobile=mobile).first()
             if not user:
                 user = CustomUser.objects.filter(username=mobile).first()
+                print(user.password)
 
         if not user or not user.check_password(password):
             raise serializers.ValidationError({"message": "Invalid credentials"})
@@ -1532,6 +1535,8 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
                 gr_no=gr_no,
                 # details_done=True,
             )
+            
+            
 
             StudentVerify.objects.create(
                 admission_number=instance.admission_number,
@@ -1625,9 +1630,9 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
             # =========================
 
             if not student.user:
-                student_user = User.objects.create(username=gr_no, password = gr_no)
-                # student_user.set_password(gr_no)
-                
+                student_user = User.objects.create(username=gr_no)
+                student_user.set_password(gr_no)
+
                 student_user.save()
 
                 group, _ = Group.objects.get_or_create(name="student")
@@ -1700,12 +1705,12 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
 # ====================================================================
 
 
-class PrincipleVerifySerializr(serializers.ModelSerializer):
-    field_values = StudentFieldValueReadSerializer(many=True, read_only=True)
+# class PrincipleVerifySerializr(serializers.ModelSerializer):
+#     field_values = StudentFieldValueReadSerializer(many=True, read_only=True)
 
-    class Meta:
-        model = Student
-        fields = ["principle_verified", "principle_verified_at", "field_values"]
+#     class Meta:
+#         model = Student
+#         fields = ["principle_verified", "principle_verified_at", "field_values"]
 
 
 # =======set subject serializers========
@@ -1779,14 +1784,14 @@ class AssignClassSerializer(serializers.ModelSerializer):
 
 
 # ----------TO GET ADMISSION DATA TO TRUSTEE----------------
-class AdmissionDocumentReadSerializer(serializers.ModelSerializer):
-    document_label = serializers.CharField(
-        source="document_field.label", read_only=True
-    )
+# class AdmissionDocumentReadSerializer(serializers.ModelSerializer):
+#     document_label = serializers.CharField(
+#         source="document_field.label", read_only=True
+#     )
 
-    class Meta:
-        model = AdmissionDocument
-        fields = ["id", "document_field", "document_label", "file"]
+#     class Meta:
+#         model = AdmissionDocument
+#         fields = ["id", "document_field", "document_label", "file"]
 
 
 class GetAdmissionDataSerializer(serializers.ModelSerializer):
@@ -3450,10 +3455,13 @@ class GenerateStaffSalaryPaymentSerializer(serializers.ModelSerializer):
         half_days = attendance_qs.filter(is_present=True, is_half_day=True).count()
         absent_days = max(working_days - present_count - half_days, 0)
         present_days = Decimal(present_count) + (Decimal(half_days) / Decimal("2"))
-        attendance_deduction = (
-            (Decimal(absent_days) * per_day_salary)
-            + (Decimal(half_days) * per_day_salary / Decimal("2"))
-        ).quantize(Decimal("0.01"))
+        # attendance_deduction = (
+        #     (Decimal(absent_days) * per_day_salary)
+        #     + (Decimal(half_days) * per_day_salary / Decimal("2"))
+        # ).quantize(Decimal("0.01"))
+        
+        approved_paid_days = get_approved_paid_leave_days(staff, month_start, month_end)
+        attendance_deduction = Decimal(approved_paid_days) * per_day_salary
 
         total_earnings = Decimal("0.00")
         component_deductions = Decimal("0.00")
@@ -4669,15 +4677,28 @@ class HomeworkSubmissionSerializer(serializers.ModelSerializer):
             )
 
         # Check if student belongs to the class/division this homework is for
+        # homework_division = (homework.division.division or "").strip().lower()
+        # student_division = (student.division or "").strip()
+
+        # if "(" in student_division and ")" in student_division:
+        #     student_division = (
+        #         student_division.rsplit("(", 1)[-1].split(")", 1)[0].strip()
+        #     )
+
+        # student_division = student_division.lower()
+        
         homework_division = (homework.division.division or "").strip().lower()
-        student_division = (student.division or "").strip()
+        student_division = (student.division.division or "").strip().lower()
 
-        if "(" in student_division and ")" in student_division:
-            student_division = (
-                student_division.rsplit("(", 1)[-1].split(")", 1)[0].strip()
+        if (
+            homework.division_id != student.division_id
+            or homework.division.SchoolClass_id != student.school_class_id
+        ):
+            raise serializers.ValidationError(
+                {
+                    "student": "This student is not in the class/division assigned for this homework."
+                }
             )
-
-        student_division = student_division.lower()
 
         if (
             homework.division.SchoolClass_id != student.school_class_id
@@ -4891,24 +4912,24 @@ class StaffFaceSerializer(serializers.ModelSerializer):
 
             return face
 
-# class ParentCreateSerializer(serializers.Serializer):
-#     username = serializers.CharField()
-#     email = serializers.EmailField()
-#     password = serializers.CharField(write_only=True)
+class ParentCreateSerializer(serializers.Serializer):
+    username = serializers.CharField()
+    email = serializers.EmailField()
+    password = serializers.CharField(write_only=True)
 
-#     def create(self, validated_data):
+    def create(self, validated_data):
 
-#         user = User.objects.create_user(
-#             username=validated_data["username"],
-#             email=validated_data["email"],
-#             password=validated_data["password"],
-#         )
+        user = User.objects.create_user(
+            username=validated_data["username"],
+            email=validated_data["email"],
+            password=validated_data["password"],
+        )
 
-#         parent = Parent.objects.create(
-#             user=user
-#         )
+        parent = Perents.objects.create(
+            user=user
+        )
 
-#         return parent
+        return parent
 
 class StaffFaceVerifySerializer(serializers.Serializer):
     image=serializers.ImageField()

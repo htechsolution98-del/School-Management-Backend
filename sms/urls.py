@@ -18,7 +18,7 @@ from django.contrib import admin
 from django.urls import path
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from rest_framework.routers import DefaultRouter
-from sms_app.views import *
+
 from django.urls import include
 from django.views.generic import TemplateView
 
@@ -29,6 +29,7 @@ from drf_yasg import openapi
 
 from django.conf import settings
 from django.conf.urls.static import static
+from sms_app.views import *
 
 
 from sms_app.harsh_views import *
@@ -107,7 +108,7 @@ router.register(r'updateDocument', AdmissionDocumentViewSet, basename='updateDoc
 
 router.register(r'clerk_verify', ClerkVerifyView, basename='ClerkVerifyView') 
 
-router.register(r'PrincipleVerifyView', PrincipleVerifyView, basename='PrincipleVerifyView')
+# router.register(r'PrincipleVerifyView', PrincipleVerifyView, basename='PrincipleVerifyView')
 
 router.register(r'fee_verify', FeeVerifyView, basename='fee_verify')
 
@@ -137,17 +138,6 @@ router.register(r'get-student',GetStudentView,basename='get-student')
 
 # FOR ATTENDANCE TRACKING METHOD [GET,POST,PUT,DELETE]
 router.register(r'attendance', AttendanceView, basename='attendance') 
-
-router.register(r'leave-type', LeaveTypeView, basename='leave-type')# For leave template tracking METHOD [GET,POST,PUT,DELETE]
-
-
-
-router.register(r'leave-template', LeaveTemplateView, basename='leave-template')# For leave template tracking METHOD [GET,POST,PUT,DELETE]
-router.register(r'leave-request', LeaveRequestView, basename='leave-request')# 
-
-router.register(r'get-leave-requests', GetLeaveRequestView, basename='get-leave-requests')# For get leave request for principle with filter [school filter add remainig]
-
-router.register(r'change-leave-status', ChangeLeaveView, basename='change-leave-status')# For approve leave request for principle METHOD [PUT]
 
 router.register(r'announcements', AnnouncementView, basename='announcements')# For managing announcements
 router.register(r'get-announcements', GetAnnouncementView, basename='get-announcements')# For get announcement for student,staff with filter [school filter add remainig]   
@@ -192,7 +182,54 @@ router.register(r"certificate-type", CertificateTypeSerializer, basename="certif
 router.register(r"certificate-request", CertificateRequestViewSet, basename="certificate-request")
 
 
-router.register(r"certificate-request-status", ClerkCertificateRequestViewSet, basename="certificate-request-status")
+router.register(r"clerk-certificate-request", ClerkCertificateRequestViewSet, basename="clerk-certificate-request")
+
+
+
+
+router.register(r"leave-templates", LeaveTemplateViewSet, basename="leave-templates")
+
+router.register(r"leave-types", LeaveTypeViewSet, basename="leave-types")
+
+router.register(r'leave-request', LeaveRequestView, basename='leave-request') 
+
+router.register(r'get-leave-requests', GetLeaveRequestView, basename='get-leave-requests')# For get leave request for principle with filter [school filter add remainig]
+
+router.register(r'change-leave-status', ChangeLeaveView, basename='change-leave-status')# For approve leave request for principle METHOD [PUT]
+
+
+
+
+# router.register(r'library-book-management', BookManageView, basename='library-book-management')
+
+# router.register(r'late-book-fees', LateBookFeesViews, basename='late-book-fees')
+
+
+
+# router.register(r'book-view-student', BookViewStudent, basename='book-view-student')
+
+
+
+
+router.register(r"books/manage", BookManageView, basename="book-manage") # for book add clerk
+
+# Late fee policy: staff-side, one per school.
+router.register(r"late-fees", LateBookFeesViews, basename="late-fees")
+
+# Staff-side issuing + returning (counter operations).
+# DRF auto-generates /book-issued/<id>/return/ from the @action below.
+router.register(r"book-issued", BookIssuedView, basename="book-issued")
+
+# Student-side read-only catalogue browsing.
+router.register(r"books", BookViewStudent, basename="book-student")
+
+# Student-side issuing + own loan history.
+# DRF auto-generates /my-books/<id>/return/ from the @action below.
+router.register(r"my-books", BookIssueStudent, basename="book-issue-student")
+
+
+router.register(r"reports", ReportsView, basename="report")
+
 
 
 
@@ -227,19 +264,18 @@ urlpatterns = [
      
      path('api/admission/form/link/',ShareFormLink), #to get active form link for admission form fill up
      
+     
+     
+     path('api/get-remaining-leaves/',GetStaffRemainingleave.as_view()),  
+     
      # To get remaining leave for staff when click on apply leave button for show remaining leave
-     path('api/get-leave-requests/',GetRemainingLeaveView.as_view()),
+     path('api/get-leave-requests-staff/',GetStaffLeaveRequest.as_view()),
      
-     
-     path('api/get-remaining-leaves/',GetStaffRemainingleave.as_view()),
-     
-     
-    #  path('api/leave-type/', LeaveTypeGenericView.as_view()),
-     
-    #  path('api/carry-forward/', LeaveCarryForward.as_view()),
      
      path("api/approve-all-leave/<int:pk>/",ChangeAllLeaveView.as_view()),
      
+
+
 
     path('map/',TemplateView.as_view(template_name='map.html')),
     
@@ -285,6 +321,20 @@ urlpatterns = [
         StudentAttendanceView.as_view(),
         name="student-attendance"
     ),
+    
+    
+    path('api/specific-student-attendance/', StudentAttendanceListView.as_view()), # student see their attendance
+    
+    path('api/syllabus-student/', SyllabusListView.as_view()), # student see syallabus, for now study material
+    
+    path('api/examtimetable-view/', ExamViewSet.as_view()), # student see exam timetable
+    
+    path('api/examtimetable/', ExamCreateViewSet.as_view()), # teacher create timetable
+    
+    path("api/classes/<int:class_id>/subjects/",SubjectByClassAPIView.as_view()), # in timetable first select class than subjects
+    
+    path("api/classes/",SchoolClassesView.as_view()), # classes to see for examtimetable
+    
     # path('api/razardata/',RazarDataView.as_view()),
     
     path('api/webhook/',RazorpayWebhookView.as_view()),

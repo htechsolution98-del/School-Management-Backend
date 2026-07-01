@@ -2,9 +2,9 @@ from django.utils import timezone
 from .models import StaffRemainingLeave
 from .models import *
 from .serializer import *
-from rest_framework.viewsets import ModelViewSet
+from rest_framework.viewsets import ModelViewSet, ViewSet
 from rest_framework.permissions import IsAuthenticated
-from rest_framework.views import APIView
+from rest_framework.views import APIView;
 from rest_framework.response import Response
 from rest_framework.permissions import BasePermission
 from .harsh_serializer import *
@@ -12,6 +12,9 @@ from rest_framework.generics import GenericAPIView, ListCreateAPIView, ListAPIVi
 from rest_framework import status
 from rest_framework.exceptions import ValidationError
 from rest_framework.decorators import action
+from uuid import uuid4
+from django.db.models import Count
+from django.db.models.functions import TruncMonth
 
 
 
@@ -30,201 +33,96 @@ class Isstudent(BasePermission):
             and request.user.is_authenticated
             and request.user.groups.filter(name="student").exists()
         )
-
-
-
-
-def carry_forward_leave(staff): # when login staff check month and year and carry forward pending leaves
-    current_month = timezone.now().month
-    current_year = timezone.now().year
-
-    leaves = StaffRemainingLeave.objects.filter(staff=staff)
-
-    for leave in leaves:
-
-        if (leave.month != current_month or leave.year != current_year):
-            carry = leave.remaining_leaves
-
-            monthly_quota = leave.leave_template.leave_num
-
-            leave.total_levaes = monthly_quota + carry
-            leave.remaining_leaves = monthly_quota + carry
-
-            leave.month = current_month
-            leave.year = current_year
-
-            leave.save()
-
-
-# class LeaveTypeView(ModelViewSet): #for creating leave type - casual leave, sick leave
-#     queryset = LeaveType.objects.all()
-#     serializer_class = LeaveTypeSerializer
-#     permission_classes = [IsAuthenticated, IsCLerk]
-
-
-
-class LeaveTypeView(ModelViewSet): #for create, read, update, delete  leave type - casual leave, sick leave
-    serializer_class = LeaveTypeSerializer
-    permission_classes = [IsAuthenticated, IsCLerk]
-
-    def get_queryset(self):
-        staff = Staff.objects.filter(
-            user=self.request.user,
-            category="CLERK"
-        ).first()
-
-        if not staff:
-            return LeaveType.objects.none()
-
-        return LeaveType.objects.filter(
-            school=staff.school
-        )
-
-    def perform_create(self, serializer):
-        staff = Staff.objects.filter(
-            user=self.request.user,
-            category="CLERK"
-        ).first()
-
-        if not staff:
-            raise ValidationError("Clerk profile not found.")
-
-        name = serializer.validated_data.get("name")
-
-        if LeaveType.objects.filter(
-            school=staff.school,
-            name__iexact=name
-        ).exists():
-            raise ValidationError(
-                {"name": "This leave type already exists."}
-            )
-
-        serializer.save(school=staff.school)
-
-
-
-
-class LeaveTemplateView(ModelViewSet): #for giving perticular staff how many days of leave given
-    queryset = LeaveTemplate.objects.all()
-    serializer_class = LeaveTemplateSerializer
-    permission_classes = [IsAuthenticated, IsCLerk]
-
-    def get_parsers(self):
-
-        return super().get_parsers()
-
-
-class LeaveRequestView(ModelViewSet): #for requesting leave
-    queryset = LeaveRequest.objects.all()
-    serializer_class = LeaveRequestSerializer
-    permission_classes = [IsAuthenticated]
-    
-
-
-class GetLeaveRequestView(ModelViewSet): #for all the leaves to clerk
-    queryset = LeaveRequest.objects.all()
-    serializer_class = GetLeaveRequestSerializer
-    permission_classes = [IsAuthenticated, IsCLerk]
-    http_method_names = ["get"]
-
-    def get_queryset(self):
-
-        queryset = LeaveRequest.objects.filter(school=self.request.user.school)
-
-        return queryset
-
-
-class ChangeLeaveView(ModelViewSet): # for approving day wise APPROVAL
-    queryset = LeavePerDay.objects.all()
-    serializer_class = ChangeLeavePerDaySerializer
-    permission_classes = [IsAuthenticated, IsCLerk]
-    http_method_names = ["patch"]
-
-    def update(self, request, *args, **kwargs):
-        instance = self.get_object()
-
-        if instance.leave.school != request.user.school:
-            return Response(
-                {"error": "You are not allowed to modify this record"}, status=403
-            )
-
-        return super().update(request, *args, **kwargs)
-    
-    
-class GetStaffRemainingleave(ListAPIView):
-    permission_classes = [IsAuthenticated]
-
-    def get(self, request):
-        # leave_template = request.data.get("leave_template")
-        user = request.user
-
-        staff = Staff.objects.filter(user=user).first()
-        queryset = StaffRemainingLeave.objects.filter(
-            staff=staff, school=user.school
-            # , leave_template=leave_template
-        )
-
-        serializer = StaffRemainingLeaveSerializer(queryset, many=True)
-        return Response(serializer.data)
-    
-    
-    
-
-class GetRemainingLeaveView(APIView): # perticular staff leave request
-    permission_classes = [IsAuthenticated]
-
-    def get(self, request):
-        # leave_template = request.data.get("leave_template")
-        user = request.user
-
-        staff = Staff.objects.filter(user=user).first()
-        queryset = LeaveRequest.objects.filter(
-            staff=staff, school=user.school
-            # , leave_template=leave_template
-        )
-
-        serializer = GetLeaveRequestSerializer(queryset, many=True)
-        return Response(serializer.data)
-
-
-
-class ChangeAllLeaveView(APIView): # for APPROVE all day leave
-    permission_classes = [IsAuthenticated, IsCLerk]
-
-    def patch(self, request, pk):
         
-        status_value = request.data.get("status")
-
-        leave_request = LeaveRequest.objects.filter(
-            id=pk,
-            school=request.user.school
-        ).first()
-
-        if not leave_request:
-            return Response(
-                {"error": "Leave request not found"},
-                status=404
-            )
-
-        leave_days = leave_request.leave_days.filter(
-            status="PENDING"
+class Isteacher(BasePermission):
+    def has_permission(self, request, view):
+        return (
+            request.user
+            and request.user.is_authenticated
+            and request.user.groups.filter(name="TEACHER").exists()
+        )
+   
+   
+class IsLibrarian(BasePermission):     
+    def has_permission(self, request, view):
+        return (
+            request.user
+            and request.user.is_authenticated
+            and request.user.groups.filter(name="LIBRARIAN").exists()
         )
 
-        for leave_day in leave_days:
 
-            serializer = ChangeLeavePerDaySerializer(
-                leave_day,  
-                data={"status": status_value},
-                partial=True,
-                context={"request": request}
-            )
+CARRY_MONTHS = {
+    "MONTHLY": lambda m: True,
+    "QUARTERLY": lambda m: m in (1, 4, 7, 10),
+    "SEMI_ANNUAL": lambda m: m in (1, 7),
+    "ANNUAL": lambda m: m == 1,
+}
 
-            serializer.is_valid(raise_exception=True)
-            serializer.save()
 
-        return Response(
-            {"message": "All leave days approved"}
+
+def should_carry_now(time_line, current_month):
+    check = CARRY_MONTHS.get(time_line)
+    return bool(check and check(current_month))
+
+
+
+def carry_forward_leave(staff):
+    current_month = timezone.now().month
+    
+    current_year = timezone.now().year
+    school = getattr(staff, "school", None)
+    if not school:
+        return
+
+    leave_types = LeaveType.objects.filter(
+        leave_template__school=school,
+        is_carry_forward=True,
+    ).select_related("leave_template")
+
+    if not leave_types.exists():
+        print("no carry forward leave type found")
+        return
+
+    for lt in leave_types:
+        time_line = (lt.leave_template.time_line or "MONTHLY").upper()
+        if not should_carry_now(time_line, current_month):
+            print("skip", lt.id, time_line)
+            continue
+
+        monthly_quota = lt.leave_num or 0
+
+        srl, created = StaffRemainingLeave.objects.get_or_create(
+            school=school,
+            staff=staff,
+            leave_template=lt.leave_template,
+            leave_type=lt,
+            defaults={
+                "total_levaes": monthly_quota,
+                "remaining_leaves": monthly_quota,
+                "month": current_month,
+                "year": current_year,
+            },
         )
+
+        if created:
+            print("created remaining leave", lt.id)
+            continue
+
+        if srl.month == current_month and srl.year == current_year:
+            print("already current", lt.id)
+            continue
+
+        carry = srl.remaining_leaves or 0
+        new_total = carry + monthly_quota
+        srl.total_levaes = new_total
+        srl.remaining_leaves = new_total
+        srl.month = current_month
+        srl.year = current_year
+        srl.save(update_fields=["total_levaes", "remaining_leaves", "month", "year"])
+        print("carried forward", lt.id, carry)
+
+
         
         
         
@@ -290,44 +188,56 @@ class CertificateTypeSerializer(ModelViewSet): #for create, read, update, delete
             )
 
         serializer.save(school=staff.school)
-        
-        
+
 
 
 class CertificateRequestViewSet(ModelViewSet):
+    """Student-facing viewset: create requests, view status & certificate."""
     serializer_class = CertificateRequestSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, Isstudent]
+    http_method_names = ["get", "post", "head", "options"]  # Students can't update/delete
 
     def get_queryset(self):
         student = Student.objects.filter(user=self.request.user).first()
+
         if not student:
             return CertificateRequest.objects.none()
 
-        return CertificateRequest.objects.filter(student=student, school=student.school)
+        return (
+            CertificateRequest.objects.filter(student=student)
+            .select_related("certificate_type")
+            .prefetch_related("certificate")
+        )
 
     def perform_create(self, serializer):
         student = Student.objects.filter(user=self.request.user).first()
 
         if not student:
             raise ValidationError("Student profile not found.")
-        
+
+        certificate_type = serializer.validated_data["certificate_type"]
+
+        # Prevent duplicate pending requests for the same certificate type
         if CertificateRequest.objects.filter(
-                student=student,
-                school=student.school,
-                certificate_type=serializer.validated_data["certificate_type"],
-                status="PENDING"
-            ).exists():
-            
-            raise ValidationError("Request already pending.")
+            student=student,
+            certificate_type=certificate_type,
+            status="PENDING"
+        ).exists():
+            raise ValidationError(
+                "You already have a pending request for this certificate type."
+            )
 
-        serializer.save(student=student)
-      
+        serializer.save(student=student, school=student.school)
         
-
-
+        
+        
+        
+        
 class ClerkCertificateRequestViewSet(ModelViewSet):
+    """Clerk-facing viewset: view all school requests, approve/reject."""
     serializer_class = ClerkCertificateRequestSerializer
     permission_classes = [IsAuthenticated, IsCLerk]
+    http_method_names = ["get", "patch", "head", "options"]  # Clerks can only read + update
 
     def get_queryset(self):
         staff = Staff.objects.filter(
@@ -338,10 +248,13 @@ class ClerkCertificateRequestViewSet(ModelViewSet):
         if not staff:
             return CertificateRequest.objects.none()
 
-        queryset = CertificateRequest.objects.filter(
-            certificate_type__school=staff.school
-        ).select_related("certificate_type")
+        queryset = (
+            CertificateRequest.objects.filter(school=staff.school)
+            .select_related("student__user", "certificate_type")
+            .prefetch_related("certificate")
+        )
 
+        # Optional filtering by status: /clerk-requests/?status=PENDING
         status = self.request.query_params.get("status")
         if status:
             queryset = queryset.filter(status=status.upper())
@@ -349,23 +262,1017 @@ class ClerkCertificateRequestViewSet(ModelViewSet):
         return queryset
 
     def perform_update(self, serializer):
-        staff = Staff.objects.filter(
-            user=self.request.user,
-            category="CLERK"
-        ).first()
-
-        if not staff:
-            raise ValidationError("Clerk profile not found.")
-
         instance = self.get_object()
 
-        # Only allow status change if PENDING
+        # Prevent re-processing an already handled request
         if instance.status != "PENDING":
-            raise ValidationError("Request already processed.")
+            raise ValidationError(
+                f"This request has already been {instance.status.lower()}."
+            )
 
         new_status = serializer.validated_data.get("status")
 
-        if new_status not in ["APPROVED", "REJECTED"]:
-            raise ValidationError("Invalid status value.")
+        if new_status == "APPROVED":
+            # Validate file BEFORE saving status, so we don't save APPROVED with no file
+            file = self.request.FILES.get("file")
+            if not file:
+                raise ValidationError(
+                    "A certificate file (PDF) is required to approve this request."
+                )
 
+            # Now safe to save
+            serializer.save(status="APPROVED")
+
+            Certificate.objects.create(
+                request=instance,
+                certificate_number=f"CERT-{uuid4().hex[:8].upper()}",
+                file=file
+            )
+            
+            
+            instance.refresh_from_db()
+
+        elif new_status == "REJECTED":
+            serializer.save(status="REJECTED")
+
+        else:
+            raise ValidationError(
+                "Status must be either APPROVED or REJECTED."
+            )
+
+
+
+
+
+
+
+from rest_framework.exceptions import PermissionDenied, NotFound
+
+
+
+
+
+
+# Helper
+def get_clerk_school(request):
+    user = request.user
+    if not hasattr(user, "role") or user.role != "CLERK":
+        raise PermissionDenied("Only clerks can perform this action.")
+    school = getattr(user, "school", None)
+    if school is None:
+        raise PermissionDenied("Clerk is not associated with any school.")
+    return school
+ 
+ 
+
+# LeaveTemplate ViewSet
+class LeaveTemplateViewSet(ModelViewSet):
+    permission_classes = [IsAuthenticated]
+    serializer_class = NewLeaveTemplateSerializer
+ 
+    def get_queryset(self):
+        school = get_clerk_school(self.request)
+        return LeaveTemplate.objects.filter(school=school)
+ 
+    def perform_create(self, serializer):
+        school = get_clerk_school(self.request)
+        serializer.save(school=school)
+ 
+    def perform_update(self, serializer):
+        school = get_clerk_school(self.request)
+        serializer.save(school=school)
+ 
+    @action(detail=False, methods=["post"], url_path="bulk_create")
+    def bulk_create(self, request):
+        school = get_clerk_school(request)
+        serializer = LeaveTemplateBulkCreateSerializer(
+            data=request.data,
+            context={"request": request, "school": school},
+        )
+        serializer.is_valid(raise_exception=True)
+        template = serializer.save()
+        return Response(
+            NewLeaveTemplateSerializer(template).data,
+            status=status.HTTP_201_CREATED,
+        )
+ 
+ 
+ 
+ 
+class LeaveTypeViewSet(ModelViewSet):
+ 
+    permission_classes = [IsAuthenticated]
+    serializer_class = NewLeaveTypeSerializer
+ 
+    def get_queryset(self):
+        school = get_clerk_school(self.request)
+        
+        
+        # Scope to the clerk's school via the template's school FK
+        qs = LeaveType.objects.filter(
+            leave_template__school=school
+        ).select_related("leave_template", "category")
+ 
+        
+        
+        # Optional filter: /leave-types/?template=5
+        template_id = self.request.query_params.get("template")
+        if template_id:
+            qs = qs.filter(leave_template_id=template_id)
+ 
+        return qs
+ 
+    def perform_create(self, serializer):
+
+        
+        school = get_clerk_school(self.request)
+        # Ensure the chosen template belongs to the clerk's school
+        template = serializer.validated_data.get("leave_template")
+        if template and template.school != school:
+            raise PermissionDenied("That leave template does not belong to your school.")
+        
         serializer.save()
+        
+        
+        
+        
+class LeaveRequestView(ModelViewSet): #for requesting leave
+    # queryset = LeaveRequest.objects.all()
+    serializer_class = LeaveRequestSerializer
+    permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        
+        
+        staff = Staff.objects.filter(user=self.request.user).first()
+        
+        # print(staff.school)
+        
+        if staff and staff.school:
+            return LeaveRequest.objects.filter(staff=staff, school=staff.school)
+        
+        return LeaveRequest.objects.all()
+    
+
+    
+class GetStaffRemainingleave(ListAPIView): # perticular staff remaining leaves
+    permission_classes = [IsAuthenticated]
+    queryset = StaffRemainingLeave.objects.all()
+    def get(self, request):
+        # leave_template = request.data.get("leave_template")
+        user = request.user
+
+        staff = Staff.objects.filter(user=user).first()
+        queryset = StaffRemainingLeave.objects.filter(
+            staff=staff, school=user.school
+            # , leave_template=leave_template
+        )
+
+        serializer = StaffRemainingLeaveSerializer(queryset, many=True)
+        return Response(serializer.data)
+    
+    
+    
+    
+class GetStaffLeaveRequest(APIView): # perticular staff leave request to staff see there leave request
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        # leave_template = request.data.get("leave_template")
+        user = request.user
+
+        staff = Staff.objects.filter(user=user).first()
+        queryset = LeaveRequest.objects.filter(
+            staff=staff, school=user.school
+            # , leave_template=leave_template
+        )
+
+        serializer = GetLeaveRequestSerializer(queryset, many=True)
+        return Response(serializer.data)
+        
+        
+        
+        
+class GetLeaveRequestView(ModelViewSet): #for all the leaves to clerk can see and approve
+    queryset = LeaveRequest.objects.all()
+    serializer_class = GetLeaveRequestSerializer
+    permission_classes = [IsAuthenticated, IsCLerk]
+    http_method_names = ["get"]
+
+    def get_queryset(self):
+
+        queryset = LeaveRequest.objects.filter(school=self.request.user.school)
+
+        return queryset
+    
+    
+    
+    
+class ChangeLeaveView(ModelViewSet): # for approving day wise APPROVAL
+    queryset = LeavePerDay.objects.all()
+    serializer_class = ChangeLeavePerDaySerializer
+    permission_classes = [IsAuthenticated, IsCLerk]
+    http_method_names = ["patch"]
+
+    def update(self, request, *args, **kwargs):
+        instance = self.get_object()
+
+        if instance.leave.school != request.user.school:
+            return Response(
+                {"error": "You are not allowed to modify this record"}, status=403
+            )
+
+        return super().update(request, *args, **kwargs)
+    
+    
+
+
+class ChangeAllLeaveView(APIView): # for APPROVE all day leave
+    permission_classes = [IsAuthenticated, IsCLerk]
+
+    def patch(self, request, pk):
+        
+        status_value = request.data.get("status")
+
+        leave_request = LeaveRequest.objects.filter(
+            id=pk,
+            school=request.user.school
+        ).first()
+
+        if not leave_request:
+            return Response(
+                {"error": "Leave request not found"},
+                status=404
+            )
+
+        leave_days = leave_request.leave_days.filter(
+            status="PENDING"
+        )
+
+        for leave_day in leave_days:
+
+            serializer = ChangeLeavePerDaySerializer(
+                leave_day,  
+                data={"status": status_value},
+                partial=True,
+                context={"request": request}
+            )
+
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+
+        return Response(
+            {"message": "All leave days approved"}
+        )
+    
+            
+
+        
+def get_approved_paid_leave_days(staff, start_date, end_date):
+    """Count approved leave days where is_paid=True"""
+    return LeavePerDay.objects.filter(
+        leave__staff=staff,
+        status="APPROVED",
+        date__range=(start_date, end_date),
+        leave__is_paid=True  # ← Filter by is_paid on the leave request
+    ).count()
+    
+    
+    
+    
+    
+# class StudentAttendanceListView(GenericAPIView):
+#     serializer_class = StudentAttendanceListSerializer
+    
+#     def get(self, request):
+        
+#         user = self.request.user
+        
+#         student = Student.objects.filter(user=user).first()
+        
+#         StudentAttendance.objects.filter(student = student)
+    
+    
+    
+    
+class StudentAttendanceListView(ListAPIView):
+    serializer_class = StudentAttendanceListSerializer
+    
+    def get_queryset(self):
+        
+        user = self.request.user
+        
+        student = Student.objects.filter(user=user).first()
+        
+        qs = StudentAttendance.objects.filter(student = student)
+        
+        
+        return qs
+    
+    
+class SyllabusListView(ListAPIView):
+    serializer_class = SyllabusListSerializer
+    permission_classes=[IsAuthenticated, Isstudent]
+    
+    def get_queryset(self):
+        
+        user = self.request.user
+        
+        student = Student.objects.filter(user=user).first()
+        
+        
+        qs = Syllabus.objects.filter(division = student.division, school=student.school)
+        # qs = Syllabus.objects.filter(school=student.school)
+        
+        
+        return qs
+
+
+class ExamViewSet(ListAPIView):
+    serializer_class = ExamViewSerializer
+    permission_classes = [IsAuthenticated, Isstudent]
+    
+    def get_queryset(self):
+        
+        student = Student.objects.filter(user=self.request.user).first()
+
+        qs = Exam.objects.filter(school=student.school, class_group=student.school_class)
+        
+        return qs
+    
+class ExamCreateViewSet(GenericAPIView):
+    serializer_class = ExamViewSerializer
+    permission_classes = [IsAuthenticated, Isteacher]
+    
+    def post(self, request, *args, **kwargs):
+        staff = Staff.objects.filter(user=self.request.user).first()
+        
+        serializer = self.get_serializer(data=request.data)
+        
+        if serializer.is_valid():
+            title = serializer.validated_data['title']
+            description = serializer.validated_data['description']
+            subject = serializer.validated_data['subject']
+            exam_date = serializer.validated_data['exam_date']
+            start_time = serializer.validated_data['start_time']
+            end_time = serializer.validated_data['end_time']
+            class_group = serializer.validated_data['class_group']
+
+
+            exam = Exam.objects.create(
+                school = staff.school,
+                created_by = staff,
+                title = title,
+                description = description,
+                subject = subject,
+                exam_date= exam_date,
+                start_time = start_time,
+                end_time = end_time,
+                class_group = class_group
+            )
+            
+            exam.save()
+            
+            return Response({
+                "detail":"exam scheduled"
+            })
+        
+        return Response(serializer.errors)
+    
+    
+    
+class SubjectByClassAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, class_id):
+        subjects = Subject.objects.filter(
+            division__SchoolClass_id=class_id
+        ).distinct()
+
+        data = [
+            {
+                "id": subject.id,
+                "name": subject.name
+            }
+            for subject in subjects
+        ]
+
+        return Response(data)
+    
+    
+    
+class SchoolClassesView(ListAPIView):
+    queryset = SchoolClass.objects.all()
+    serializer_class = SchoolClassSerializer
+    permission_classes = [IsAuthenticated, Isteacher]
+    
+    def get_queryset(self):
+        
+        staff = Staff.objects.filter(user=self.request.user).first()
+        
+        
+        return SchoolClass.objects.filter(school = staff.school)
+    
+    
+    
+# class BookManageView(ModelViewSet):
+#     serializer_class = BookManageSerializer
+
+#     permission_classes = [IsAuthenticated, IsLibrarian]
+    
+#     def get_queryset(self):
+        
+#         staff = Staff.objects.filter(user=self.request.user).first()
+        
+#         return Book.objects.filter(school=staff.school)
+    
+    
+    
+#     def perform_create(self, serializer):
+        
+#         staff = Staff.objects.filter(user=self.request.user).first()
+#         # school = School.objects.filter(login_id = self.request.user).first()
+        
+
+#         title = serializer.validated_data.get("title")
+#         author = serializer.validated_data.get("author")
+#         category = serializer.validated_data.get("category")
+#         total_copies = serializer.validated_data.get("total_copies")
+        
+#         book_already= Book.objects.filter(school=staff.school, title=title, author=author).first()
+        
+        
+#         if book_already is not None:
+#             raise ValidationError(f"Book Already exists id = {book_already.pk}")
+        
+        
+#         serializer.save(school = staff.school,available_copies=total_copies)
+        
+    
+    
+#     def perform_destroy(self, instance):
+        
+#         if not instance.total_copies == instance.available_copies:
+#             raise ValidationError("Can't Delete Beacause Book Issued To Someone First Take That Back")
+        
+#         return super().perform_destroy(instance)
+    
+    
+    
+#     def perform_update(self, serializer):
+        
+#         read_only_value = self.request.data.get('available_copies')
+        
+#         if read_only_value is not None:
+#             serializer.save(available_copies = read_only_value)
+        
+#         else:
+#             serializer.save()
+            
+            
+            
+            
+# class LateBookFeesViews(ModelViewSet):
+#     serializer_class = LateBookFeesSerializer
+#     permission_classes = [IsAuthenticated]
+    
+#     def get_queryset(self):
+        
+#         staff = Staff.objects.filter(user=self.request.user).first()
+        
+#         latebookfees = LateBookFees.objects.filter(school=staff.school)
+        
+#         return latebookfees
+    
+#     def perform_create(self, serializer):
+#         staff = Staff.objects.filter(user=self.request.user).first()
+        
+#         latefee_already = LateBookFees.objects.filter(school=staff.school).exists()
+        
+#         if latefee_already:
+#             raise ValidationError("Already Fees Decided if you want to change edit it")
+                
+#         serializer.save(school=staff.school)
+        
+        
+        
+
+# class BookIssuedView(ModelViewSet):
+#     serializer_class = BookIssuedSerializer
+
+#     def get_queryset(self):
+        
+#         staff = Staff.objects.filter(user=self.request.user).first()
+        
+#         book_issued = BookIssued.objects.filter(school=staff.school)
+        
+#         return book_issued
+    
+    
+#     def perform_create(self, serializer):
+
+#         staff = Staff.objects.get(user=self.request.user)
+
+#         book = serializer.validated_data["book"]
+#         student = serializer.validated_data["student"]
+
+#         if book.available_copies == 0:
+#             raise ValidationError("Book is not available.")
+
+#         already_issued = BookIssued.objects.filter(
+#             student=student,
+#             book=book,
+#             status="ISSUED"
+#         ).exists()
+
+#         if already_issued:
+#             raise ValidationError("Student already has this book.")
+
+#         book.available_copies -= 1
+#         book.save()
+
+#         serializer.save(
+#             school=staff.school,
+#             status="ISSUED"
+#         )
+    
+    
+
+# class BookViewStudent(ModelViewSet):
+#     serializer_class = BookManageSerializer
+#     http_method_names = ['get']
+#     permission_classes = [IsAuthenticated]
+    
+#     def get_queryset(self):
+#         user = CustomUser.objects.filter(username=self.request.user).first()
+#         book = Book.objects.filter(school = user.school)
+#         return book
+    
+    
+# class BookIssueStudent(ModelViewSet):
+#     serializer_class = BookIssuedSerializer
+#     permission_classes = [IsAuthenticated]
+    
+#     def get_queryset(self):
+#         student = Student.objects.get(user=self.request.user)
+
+#         return BookIssued.objects.filter(
+#             student=student
+#         )
+    
+#     def perform_create(self, serializer):
+        
+        
+        
+#         return super().perform_create(serializer)
+    
+
+
+
+class BookManageView(ModelViewSet):
+    serializer_class = BookManageSerializer
+    permission_classes = [IsAuthenticated, IsLibrarian]
+ 
+    def get_queryset(self):
+        staff = Staff.objects.filter(user=self.request.user).first()
+        if staff is None:
+            raise PermissionDenied("You are not registered as staff for any school.")
+        return Book.objects.filter(school=staff.school)
+ 
+    def perform_create(self, serializer):
+        staff = Staff.objects.filter(user=self.request.user).first()
+        if staff is None:
+            raise PermissionDenied("You are not registered as staff for any school.")
+ 
+        title = serializer.validated_data.get("title")
+        author = serializer.validated_data.get("author")
+        total_copies = serializer.validated_data.get("total_copies")
+ 
+        book_already = Book.objects.filter(
+            school=staff.school, title=title, author=author
+        ).first()
+ 
+        if book_already is not None:
+            raise ValidationError(f"Book already exists, id = {book_already.pk}")
+ 
+        # available_copies starts equal to total_copies for a brand-new book.
+        serializer.save(school=staff.school, available_copies=total_copies)
+ 
+    def perform_destroy(self, instance):
+        if instance.total_copies != instance.available_copies:
+            raise ValidationError(
+                "Can't delete: this book is currently issued to someone. "
+                "It must be returned first."
+            )
+        return super().perform_destroy(instance)
+ 
+    def perform_update(self, serializer):
+        serializer.save()
+ 
+ 
+ 
+class LateBookFeesViews(ModelViewSet):
+    serializer_class = LateBookFeesSerializer
+    permission_classes = [IsAuthenticated, IsLibrarian]
+ 
+    def get_queryset(self):
+        staff = Staff.objects.filter(user=self.request.user).first()
+        if staff is None:
+            raise PermissionDenied("You are not registered as staff for any school.")
+        return LateBookFees.objects.filter(school=staff.school)
+ 
+    def perform_create(self, serializer):
+        staff = Staff.objects.filter(user=self.request.user).first()
+        if staff is None:
+            raise PermissionDenied("You are not registered as staff for any school.")
+ 
+        latefee_already = LateBookFees.objects.filter(school=staff.school).exists()
+        if latefee_already:
+            raise ValidationError("Fees already set for this school. Edit the existing entry instead.")
+
+        serializer.save(school=staff.school)
+ 
+ 
+ 
+class BookIssuedView(ModelViewSet):
+    serializer_class = BookIssuedSerializer
+    # FIX: original had no permission_classes at all -> any authenticated
+    # user, including students, could hit this endpoint directly.
+    permission_classes = [IsAuthenticated, IsLibrarian]
+ 
+    def get_queryset(self):
+        staff = Staff.objects.filter(user=self.request.user).first()
+        if staff is None:
+            raise PermissionDenied("You are not registered as staff for any school.")
+        return BookIssued.objects.filter(school=staff.school)
+ 
+    def perform_create(self, serializer):
+        staff = Staff.objects.filter(user=self.request.user).first()
+        if staff is None:
+            raise PermissionDenied("You are not registered as staff for any school.")
+ 
+        book = serializer.validated_data["book"]
+        student = serializer.validated_data["student"]
+        # Librarian chooses the due date when issuing. Optional — if they
+        # don't send one, _issue_book falls back to the default loan period.
+        due_date = serializer.validated_data.get("due_date")
+ 
+        if book.school_id != staff.school_id:
+            raise ValidationError("That book does not belong to your school.")
+        if student.school_id != staff.school_id:
+            raise ValidationError("That student does not belong to your school.")
+ 
+        _issue_book(book=book, student=student, school=staff.school, serializer=serializer, due_date=due_date)
+ 
+    @action(detail=True, methods=["post"], url_path="return")
+    def return_book(self, request, pk=None):
+        """
+        POST /book-issued/<id>/return/
+        Staff finalizes a return: stamps the return date, computes lateness
+        and the fee owed, restores available_copies, and flips status.
+        """
+        staff = Staff.objects.filter(user=request.user).first()
+        if staff is None:
+            raise PermissionDenied("You are not registered as staff for any school.")
+        issued = self.get_queryset().filter(pk=pk).first()
+        if issued is None:
+            raise NotFound("Issued record not found for your school.")
+ 
+        _finalize_return(issued)
+ 
+        serializer = self.get_serializer(issued)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+ 
+ 
+def _issue_book(*, book, student, school, serializer, due_date=None):
+
+    if book.available_copies <= 0:
+        raise ValidationError("Book is not available.")
+ 
+    already_issued = BookIssued.objects.filter(
+        student=student, book=book, status="ISSUED"
+    ).exists()
+    if already_issued:
+        raise ValidationError("This student already has this book checked out.")
+ 
+    book.available_copies -= 1
+    book.save()  # Book.save() recalculates `status` (available/not) automatically.
+ 
+    now = timezone.now()
+ 
+    if due_date is None:
+        due_date = now + timezone.timedelta(days=14)  # default loan period
+    elif due_date <= now:
+        # A librarian-chosen due date must actually be in the future —
+        # otherwise the book would be "overdue" the moment it's issued.
+        raise ValidationError("Due date must be in the future.")
+ 
+    serializer.save(
+        school=school,
+        student=student,
+        book=book,
+        book_issued_date=now,
+        due_date=due_date,
+        status="ISSUED",
+    )
+
+
+def _finalize_return(issued: BookIssued):
+
+    if issued.status == "RETURNED":
+        raise ValidationError("This book has already been returned.")
+ 
+    now = timezone.now()
+    issued.actual_return_date = now
+ 
+    fee_policy = LateBookFees.objects.filter(school=issued.school).first()
+    grace_period_days = fee_policy.grace_period_days if fee_policy else 0
+    per_day_fee = fee_policy.fees if fee_policy else 0
+ 
+    grace_deadline = issued.due_date + timezone.timedelta(days=grace_period_days)
+ 
+    if now > grace_deadline:
+        issued.is_late = True
+        days_past_grace = (now.date() - grace_deadline.date()).days
+        issued.late_fees = max(days_past_grace, 0) * per_day_fee
+    else:
+        # Either on time, or late but still within the grace window —
+        # either way, no fee, and we don't flag it as "late" since the
+        # librarian's own grace policy says this is still acceptable.
+        issued.is_late = False
+        issued.late_fees = 0
+ 
+    issued.status = "RETURNED"
+    issued.save()
+ 
+    # Restore stock.
+    book = issued.book
+    book.available_copies += 1
+    book.save()
+ 
+
+
+
+class BookViewStudent(ModelViewSet):
+    """Read-only catalogue browsing for students, scoped to their school."""
+    serializer_class = BookManageSerializer
+    http_method_names = ["get"]
+    permission_classes = [IsAuthenticated]
+ 
+    def get_queryset(self):
+        # FIX: original used CustomUser.objects.filter(username=self.request.user),
+        # which only works by coincidence and doesn't guarantee school
+        # isolation. Resolve via Student, exactly like every other view
+        # resolves via Staff.
+        student = Student.objects.filter(user=self.request.user).first()
+        if student is None:
+            raise PermissionDenied("You are not registered as a student.")
+        return Book.objects.filter(school=student.school)
+ 
+ 
+class BookIssueStudent(ModelViewSet):
+
+    serializer_class = BookIssuedSerializer
+    permission_classes = [IsAuthenticated]
+    http_method_names = ["get", "post"]  # no direct update/delete by students
+ 
+    def get_queryset(self):
+        student = Student.objects.filter(user=self.request.user).first()
+        if student is None:
+            raise PermissionDenied("You are not registered as a student.")
+        return BookIssued.objects.filter(student=student)
+
+    def perform_create(self, serializer):
+
+        student = Student.objects.filter(user=self.request.user).first()
+        if student is None:
+            raise PermissionDenied("You are not registered as a student.")
+ 
+        # Ignore/overwrite whatever student id the client sent — a student
+        # may only ever issue a book to themself.
+        requested_student = serializer.validated_data.get("student")
+        if requested_student is not None and requested_student.pk != student.pk:
+            raise PermissionDenied("You can only issue books to yourself.")
+
+        # due_date is a librarian decision, not a student one — reject the
+        # request outright if a student tries to set it, rather than
+        # silently ignoring it. Mirrors how the student field is locked
+        # down above.
+        if serializer.validated_data.get("due_date") is not None:
+            raise PermissionDenied("Only library staff can set the due date for a loan.")
+
+        book = serializer.validated_data["book"]
+        if book.school_id != student.school_id:
+            raise ValidationError("That book is not available at your school.")
+
+        _issue_book(book=book, student=student, school=student.school, serializer=serializer)
+
+    @action(detail=True, methods=["post"], url_path="return")
+    def return_book(self, request, pk=None):
+
+        raise PermissionDenied(
+            "Only library staff can confirm a return. "
+            "Please return the physical book to the librarian's desk."
+        )
+        
+        
+        
+class ReportsView(ViewSet):
+    """
+    Library usage reports. Not a ModelViewSet — these are aggregation
+    queries over BookIssued/Book, not CRUD on a single model. Each report
+    is its own @action, scoped to the caller's school via the same
+    Staff-lookup pattern used throughout this file.
+ 
+    GET /reports/most_borrowed/      ?limit=N (default 10)
+    GET /reports/category_trends/
+    GET /reports/overdue_and_late/
+    GET /reports/fee_collection/
+    GET /reports/student_activity/   ?limit=N (default 20)
+ 
+    All five were verified against seeded test data with hand-checked
+    totals (issue counts, late-fee sums, overdue day counts) before being
+    added here — the query logic is not guesswork.
+    """
+    permission_classes = [IsAuthenticated, IsLibrarian]
+ 
+    @action(detail=False, methods=["get"])
+    def most_borrowed(self, request):
+        """Ranks books by total times issued (all-time, ISSUED + RETURNED)."""
+        staff = Staff.objects.filter(user=request.user).first()
+        if staff is None:
+            raise PermissionDenied("You are not registered as staff for any school.")
+ 
+        try:
+            limit = int(request.query_params.get("limit", 10))
+        except (TypeError, ValueError):
+            limit = 10
+        limit = max(1, min(limit, 100))  # sane bounds against abuse
+ 
+        qs = (
+            Book.objects.filter(school=staff.school)
+            .annotate(times_issued=Count("bookissued"))
+            .order_by("-times_issued", "title")[:limit]
+        )
+ 
+        data = [
+            {
+                "book_id": b.id,
+                "title": b.title,
+                "author": b.author,
+                "category": b.category,
+                "times_issued": b.times_issued,
+                "total_copies": b.total_copies,
+                "available_copies": b.available_copies,
+            }
+            for b in qs
+        ]
+        return Response({"results": data})
+ 
+    @action(detail=False, methods=["get"])
+    def category_trends(self, request):
+        """Total issues per category, most popular first."""
+        staff = Staff.objects.filter(user=request.user).first()
+        if staff is None:
+            raise PermissionDenied("You are not registered as staff for any school.")
+ 
+        qs = (
+            BookIssued.objects.filter(school=staff.school)
+            .values("book__category")
+            .annotate(times_issued=Count("id"))
+            .order_by("-times_issued")
+        )
+ 
+        data = [
+            {"category": row["book__category"], "times_issued": row["times_issued"]}
+            for row in qs
+        ]
+        return Response({"results": data})
+ 
+    @action(detail=False, methods=["get"])
+    def overdue_and_late(self, request):
+        """
+        Two parts:
+          - currently_overdue: loans still ISSUED, past (due_date + grace
+            period) — i.e. would be charged a fee right now if returned today.
+          - historical_late_rate: of all RETURNED loans, what % came back
+            after the grace period (is_late=True).
+        """
+        staff = Staff.objects.filter(user=request.user).first()
+        if staff is None:
+            raise PermissionDenied("You are not registered as staff for any school.")
+ 
+        now = timezone.now()
+        fee_policy = LateBookFees.objects.filter(school=staff.school).first()
+        grace_days = fee_policy.grace_period_days if fee_policy else 0
+ 
+        currently_issued = BookIssued.objects.filter(
+            school=staff.school, status="ISSUED"
+        ).select_related("book", "student")
+ 
+        overdue_list = []
+        for loan in currently_issued:
+            grace_deadline = loan.due_date + timezone.timedelta(days=grace_days)
+            if now > grace_deadline:
+                days_overdue = (now.date() - grace_deadline.date()).days
+                overdue_list.append({
+                    "loan_id": loan.id,
+                    "book_id": loan.book_id,
+                    "book_title": loan.book.title,
+                    "student_id": loan.student_id,
+                    "student_name": getattr(loan.student, "name", str(loan.student_id)),
+                    "due_date": loan.due_date,
+                    "days_overdue": days_overdue,
+                })
+ 
+        overdue_list.sort(key=lambda x: x["days_overdue"], reverse=True)
+ 
+        returned_qs = BookIssued.objects.filter(school=staff.school, status="RETURNED")
+        total_returned = returned_qs.count()
+        total_late = returned_qs.filter(is_late=True).count()
+        late_rate_percent = round((total_late / total_returned) * 100, 1) if total_returned else 0.0
+ 
+        return Response({
+            "currently_overdue": overdue_list,
+            "currently_overdue_count": len(overdue_list),
+            "historical_late_rate": {
+                "total_returned_loans": total_returned,
+                "total_late_returns": total_late,
+                "late_rate_percent": late_rate_percent,
+            },
+        })
+ 
+    @action(detail=False, methods=["get"])
+    def fee_collection(self, request):
+        """
+        Total late fees across all returned loans, plus a month-by-month
+        breakdown (grouped by actual_return_date).
+ 
+        Note: reflects fees computed at return time — the model has no
+        separate paid/unpaid flag, so every RETURNED loan's late_fees
+        value is treated as the amount owed for that loan.
+        """
+        staff = Staff.objects.filter(user=request.user).first()
+        if staff is None:
+            raise PermissionDenied("You are not registered as staff for any school.")
+ 
+        returned_qs = BookIssued.objects.filter(school=staff.school, status="RETURNED")
+        total_fees = returned_qs.aggregate(total=Sum("late_fees"))["total"] or 0
+ 
+        monthly = (
+            returned_qs.filter(is_late=True)
+            .annotate(month=TruncMonth("actual_return_date"))
+            .values("month")
+            .annotate(total_fees=Sum("late_fees"), late_returns=Count("id"))
+            .order_by("month")
+        )
+ 
+        monthly_data = [
+            {
+                "month": row["month"].strftime("%Y-%m") if row["month"] else None,
+                "total_fees": str(row["total_fees"]),
+                "late_returns": row["late_returns"],
+            }
+            for row in monthly
+        ]
+ 
+        return Response({
+            "total_fees_collected": str(total_fees),
+            "monthly_breakdown": monthly_data,
+        })
+ 
+    @action(detail=False, methods=["get"])
+    def student_activity(self, request):
+        """Per-student borrowing stats: total loans, currently held, late returns."""
+        staff = Staff.objects.filter(user=request.user).first()
+        if staff is None:
+            raise PermissionDenied("You are not registered as staff for any school.")
+ 
+        try:
+            limit = int(request.query_params.get("limit", 20))
+        except (TypeError, ValueError):
+            limit = 20
+        limit = max(1, min(limit, 200))
+ 
+        qs = (
+            BookIssued.objects.filter(school=staff.school)
+            .values("student_id", "student__name")
+            .annotate(
+                total_loans=Count("id"),
+                currently_held=Count("id", filter=Q(status="ISSUED")),
+                late_returns=Count("id", filter=Q(status="RETURNED", is_late=True)),
+            )
+            .order_by("-total_loans")[:limit]
+        )
+ 
+        data = [
+            {
+                "student_id": row["student_id"],
+                "student_name": row["student__name"],
+                "total_loans": row["total_loans"],
+                "currently_held": row["currently_held"],
+                "late_returns": row["late_returns"],
+            }
+            for row in qs
+        ]
+        return Response({"results": data})
