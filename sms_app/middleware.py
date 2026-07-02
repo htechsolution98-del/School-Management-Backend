@@ -14,7 +14,7 @@ class JWTAuthMiddleware:
 
         token = None
 
-        print("HEADERS:", scope.get("headers"))
+        
 
         for key, value in scope.get("headers", []):
             if key == b"authorization":
@@ -32,8 +32,6 @@ class JWTAuthMiddleware:
 
         scope["user"] = await self.get_user(token)
 
-        print("USER:", scope["user"])
-
         return await self.app(scope, receive, send)
 
     @database_sync_to_async
@@ -45,10 +43,10 @@ class JWTAuthMiddleware:
             jwt_auth = JWTAuthentication()
 
             validated_token = jwt_auth.get_validated_token(token)
-            print("VALIDATED TOKEN:", validated_token)
+            
 
             user = jwt_auth.get_user(validated_token)
-            print("USER FOUND:", user)
+           
 
             return user
 
