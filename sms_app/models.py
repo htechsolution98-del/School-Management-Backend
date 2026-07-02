@@ -7,6 +7,7 @@ from django.utils import timezone
 from django.utils.text import slugify
 from django.core.validators import MinValueValidator
 from django.conf import settings
+from django.db.models import Sum
 
 
 class OTP(models.Model):
@@ -544,6 +545,8 @@ class AdmissionDocument(models.Model):
 #     class Meta:
 #         db_table = "parent"
 
+
+
 class Student(models.Model):
 
     school = models.ForeignKey(School, on_delete=models.PROTECT, db_index=True)
@@ -551,12 +554,10 @@ class Student(models.Model):
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE, null=True, blank=True
     )
-    # parent=models.ForeignKey(Parent,on_delete=models.CASCADE,null=True,blank=True)
 
     admission = models.OneToOneField(  # VERY IMPORTANT
         "Admission", on_delete=models.SET_NULL, null=True, blank=True
     )
-    # parent=models.ForeignKey(Parent,on_delete=models.CASCADE,null=True,blank=True)
 
     # Identity
     surname = models.CharField(max_length=100, blank=True, null=True)
@@ -572,7 +573,12 @@ class Student(models.Model):
         SchoolClass, on_delete=models.CASCADE, null=True, blank=True
     )
 
-    division = models.ForeignKey(Division, on_delete=models.CASCADE, null=True)
+    division = models.ForeignKey(
+        Division,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True
+    )
 
     admission_date = models.DateField(blank=True, null=True)
     gr_no = models.CharField(max_length=100, blank=True, null=True)
@@ -600,6 +606,17 @@ class Student(models.Model):
                 name="unique_school_gr_no",
             )
         ]
+
+class Perents(models.Model):
+    school = models.ForeignKey(
+        School, on_delete=models.CASCADE, null=True, blank=True, db_index=True
+    )
+
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    perents_of = models.ForeignKey(Student, on_delete=models.CASCADE)
+
+    class Meta:
+        db_table = "parents"
 
 
 class StudentVerify(models.Model):
@@ -643,6 +660,7 @@ class TempUser(models.Model):
     # username = models.CharField(max_length=150, unique=True)
     # mobile_number = models.CharField(max_length=15, unique=True)
     email = models.EmailField(blank=True, null=True)
+    
 
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -720,16 +738,7 @@ class RazorPayData(models.Model):
 #     uploaded_at = models.DateTimeField(auto_now_add=True)
 
 
-class Perents(models.Model):
-    school = models.ForeignKey(
-        School, on_delete=models.CASCADE, null=True, blank=True, db_index=True
-    )
 
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
-    perents_of = models.ForeignKey(Student, on_delete=models.CASCADE)
-
-    class Meta:
-        db_table = "parents"
 
 
 class StudentFieldValue(models.Model):
@@ -896,6 +905,7 @@ class AssignClass(models.Model):
         Division, on_delete=models.CASCADE, null=True, blank=True
     )
     is_class_teacher = models.BooleanField(default=False)
+
 
     def __str__(self):
         return f"{self.teacher} - {self.subject} - {self.division}"
@@ -2336,6 +2346,9 @@ class Exam(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True)
     
+    def __str__(self):
+        return f"{self.title}-{self.subject}"
+    
 class ExamNotification(models.Model):
     exam = models.ForeignKey(Exam, on_delete=models.CASCADE)
 
@@ -2343,7 +2356,29 @@ class ExamNotification(models.Model):
     message = models.TextField()
 
     created_at = models.DateTimeField(auto_now_add=True)
-    
+
+
+class Result(models.Model):
+    exam = models.ForeignKey(Exam, on_delete=models.CASCADE, related_name="results")
+    student = models.ForeignKey(Student, on_delete=models.CASCADE, related_name="results")
+    entered_by = models.ForeignKey(Staff, on_delete=models.SET_NULL, null=True)
+
+    marks_obtained = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    max_marks = models.DecimalField(max_digits=5, decimal_places=2)
+    is_absent = models.BooleanField(default=False)
+
+    grade = models.CharField(max_length=5, blank=True)
+    remarks = models.CharField(max_length=255, blank=True)
+
+    is_published = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ("exam", "student")  # one result row per student per exam
+        db_table = "result"
+        
+        
 
 
 class HomeworkSubmission(models.Model):
@@ -2357,11 +2392,239 @@ class HomeworkSubmission(models.Model):
 
     def __str__(self):
         return f"{self.student} - {self.homework}"
+
+
+class MonthlyProgressReport(models.Model):
+
+    school=models.ForeignKey(School,on_delete=models.CASCADE)
+    student=models.ForeignKey(Student,on_delete=models.CASCADE,related_name='monthly_reports')
+    created_by=models.ForeignKey(Staff,on_delete=models.CASCADE)
+    month=models.PositiveSmallIntegerField()
+    year=models.PositiveSmallIntegerField()
+    attendance_percentage=models.DecimalField(max_digits=5, decimal_places=2,default=0)
+    overall_score=models.DecimalField(max_digits=5, decimal_places=2,default=0)
+    discipline=models.PositiveSmallIntegerField(default=0)
+    communication_skills=models.PositiveSmallIntegerField(default=0)
+    emotional_development=models.PositiveSmallIntegerField(default=0)
+    social_development=models.PositiveSmallIntegerField(default=0)
+    freindly_with_others=models.PositiveSmallIntegerField(default=0)
+    remark=models.TextField(max_length=100)
+    created_at=models.DateTimeField(auto_now_add=True)
+    class Meta:
+        db_table = "monthly_progress_report"
+        ordering = ["-created_at"]
+        unique_together = ("student","month","year")
+    def __str__(self):
+        return f"{self.student} - {self.month}/{self.year}"
+    
+
+class StudyMaterial(models.Model):
+    MATERIAL_TYPE_CHOICES = [
+        ("notes", "Notes"),
+        ("assignment", "Assignment"),
+        ("worksheet", "Worksheet"),
+        ("other", "Other"),
+    ]
+    school=models.ForeignKey(School,on_delete=models.CASCADE)
+    staff=models.ForeignKey(Staff,on_delete=models.CASCADE)
+    subject=models.ForeignKey(Subject,on_delete=models.CASCADE)
+    student_class=models.ForeignKey(SchoolClass,on_delete=models.CASCADE)
+    material_type = models.CharField(max_length=20,choices=MATERIAL_TYPE_CHOICES,default="notes")
+    title=models.CharField(max_length=50)
+    description=models.CharField(max_length=50)
+    file=models.FileField(upload_to="studymaterial/")
+    created_at=models.DateTimeField(auto_now_add=True)
+    class Meta:
+        db_table = "study_material"
+        ordering = ["-created_at"]
+
+
+class StockItems(models.Model):
+    school=models.ForeignKey(School,on_delete=models.CASCADE)
+    name=models.CharField(max_length=50)
+    category=models.CharField(max_length=50,choices=[
+        ("stationary","Stationary"),
+        ("sports","Sports"),
+        ("other","Others")
+    ])
+    quantity=models.PositiveIntegerField(default=0)
+    min_quantity=models.PositiveIntegerField(default=10)
+    created_at = models.DateTimeField(auto_now_add=True)
+    class Meta():
+        db_table="stock_items"
+        ordering=["-created_at"]
+
+class StockRequest(models.Model):
+    STATUS_CHOICE=[
+        ("pending","Pending"),
+        ("approved","Approved"),
+        ("rejected","Rejected")
+
+    ]
+    school=models.ForeignKey(School,on_delete=models.CASCADE)
+    teacher=models.ForeignKey(Staff, on_delete=models.CASCADE)
+    stock_item=models.ForeignKey(StockItems, on_delete=models.CASCADE)
+    quantity=models.PositiveIntegerField(default=0)
+    status=models.CharField(max_length=50,choices=STATUS_CHOICE,default="pending")
+    requested_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta():
+        db_table="stock_request"
+        ordering=["-requested_at"]
+
+class Asset(models.Model):
+
+    CATEGORY_CHOICES = [
+        ("computer", "Computer"),
+        ("projector", "Projector"),
+        ("lab", "Lab Equipment"),
+        ("furniture", "Furniture"),
+        ("sports", "Sports Equipment"),
+        ("other", "Other"),
+    ]
+
+    school = models.ForeignKey(School, on_delete=models.CASCADE)
+
+    asset_name = models.CharField(max_length=100)
+
+    category = models.CharField(
+        max_length=30,
+        choices=CATEGORY_CHOICES
+    )
+
+    asset_code = models.CharField(
+        max_length=50,
+        unique=True
+    )
+
+    quantity = models.PositiveIntegerField(default=1)
+    unit_price = models.DecimalField(
+        max_digits=12,
+        decimal_places=2
+    )
+
+    purchase_date = models.DateField()
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "asset"
+        ordering = ["asset_name"]
+    
+    @property
+    def total_value(self):
+        return self.quantity * self.unit_price
+
+
+
+class AssetMaintenance(models.Model):
+
+    STATUS_CHOICES = [
+        ("pending", "Pending"),
+        ("in_progress", "In Progress"),
+        ("completed", "Completed"),
+    ]
+    school=models.ForeignKey(School,on_delete=models.CASCADE)
+    asset=models.ForeignKey(Asset,on_delete=models.CASCADE)
+    issue=models.TextField(max_length=100)
+    quantity=models.PositiveIntegerField(default=1)
+    repair_cost = models.DecimalField(max_digits=12,decimal_places=2,default=0)
+    maintance_date=models.DateField(auto_now_add=True)
+    completed_at=models.DateField(auto_now_add=True)
+    status=models.CharField(max_length=50,choices=STATUS_CHOICES)
+    created_at=models.DateField(auto_now_add=True)
+
+    class Meta():
+        db_table='asset_maintenance'
+        ordering=["-created_at"]
+
+class Procurement(models.Model):
+    school=models.ForeignKey(School, on_delete=models.CASCADE)
+    supplier=models.CharField(max_length=50)
+    purchase_date=models.DateTimeField(auto_now_add=True)
+    status = models.CharField(
+        max_length=20,
+        choices=[
+            ("pending", "Pending"),
+            ("ordered", "Ordered"),
+            ("received", "Received"),
+        ],
+    )
+    def restock(self):
+        for item in self.items.all():
+            stock = item.stock_item
+            stock.quantity += item.quantity
+            stock.save()
+    class Meta():
+        db_table='procurement'
+
+class ProcurementItem(models.Model):
+    procurement=models.ForeignKey(Procurement,related_name="items",on_delete=models.CASCADE)
+    stock_item=models.ForeignKey(StockItems, on_delete=models.CASCADE)
+    quantity=models.PositiveIntegerField(default=0)
+    unit_price = models.DecimalField(max_digits=10, decimal_places=2)
+
+
+class LossPrevention(models.Model):
+    school=models.ForeignKey(School,on_delete=models.CASCADE)
+    maintenance=models.ForeignKey(AssetMaintenance, on_delete=models.CASCADE)
+    remark=models.TextField(max_length=50)
+    created_at=models.DateField(auto_now_add=True)
+
+    @property
+    def replacement_cost(self):
+        return self.maintenance.quantity * self.maintenance.asset.unit_price
+    
+    @property
+    def repair_cost(self):
+        return self.maintenance.repair_cost
+    
+    @property
+    def amount_saved(self):
+        return self.replacement_cost - self.repair_cost
+    
+    class Meta:
+        db_table='loss_prevention'
+
+
+class Budget(models.Model):
+    school=models.ForeignKey(School,on_delete=models.CASCADE)
+    name=models.CharField(max_length=50)
+    allocated_amount=models.DecimalField(max_digits=10, decimal_places=2)
+    financial_year=models.PositiveSmallIntegerField()
+    created_at=models.DateField(auto_now_add=True)
+
+    @property
+    def spent_amount(self):
+        return self.expenses.aggregate(
+            total=Sum("amount")
+        )["total"] or 0
+    
+    @property
+    def amount_left(self):
+        return self.budget.allocated_amount - self.spent_amount
+    class Meta:
+        db_table='budget'
+
+class BudgetExpense(models.Model):
+    EXPENSE_TYPE = [
+        ("asset", "Asset Purchase"),
+        ("stock", "Stock Purchase"),
+        ("maintenance", "Maintenance"),
+        ("other", "Other"),
+    ]
+    budget=models.ForeignKey(Budget,related_name="expenses", on_delete=models.CASCADE)
+    expense_type=models.CharField(max_length=50,choices=EXPENSE_TYPE)
+    amount=models.IntegerField()
+    description=models.TextField(max_length=50)
+    created_at=models.DateTimeField(auto_now_add=True)
+
     
     
+    class Meta:
+        db_table='budget_expense'
     
-    
-    
+
 class Book(models.Model):
     school = models.ForeignKey(School, on_delete=models.CASCADE)
     title = models.CharField(max_length=255)
@@ -2427,3 +2690,4 @@ class BookIssued(models.Model):
     
     class Meta:
         db_table = "book_issued"
+

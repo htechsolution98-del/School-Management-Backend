@@ -587,6 +587,18 @@ class SyllabusListView(ListAPIView):
         
         
         return qs
+    
+class ExamViewTeacher(ListAPIView):
+    serializer_class = ExamViewSerializer
+    permission_classes = [IsAuthenticated, Isteacher]
+    
+    def get_queryset(self):
+        
+        staff = Staff.objects.filter(user=self.request.user).first()
+        
+        qs=Exam.objects.filter(school=staff.school)
+        
+        return qs
 
 
 class ExamViewSet(ListAPIView):
@@ -639,7 +651,197 @@ class ExamCreateViewSet(GenericAPIView):
             })
         
         return Response(serializer.errors)
+
+def calculate_grade(marks, max_marks):
+    if marks is None:
+        return ""
+    pct = (marks / max_marks) * 100
+    if pct >= 90: return "A+"
+    if pct >= 75: return "A"
+    if pct >= 60: return "B"
+    if pct >= 40: return "C"
+    return "F"
     
+class ResultBulkCreateViewSet(GenericAPIView):
+    serializer_class = ResultBulkCreateSerializer
+    permission_classes = [IsAuthenticated, Isteacher]
+
+    def post(self, request, *args, **kwargs):
+        staff = Staff.objects.filter(user=request.user).first()
+        serializer = self.get_serializer(data=request.data)
+
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        exam = serializer.validated_data["exam"]
+        max_marks = serializer.validated_data["max_marks"]
+        entries = serializer.validated_data["entries"]
+
+        created, updated = 0, 0
+
+        for entry in entries:
+            marks = None if entry["is_absent"] else entry.get("marks_obtained")
+            grade = calculate_grade(marks, max_marks)
+
+            obj, is_created = Result.objects.update_or_create(
+                exam=exam,
+                student=entry["student"],
+                defaults={
+                    "entered_by": staff,
+                    "marks_obtained": marks,
+                    "max_marks": max_marks,
+                    "is_absent": entry["is_absent"],
+                    "remarks": entry.get("remarks", ""),
+                    "grade": grade,
+                    "is_published": False,  # always revert to unpublished on edit
+                },
+            )
+            created += is_created
+            updated += (not is_created)
+
+        return Response(
+            {"detail": "results saved", "created": created, "updated": updated},
+            status=status.HTTP_200_OK,
+        )
+    
+
+class ResultPublishViewSet(GenericAPIView):
+    serializer_class = ResultPublishSerializer
+    permission_classes = [IsAuthenticated, Isteacher]
+
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        exam = serializer.validated_data["exam"]
+        updated_count = Result.objects.filter(exam=exam).update(is_published=True)
+
+        return Response(
+            {"detail": "results published", "count": updated_count},
+            status=status.HTTP_200_OK,
+        )
+
+
+class ExamResultRosterView(GenericAPIView):
+    """
+    GET: returns the class roster for an exam with any existing
+    (possibly unpublished) marks pre-filled, so the teacher UI
+    can render an editable grid.
+    """
+    permission_classes = [IsAuthenticated, Isteacher]
+ 
+    def get(self, request, exam_id, *args, **kwargs):
+        staff = Staff.objects.filter(user=request.user).first()
+        exam = Exam.objects.filter(id=exam_id, school=staff.school).first()
+ 
+        if not exam:
+            return Response({"detail": "exam not found"}, status=status.HTTP_404_NOT_FOUND)
+ 
+        students = Student.objects.filter(school_class=exam.class_group).order_by("gr_no")
+        existing_results = {
+            r.student_id: r for r in Result.objects.filter(exam=exam)
+        }
+ 
+        data = []
+        for s in students:
+            r = existing_results.get(s.id)
+            data.append({
+                "student": s.id,
+                "student_name": s.name,
+                "gr_no": s.gr_no,
+                "marks_obtained": r.marks_obtained if r else None,
+                "max_marks": r.max_marks if r else None,
+                "is_absent": r.is_absent if r else False,
+                "remarks": r.remarks if r else "",
+                "is_published": r.is_published if r else False,
+            })
+ 
+        return Response({"exam": exam.id, "class_group": exam.class_group.id, "roster": data})
+ 
+ 
+class ExamRankListView(GenericAPIView):
+    """
+    GET: class-wise ranking for a given exam, computed from
+    published (or all, teacher's choice) results.
+    """
+    permission_classes = [IsAuthenticated]  # teacher or student, both can view
+ 
+    def get(self, request, exam_id, *args, **kwargs):
+        exam = Exam.objects.filter(id=exam_id).first()
+        if not exam:
+            return Response({"detail": "exam not found"}, status=status.HTTP_404_NOT_FOUND)
+ 
+        results = (
+            Result.objects.filter(exam=exam, is_published=True, is_absent=False)
+            .exclude(marks_obtained__isnull=True)
+            .select_related("student", "student__user")
+            .order_by("-marks_obtained")
+        )
+ 
+        data = []
+        for idx, r in enumerate(results, start=1):
+            data.append({
+                "rank": idx,
+                "student": r.student.id,
+                "student_name": r.student.name,
+                "marks_obtained": r.marks_obtained,
+                "max_marks": r.max_marks,
+                "grade": r.grade,
+            })
+ 
+        return Response({"exam": exam.id, "ranking": data})
+    
+    
+# student side view
+
+
+class StudentResultViewSet(ListAPIView):
+    serializer_class = ResultViewSerializer
+    permission_classes = [IsAuthenticated, Isstudent]
+
+    def get_queryset(self):
+        student = Student.objects.filter(user=self.request.user).first()
+        return Result.objects.filter(student=student, is_published=True).select_related("exam", "exam__subject")
+
+
+from xhtml2pdf import pisa
+from django.template.loader import render_to_string
+from django.http import HttpResponse
+import io
+
+class StudentResultPDFView(APIView):
+    permission_classes = [IsAuthenticated, Isstudent]
+
+    def get(self, request, student_id, *args, **kwargs):
+        student = Student.objects.filter(user=request.user).first()
+        if str(student.id) != str(student_id):
+            return Response({"detail": "not allowed"}, status=status.HTTP_403_FORBIDDEN)
+
+        results = Result.objects.filter(student=student, is_published=True).select_related("exam", "exam__subject")
+
+        total_obtained = sum(r.marks_obtained or 0 for r in results)
+        total_max = sum(r.max_marks for r in results)
+        percentage = round((total_obtained / total_max) * 100, 2) if total_max else 0
+
+        html_string = render_to_string("report_card.html", {
+            "student": student,
+            "results": results,
+            "total_obtained": total_obtained,
+            "total_max": total_max,
+            "percentage": percentage,
+        })
+
+        pdf_buffer = io.BytesIO()
+        pisa_status = pisa.CreatePDF(html_string, dest=pdf_buffer)
+
+        if pisa_status.err:
+            return Response({"detail": "PDF generation failed"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        response = HttpResponse(pdf_buffer.getvalue(), content_type="application/pdf")
+        response["Content-Disposition"] = f'attachment; filename="report_card_{student.id}.pdf"'
+        return response
     
     
 class SubjectByClassAPIView(APIView):

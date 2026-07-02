@@ -4359,7 +4359,7 @@ class StudentSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Student
-        fields = ["id", "surname", "name", "gr_no"]
+        fields = ["id", "surname", "name", "gr_no","parent"]
 
 
 # serializers.py
@@ -4925,9 +4925,9 @@ class StaffFaceSerializer(serializers.ModelSerializer):
 #             password=validated_data["password"],
 #         )
 
-#         parent = Parent.objects.create(
-#             user=user
-#         )
+        # parent = Perents.objects.create(
+        #     user=user
+        # )
 
 #         return parent
 
@@ -4957,7 +4957,7 @@ class ExamNotificationSerializer(serializers.ModelSerializer):
 class HomeworkSubmissionSerializer(serializers.ModelSerializer):
     class Meta():
         model=HomeworkSubmission
-        fields=["homework","file"]
+        fields=["homework","file","submitted_at"]
         read_only_fields=["student","submitted_at"]
 
     def validate(self, attrs):
@@ -4973,3 +4973,106 @@ class HomeworkSubmissionSerializer(serializers.ModelSerializer):
                 )
 
         return attrs
+    
+
+class MonthlyProgressReportSerializer(serializers.ModelSerializer):
+    grade = serializers.SerializerMethodField()
+    class Meta:
+        model=MonthlyProgressReport
+        fields='__all__'
+        read_only_fields=["school","attendance_percentage","created_by","overall_score"]
+
+    def create(self,validated_data):
+            student=validated_data["student"]
+            month=validated_data["month"]
+            year=validated_data["year"]
+            
+            attendance_records=StudentAttendance.objects.filter(
+                student=student,
+                attendance_date__month=month,
+                attendance_date__year=year
+            )
+            10*5/100
+            total_days=attendance_records.count()
+            present_days=attendance_records.filter(is_present=True).count()
+            attendance_percentage=(
+                (present_days/total_days)*100
+                if total_days > 0 else 0)
+            validated_data["attendance_percentage"]=attendance_percentage
+
+            overall_score = round(
+                (attendance_percentage+
+                 validated_data["discipline"]+
+                 validated_data["communication_skills"]+
+                 validated_data["emotional_development"]+
+                 validated_data["social_development"]+
+                 validated_data["freindly_with_others"]
+                 )/6,2)
+            validated_data["overall_score"]=overall_score
+            return MonthlyProgressReport.objects.create(**validated_data)
+    
+    def get_grade(self,obj):
+            score=obj.overall_score
+            if score >=90:
+                return "A+"
+            elif score >=80 and score<90:
+                return "B"
+            elif score>=70 and score<80:
+                return "C"
+            elif score>=60 and score<70:
+                return "D"
+            
+
+class StudyMaterialSerializer(serializers.ModelSerializer):
+    class Meta:
+        model=StudyMaterial
+        fields=["subject","student_class","material_type","title","description","file"]
+        
+
+class StockItemsSerializer(serializers.ModelSerializer):
+    class Meta:
+        model=StockItems
+        fields=["id","name","category","quantity","min_quantity"]
+
+class StockRequestSerializer(serializers.ModelSerializer):
+    class Meta:
+        model=StockRequest
+        fields=["stock_item","quantity","status","teacher"]  
+        read_only_fields=["teacher"] 
+        
+class AssetSerializer(serializers.ModelSerializer):
+    class Meta:
+        model=Asset
+        fields=["id","asset_name","category","asset_code","quantity","purchase_date","total_value"]
+    
+class AssetMaintenanceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model=AssetMaintenance
+        fields=["id","asset","issue","maintance_date","status"]
+
+        
+class ProcurementSerializer(serializers.ModelSerializer):
+    class Meta:
+        model=Procurement
+        fields=["id","supplier","purchase_date","status"]
+
+class ProcurementItemSerializer(serializers.ModelSerializer):
+    class Meta:
+        model=ProcurementItem
+        fields=["id","procurement","stock_item","quantity","unit_price"]
+
+class LosspreventionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model=LossPrevention
+        fields=["id","maintenance","remark","replacement_cost","repair_cost","amount_saved"]
+
+class BudgetSerializer(serializers.ModelSerializer):
+    class Meta:
+        model=Budget
+        fields=["id","name","allocated_amount","financial_year","spent_amount","amount_left"]
+        read_only_fields=["spent_amount","amount_left"]
+
+class BudgetExpenseSerializer(serializers.ModelSerializer):
+    class Meta:
+        model=BudgetExpense
+        fields=["id","budget","expense_type","amount","description"]

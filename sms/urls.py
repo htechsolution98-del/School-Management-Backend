@@ -156,11 +156,16 @@ router.register(r'staff-salary-payment', StaffSalaryPaymentViewSet, basename='st
 
 router.register(r'student-fee', StudentFeeViewSet, basename='student-fee')
 router.register(r'student-fee-payment', StudentFeePaymentViewSet, basename='student-fee-payment')
-
-
+router.register(r'asset',AssetViewSet,basename='asset')
+router.register(r'asset-maintenance',AssetMaintenanceViewSet,basename='asset-maintenance')
+router.register(r'procurement',ProcurementViewSet,basename='procurement')
+router.register(r'procurement-item',ProcurementItemViewSet,basename='procurement-item')
+router.register(r'stock-items',StockItemsViewset,basename='stock-items')
+router.register(r'stock-request',StockRequestViewset,basename='stock-request')
+router.register(r'loss-prevention',LossPreventionViewset,basename='loss-prevention')
+router.register(r'budget',BudgetViewset,basename='budget')
+router.register(r'budget-expense',BudgetExpenseViewset,basename='budget-expense')
 router.register(r'homework', HomeworkViewSet, basename='homework')
-
-
 router.register(r'studentget', StudentGetView, basename='studentget')
 
 
@@ -295,6 +300,14 @@ urlpatterns = [
     path('api/student-documents/',StudentDocumentView.as_view()),
     path('api/exam-notification/',ExamView.as_view()),
     path('api/attendance-notification/',StudentNotificationView.as_view()),
+    path('api/monthly-report/',MonthlyProgressReportView.as_view()),
+    path('api/duefeesview/',DueFeesView.as_view()),
+    path('api/payment-history/',PaymentHistoryView.as_view()),
+    path('api/fee-payment/',FeesPaymentView.as_view()),
+    path('api/verify-payment/',VerifypaymentView.as_view()),
+    path('api/studymaterial/',StudyMaterialView.as_view()),
+    path("teacher/classes/",TeacherClassesView.as_view()),
+    
     # ITS FOR GET STIDENT FOR ATTENDANSE
     
     path(
@@ -314,13 +327,50 @@ urlpatterns = [
     
     path('api/syllabus-student/', SyllabusListView.as_view()), # student see syallabus, for now study material
     
-    path('api/examtimetable-view/', ExamViewSet.as_view()), # student see exam timetable
     
-    path('api/examtimetable/', ExamCreateViewSet.as_view()), # teacher create timetable
     
     path("api/classes/<int:class_id>/subjects/",SubjectByClassAPIView.as_view()), # in timetable first select class than subjects
     
     path("api/classes/",SchoolClassesView.as_view()), # classes to see for examtimetable
+    
+    
+    
+    
+    
+    path("api/exams/", ExamViewTeacher.as_view(), name="exam-list"), # GET  (Teacher: own class exams)
+    
+    path('api/examtimetable/', ExamCreateViewSet.as_view()), # teacher create timetable
+    
+    path('api/examtimetable-view/', ExamViewSet.as_view()), # student see exam timetable
+    
+    # path("exams/create/", ExamCreateViewSet.as_view(), name="exam-create"),      # POST (teacher/principal)
+ 
+    # ---- Results: teacher side ----
+    path("api/results/bulk-save/", ResultBulkCreateViewSet.as_view(), name="result-bulk-save"),
+    # POST -> create/update marks for a class (upsert, always unpublished on edit)
+    
+    # path("results/", ResultViewTeacher.as_view()),
+    path("api/results/roster/<int:exam_id>/", ExamResultRosterView.as_view(), name="result-roster"),
+    # GET -> class roster + existing marks (prefill grid)
+ 
+ 
+    path("api/results/publish/", ResultPublishViewSet.as_view(), name="result-publish"),
+    # POST { "exam": <id> } -> publish all results for that exam
+ 
+ 
+    path("api/results/rank/<int:exam_id>/", ExamRankListView.as_view(), name="result-rank"),
+    # GET -> class-wise ranked list for an exam
+ 
+    # ---- Results: student side ----
+    path("api/results/my-results/", StudentResultViewSet.as_view(), name="student-results"),
+    # GET -> logged-in student's published results
+ 
+    path("api/results/report-card/<int:student_id>/", StudentResultPDFView.as_view(), name="result-pdf"),
+    # GET -> downloadable PDF report card
+    
+    
+    
+    
     
     # path('api/razardata/',RazarDataView.as_view()),
     
