@@ -656,6 +656,7 @@ class StudentAttendanceListSerializer(serializers.ModelSerializer):
         
         
 class SyllabusListSerializer(serializers.ModelSerializer):
+    subject_name = serializers.CharField(source = 'subject.name', read_only = True)
     class Meta:
         model = Syllabus
         fields = '__all__'
@@ -813,4 +814,19 @@ class BookIssuedSerializer(serializers.ModelSerializer):
             "late_fees",
             "is_late",
             "status",
+        ]
+class BookIssuedForSelfSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = BookIssued
+        fields = "__all__"
+        
+        read_only_fields = [
+            "school",
+            "book_issued_date",
+            "actual_return_date",
+            "late_fees",
+            "is_late",
+            "status",
+            "student",
+            "due_date"
         ]

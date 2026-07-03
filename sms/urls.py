@@ -329,15 +329,15 @@ urlpatterns = [
     
     
     
-    path("api/classes/<int:class_id>/subjects/",SubjectByClassAPIView.as_view()), # in timetable first select class than subjects
+    path('api/classes/<int:class_id>/subjects/',SubjectByClassAPIView.as_view()), # in timetable first select class than subjects
     
-    path("api/classes/",SchoolClassesView.as_view()), # classes to see for examtimetable
-    
-    
+    path('api/classes/',SchoolClassesView.as_view()), # classes to see for examtimetable
     
     
     
-    path("api/exams/", ExamViewTeacher.as_view(), name="exam-list"), # GET  (Teacher: own class exams)
+    
+    
+    path('api/exams/', ExamViewTeacher.as_view(), name="exam-list"), # GET  (Teacher: own class exams)
     
     path('api/examtimetable/', ExamCreateViewSet.as_view()), # teacher create timetable
     
@@ -346,26 +346,26 @@ urlpatterns = [
     # path("exams/create/", ExamCreateViewSet.as_view(), name="exam-create"),      # POST (teacher/principal)
  
     # ---- Results: teacher side ----
-    path("api/results/bulk-save/", ResultBulkCreateViewSet.as_view(), name="result-bulk-save"),
+    path('api/results/bulk-save/', ResultBulkCreateViewSet.as_view(), name="result-bulk-save"),
     # POST -> create/update marks for a class (upsert, always unpublished on edit)
     
     # path("results/", ResultViewTeacher.as_view()),
-    path("api/results/roster/<int:exam_id>/", ExamResultRosterView.as_view(), name="result-roster"),
+    path('api/results/roster/<int:exam_id>/', ExamResultRosterView.as_view(), name="result-roster"),
     # GET -> class roster + existing marks (prefill grid)
  
  
-    path("api/results/publish/", ResultPublishViewSet.as_view(), name="result-publish"),
+    path('api/results/publish/', ResultPublishViewSet.as_view(), name="result-publish"),
     # POST { "exam": <id> } -> publish all results for that exam
  
  
-    path("api/results/rank/<int:exam_id>/", ExamRankListView.as_view(), name="result-rank"),
+    path('api/results/rank/<int:exam_id>/', ExamRankListView.as_view(), name="result-rank"),
     # GET -> class-wise ranked list for an exam
  
     # ---- Results: student side ----
-    path("api/results/my-results/", StudentResultViewSet.as_view(), name="student-results"),
+    path('api/results/my-results/', StudentResultViewSet.as_view(), name="student-results"),
     # GET -> logged-in student's published results
  
-    path("api/results/report-card/<int:student_id>/", StudentResultPDFView.as_view(), name="result-pdf"),
+    path('api/results/report-card/<int:student_id>/', StudentResultPDFView.as_view(), name="result-pdf"),
     # GET -> downloadable PDF report card
     
     
