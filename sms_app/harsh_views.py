@@ -557,7 +557,7 @@ def get_approved_paid_leave_days(staff, start_date, end_date):
     
 class StudentAttendanceListView(ListAPIView):
     serializer_class = StudentAttendanceListSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, Isstudent]
     
     def get_queryset(self):
         
@@ -1235,7 +1235,7 @@ class BookViewStudent(ModelViewSet):
  
 class BookIssueStudent(ModelViewSet):
 
-    serializer_class = BookIssuedSerializer
+    serializer_class = BookIssuedForSelfSerializer
     permission_classes = [IsAuthenticated]
     http_method_names = ["get", "post"]  # no direct update/delete by students
  
@@ -1253,9 +1253,9 @@ class BookIssueStudent(ModelViewSet):
  
         # Ignore/overwrite whatever student id the client sent — a student
         # may only ever issue a book to themself.
-        requested_student = serializer.validated_data.get("student")
-        if requested_student is not None and requested_student.pk != student.pk:
-            raise PermissionDenied("You can only issue books to yourself.")
+        # requested_student = serializer.validated_data.get("student")
+        # if requested_student is not None and requested_student.pk != student.pk:
+        #     raise PermissionDenied("You can only issue books to yourself.")
 
         # due_date is a librarian decision, not a student one — reject the
         # request outright if a student tries to set it, rather than
