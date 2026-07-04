@@ -194,9 +194,9 @@ router.register(r"leave-types", LeaveTypeViewSet, basename="leave-types")
 
 router.register(r'leave-request', LeaveRequestView, basename='leave-request') 
 
-router.register(r'get-leave-requests', GetLeaveRequestView, basename='get-leave-requests')# For get leave request for principle with filter [school filter add remainig]
+router.register(r'get-leave-requests', GetLeaveRequestView, basename='get-leave-requests')# For get leave request for clerk with filter [school filter add remainig]
 
-router.register(r'change-leave-status', ChangeLeaveView, basename='change-leave-status')# For approve leave request for principle METHOD [PUT]
+router.register(r'change-leave-status', ChangeLeaveView, basename='change-leave-status')# For approve leave request for clerk METHOD [PUT]
 
 
 
@@ -212,17 +212,17 @@ router.register(r'change-leave-status', ChangeLeaveView, basename='change-leave-
 
 
 
-router.register(r"books/manage", BookManageView, basename="book-manage") # for book add clerk
+router.register(r"books/manage", BookManageView, basename="book-manage") # for add remove update or manage book by librarian
 
 # Late fee policy: staff-side, one per school.
 router.register(r"late-fees", LateBookFeesViews, basename="late-fees")
 
 # Staff-side issuing + returning (counter operations).
 # DRF auto-generates /book-issued/<id>/return/ from the @action below.
-router.register(r"book-issued", BookIssuedView, basename="book-issued")
+router.register(r"book-issued", BookIssuedView, basename="book-issued") #librarian see all book issued and status also issue book to someone and mark return
 
 # Student-side read-only catalogue browsing.
-router.register(r"books", BookViewStudent, basename="book-student")
+router.register(r"books", BookViewStudent, basename="book-student") 
 
 # Student-side issuing + own loan history.
 # DRF auto-generates /my-books/<id>/return/ from the @action below.
@@ -247,7 +247,8 @@ urlpatterns = [
     
     #FOR ATTENDANCE LOCATION
     path('api/get-location/', GetLocationView.as_view()),
-    # path('api/delete-location/<int:pk>/',DeleteUpdateLocationView.as_view()),
+    # path('api/get-location/<int:pk>/', GetLocationView.as_view()),
+    path('api/delete-location/<int:pk>/',DeleteUpdateLocationView.as_view()),
     
     path('api/api-login/', LoginView.as_view()),
     
@@ -267,7 +268,7 @@ urlpatterns = [
      
      
      
-     path('api/get-remaining-leaves/',GetStaffRemainingleave.as_view()),  
+     path('api/get-remaining-leaves/',GetStaffRemainingleave.as_view()),  # staff see remaining leave
      
      # To get remaining leave for staff when click on apply leave button for show remaining leave
      path('api/get-leave-requests-staff/',GetStaffLeaveRequest.as_view()),
@@ -329,13 +330,50 @@ urlpatterns = [
     
     path('api/syllabus-student/', SyllabusListView.as_view()), # student see syallabus, for now study material
     
-    path('api/examtimetable-view/', ExamViewSet.as_view()), # student see exam timetable
+    
+    
+    path('api/classes/<int:class_id>/subjects/',SubjectByClassAPIView.as_view()), # in timetable first select class than subjects
+    
+    path('api/classes/',SchoolClassesView.as_view()), # classes to see for examtimetable
+    
+    
+    
+    
+    
+    path('api/exams/', ExamViewTeacher.as_view(), name="exam-list"), # GET  (Teacher: own class exams)
     
     path('api/examtimetable/', ExamCreateViewSet.as_view()), # teacher create timetable
     
-    path("api/classes/<int:class_id>/subjects/",SubjectByClassAPIView.as_view()), # in timetable first select class than subjects
+    path('api/examtimetable-view/', ExamViewSet.as_view()), # student see exam timetable
     
-    path("api/classes/",SchoolClassesView.as_view()), # classes to see for examtimetable
+    # path("exams/create/", ExamCreateViewSet.as_view(), name="exam-create"),      # POST (teacher/principal)
+ 
+    # ---- Results: teacher side ----
+    path('api/results/bulk-save/', ResultBulkCreateViewSet.as_view(), name="result-bulk-save"),
+    # POST -> create/update marks for a class (upsert, always unpublished on edit)
+    
+    # path("results/", ResultViewTeacher.as_view()),
+    path('api/results/roster/<int:exam_id>/', ExamResultRosterView.as_view(), name="result-roster"),
+    # GET -> class roster + existing marks (prefill grid)
+ 
+ 
+    path('api/results/publish/', ResultPublishViewSet.as_view(), name="result-publish"),
+    # POST { "exam": <id> } -> publish all results for that exam
+ 
+ 
+    path('api/results/rank/<int:exam_id>/', ExamRankListView.as_view(), name="result-rank"),
+    # GET -> class-wise ranked list for an exam
+ 
+    # ---- Results: student side ----
+    path('api/results/my-results/', StudentResultViewSet.as_view(), name="student-results"),
+    # GET -> logged-in student's published results
+ 
+    path('api/results/report-card/<int:student_id>/', StudentResultPDFView.as_view(), name="result-pdf"),
+    # GET -> downloadable PDF report card
+    
+    
+    
+    
     
     # path('api/razardata/',RazarDataView.as_view()),
     

@@ -127,7 +127,7 @@ class VerifyOTPSerializer(serializers.Serializer):
             school=school,
         )
         
-        TempUser.objects.create(user = user ) #-----------------------CREATE TEMP USER
+        TempUser.objects.create(user = user, email = email) #-----------------------CREATE TEMP USER
 
         # Assign group (optional)
         group, _ = Group.objects.get_or_create(name="temp_user")
@@ -2256,11 +2256,9 @@ class GetStudentSerializer(serializers.ModelSerializer):
 
 
 class AttendanceLocationSerializer(serializers.ModelSerializer):
-    start_time = serializers.TimeField(write_only=True, required=False, allow_null=True)
-    end_time = serializers.TimeField(write_only=True, required=False, allow_null=True)
-    half_day_time = serializers.TimeField(
-        write_only=True, required=False, allow_null=True
-    )
+    start_time = serializers.TimeField(source='time_rule.start_time',required=False, allow_null=True)
+    end_time = serializers.TimeField(source='time_rule.end_time',required=False, allow_null=True)
+    half_day_time = serializers.TimeField(source='time_rule.half_day_time',required=False, allow_null=True)
 
     class Meta:
         model = AttendanceLocation
@@ -2296,18 +2294,19 @@ class AttendanceLocationSerializer(serializers.ModelSerializer):
         if not school:
             raise serializers.ValidationError("User school is not configured.")
 
-        start_time = validated_data.pop("start_time", None)
-        end_time = validated_data.pop("end_time", None)
-        half_day_time = validated_data.pop("half_day_time", None)
+        
+        time_rule_data = validated_data.pop("time_rule")
+            
 
-        AttendanceTimeRule.objects.create(
+        time_rule = AttendanceTimeRule.objects.create(
             school=school,
-            start_time=start_time,
-            end_time=end_time,
-            half_day_time=half_day_time,
-        )
+            start_time=time_rule_data.get("start_time"),
+            end_time=time_rule_data.get("end_time"),
+            half_day_time=time_rule_data.get("half_day_time"),
+        )        
 
-        return AttendanceLocation.objects.create(school=school, **validated_data)
+        
+        return AttendanceLocation.objects.create(school=school, time_rule= time_rule, **validated_data)
 
 
 def is_inside_radius(lat1, lon1, lat2, lon2, radius_meters):
@@ -4359,7 +4358,7 @@ class StudentSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Student
-        fields = ["id", "surname", "name", "gr_no","parent"]
+        fields = ["id", "surname", "name", "gr_no"]
 
 
 # serializers.py
@@ -4913,24 +4912,24 @@ class StaffFaceSerializer(serializers.ModelSerializer):
 
             return face
 
-class ParentCreateSerializer(serializers.Serializer):
-    username = serializers.CharField()
-    email = serializers.EmailField()
-    password = serializers.CharField(write_only=True)
+# class ParentCreateSerializer(serializers.Serializer):
+#     username = serializers.CharField()
+#     email = serializers.EmailField()
+#     password = serializers.CharField(write_only=True)
 
-    def create(self, validated_data):
+#     def create(self, validated_data):
 
-        user = User.objects.create_user(
-            username=validated_data["username"],
-            email=validated_data["email"],
-            password=validated_data["password"],
-        )
+#         user = User.objects.create_user(
+#             username=validated_data["username"],
+#             email=validated_data["email"],
+#             password=validated_data["password"],
+#         )
 
-        parent = Perents.objects.create(
-            user=user
-        )
+        # parent = Perents.objects.create(
+        #     user=user
+        # )
 
-        return parent
+#         return parent
 
 class StaffFaceVerifySerializer(serializers.Serializer):
     image=serializers.ImageField()

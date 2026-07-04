@@ -938,9 +938,16 @@ class TempUserAdmissionViewSet(ReadOnlyModelViewSet):
 
 
 class TempUserListViewSet(ReadOnlyModelViewSet):
-    queryset = TempUser.objects.select_related("user").all()
+
     serializer_class = TempUserListSerializer
     permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        print("School:", self.request.user.school)
+
+        return TempUser.objects.select_related("user").filter(
+            user__school=self.request.user.school
+        )
 
     @action(
         detail=False,
@@ -950,7 +957,7 @@ class TempUserListViewSet(ReadOnlyModelViewSet):
     )
     
     def deactivate_all(self, request):
-        User.objects.filter(groups__name="temp_user").update(is_active=False)
+        User.objects.filter(groups__name="temp_user", school=request.user.school).update(is_active=False)
         return Response(
             {"message": "All temp users have been deactivated."},
             status=status.HTTP_200_OK,
@@ -2697,16 +2704,25 @@ class GetLocationView(APIView):
 
         return Response(serializer.data, status=status.HTTP_200_OK)
 
-# class DeleteUpdateLocationView(APIView):
-#     permission_classes=[IsAuthenticated,IsCLerk]
 
-#     def delete(self,request,pk):
-#         attendancelocation=get_object_or_404(AttendanceLocation,pk=pk)
-#         attendancelocation.delete()
-#         return Response(
-#             {"message": "Location deleted successfully"},
-#              status=status.HTTP_204_NO_CONTENT
-#         )
+
+class DeleteUpdateLocationView(APIView):
+    permission_classes = [IsAuthenticated, IsCLerk]
+
+    def delete(self, request, pk):
+        attendancelocation = get_object_or_404(AttendanceLocation, pk=pk)
+
+        if attendancelocation.time_rule:
+            attendancelocation.time_rule.delete()
+
+        attendancelocation.delete()
+
+        return Response(
+            {"message": "Location deleted successfully"},
+            status=status.HTTP_204_NO_CONTENT
+        )
+
+
 
 #     def put(self,pk):
 #         attendancelocation=get_object_or_404(AttendanceLocation,pk=pk)
@@ -3776,9 +3792,10 @@ class AttendanceStudentAPIView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        
         # GET STUDENTS
         students = Student.objects.filter(
-            school=school, division=assign_class.division.division
+            school=school, division=assign_class.division.id
         ).order_by("gr_no")
 
         serializer = StudentSerializer(students, many=True)
@@ -3907,7 +3924,7 @@ class HomeworkViewSet(ModelViewSet):
     - student-homework: Students view homework for their division
     """
 
-    # permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated]
     queryset = Homework.objects.all()
 
     def get_student_division_name(self, student):
@@ -4517,30 +4534,30 @@ class StaffFaceVerifyView(APIView):
             "raw_response": result
         })
 
-class ParentCreateView(APIView):
+# class ParentCreateView(APIView):
 
-    def post(self, request):
+#     def post(self, request):
 
-        serializer = ParentCreateSerializer(
-            data=request.data
-        )
+#         serializer = ParentCreateSerializer(
+#             data=request.data
+#         )
 
-        if serializer.is_valid():
+#         if serializer.is_valid():
 
-            parent = serializer.save()
+#             parent = serializer.save()
 
-            return Response(
-                {
-                    "message": "Parent created successfully",
-                    "parent_id": parent.id,
-                },
-                status=status.HTTP_201_CREATED,
-            )
+#             return Response(
+#                 {
+#                     "message": "Parent created successfully",
+#                     "parent_id": parent.id,
+#                 },
+#                 status=status.HTTP_201_CREATED,
+#             )
 
-        return Response(
-            serializer.errors,
-            status=status.HTTP_400_BAD_REQUEST,
-        )
+#         return Response(
+#             serializer.errors,
+#             status=status.HTTP_400_BAD_REQUEST,
+#         )
 
 
 

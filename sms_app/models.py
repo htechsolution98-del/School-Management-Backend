@@ -2346,6 +2346,9 @@ class Exam(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True)
     
+    def __str__(self):
+        return f"{self.title}-{self.subject}"
+    
 class ExamNotification(models.Model):
     exam = models.ForeignKey(Exam, on_delete=models.CASCADE)
 
@@ -2353,7 +2356,29 @@ class ExamNotification(models.Model):
     message = models.TextField()
 
     created_at = models.DateTimeField(auto_now_add=True)
-    
+
+
+class Result(models.Model):
+    exam = models.ForeignKey(Exam, on_delete=models.CASCADE, related_name="results")
+    student = models.ForeignKey(Student, on_delete=models.CASCADE, related_name="results")
+    entered_by = models.ForeignKey(Staff, on_delete=models.SET_NULL, null=True)
+
+    marks_obtained = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    max_marks = models.DecimalField(max_digits=5, decimal_places=2)
+    is_absent = models.BooleanField(default=False)
+
+    grade = models.CharField(max_length=5, blank=True)
+    remarks = models.CharField(max_length=255, blank=True)
+
+    is_published = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ("exam", "student")  # one result row per student per exam
+        db_table = "result"
+        
+        
 
 
 class HomeworkSubmission(models.Model):

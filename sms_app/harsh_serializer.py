@@ -656,6 +656,7 @@ class StudentAttendanceListSerializer(serializers.ModelSerializer):
         
         
 class SyllabusListSerializer(serializers.ModelSerializer):
+    subject_name = serializers.CharField(source = 'subject.name', read_only = True)
     class Meta:
         model = Syllabus
         fields = '__all__'
@@ -667,9 +668,11 @@ class SchoolClassSerializer(serializers.ModelSerializer):
         
         
 class ExamViewSerializer(serializers.ModelSerializer):
+    class_group_name = serializers.CharField(source = "class_group.school_class", read_only=True)
     class Meta:
         model=Exam
-        fields=["title","description", "subject","exam_date","start_time","end_time","class_group"]
+        fields=["id","title","description", "subject","exam_date","start_time","end_time","class_group", "class_group_name"]
+        read_only_fields = ["id","class_group_name"]
         
         
     def __init__(self, *args, **kwargs):
@@ -708,6 +711,72 @@ class ExamViewSerializer(serializers.ModelSerializer):
     
     
     
+class ResultEntrySerializer(serializers.Serializer):
+    student = serializers.PrimaryKeyRelatedField(queryset=Student.objects.all())
+    marks_obtained = serializers.DecimalField(max_digits=5, decimal_places=2, required=False, allow_null=True)
+    is_absent = serializers.BooleanField(default=False)
+    remarks = serializers.CharField(required=False, allow_blank=True)
+
+
+
+class ResultBulkCreateSerializer(serializers.Serializer):
+    exam = serializers.PrimaryKeyRelatedField(queryset=Exam.objects.all())
+    max_marks = serializers.DecimalField(max_digits=5, decimal_places=2)
+    entries = ResultEntrySerializer(many=True)
+
+    def validate(self, attrs):
+        request = self.context.get("request")
+        staff = Staff.objects.filter(user=request.user).first()
+        exam = attrs["exam"]
+
+        if exam.school != staff.school:
+            raise serializers.ValidationError({"exam": "Invalid exam."})
+
+        if exam.created_by != staff and exam.subject not in staff.subjects.all():
+            # adjust this check based on how you track subject-teacher assignment
+            raise serializers.ValidationError({"exam": "You are not authorized for this exam."})
+
+        valid_student_ids = set(
+            Student.objects.filter(school_class=exam.class_group).values_list("id", flat=True)
+        )
+        for entry in attrs["entries"]:
+            if entry["student"].id not in valid_student_ids:
+                raise serializers.ValidationError(
+                    {"entries": f"Student {entry['student'].id} is not in this class."}
+                )
+            if not entry["is_absent"] and entry.get("marks_obtained") is not None:
+                if entry["marks_obtained"] > attrs["max_marks"]:
+                    raise serializers.ValidationError(
+                        {"entries": f"Marks exceed max marks for student {entry['student'].id}."}
+                    )
+
+        return attrs
+    
+class ResultPublishSerializer(serializers.Serializer):
+    exam = serializers.PrimaryKeyRelatedField(queryset=Exam.objects.all())
+
+    def validate_exam(self, exam):
+        request = self.context.get("request")
+        staff = Staff.objects.filter(user=request.user).first()
+
+        if not staff:
+            raise serializers.ValidationError("Staff profile not found.")
+
+        if exam.school != staff.school:
+            raise serializers.ValidationError("Invalid exam for your school.")
+
+        return exam
+    
+# student side view
+
+class ResultViewSerializer(serializers.ModelSerializer):
+    exam_title = serializers.CharField(source="exam.title")
+    subject = serializers.CharField(source="exam.subject.name")
+
+    class Meta:
+        model = Result
+        fields = ["exam_title", "subject", "marks_obtained", "max_marks", "is_absent", "grade", "remarks"]
+    
 
 class BookManageSerializer(serializers.ModelSerializer):
     class Meta:
@@ -745,4 +814,19 @@ class BookIssuedSerializer(serializers.ModelSerializer):
             "late_fees",
             "is_late",
             "status",
+        ]
+class BookIssuedForSelfSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = BookIssued
+        fields = "__all__"
+        
+        read_only_fields = [
+            "school",
+            "book_issued_date",
+            "actual_return_date",
+            "late_fees",
+            "is_late",
+            "status",
+            "student",
+            "due_date"
         ]
