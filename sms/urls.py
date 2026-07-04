@@ -139,8 +139,8 @@ router.register(r'get-student',GetStudentView,basename='get-student')
 # FOR ATTENDANCE TRACKING METHOD [GET,POST,PUT,DELETE]
 router.register(r'attendance', AttendanceView, basename='attendance') 
 
-router.register(r'announcements', AnnouncementView, basename='announcements')# For managing announcements
-router.register(r'get-announcements', GetAnnouncementView, basename='get-announcements')# For get announcement for student,staff with filter [school filter add remainig]   
+# router.register(r'announcements', AnnouncementView, basename='announcements')# For managing announcements
+# router.register(r'get-announcements', GetAnnouncementView, basename='get-announcements')# For get announcement for student,staff with filter [school filter add remainig]   
 router.register(r'razardata', RazarDataView, basename='razardata')# For get announcement for student,staff with filter [school filter add remainig]   
 
 router.register(r'academic-year', AcademicYearViewSet, basename='academic-year') # For Only get

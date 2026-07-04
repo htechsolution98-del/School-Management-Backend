@@ -1206,42 +1206,42 @@ class StaffRemainingLeave(models.Model):
         db_table = "staff_remaining_leave"
 
 
-class Announcement(models.Model):
-    school = models.ForeignKey(
-        School, on_delete=models.CASCADE, null=True, blank=True, db_index=True
-    )
-    title = models.CharField(max_length=255)
-    description = models.TextField()
+# class Announcement(models.Model):
+#     school = models.ForeignKey(
+#         School, on_delete=models.CASCADE, null=True, blank=True, db_index=True
+#     )
+#     title = models.CharField(max_length=255)
+#     description = models.TextField()
 
-    publish_at = models.DateTimeField()  # when it becomes visible
-    expires_at = models.DateTimeField(null=True, blank=True)  # optional
+#     publish_at = models.DateTimeField()  # when it becomes visible
+#     expires_at = models.DateTimeField(null=True, blank=True)  # optional
 
-    created_at = models.DateTimeField(auto_now_add=True)
+#     created_at = models.DateTimeField(auto_now_add=True)
 
-    class Meta:
-        db_table = "announcement"
+#     class Meta:
+#         db_table = "announcement"
 
 
-class AnnouncementTarget(models.Model):
-    school = models.ForeignKey(
-        School, on_delete=models.CASCADE, null=True, blank=True, db_index=True
-    )
-    TARGET_TYPE = [
-        ("ALL", "All"),
-        ("ROLE", "Role"),
-        ("CLASS", "Class"),
-        ("SPECIFIC", "Specific User"),
-    ]
+# class AnnouncementTarget(models.Model):
+#     school = models.ForeignKey(
+#         School, on_delete=models.CASCADE, null=True, blank=True, db_index=True
+#     )
+#     TARGET_TYPE = [
+#         ("ALL", "All"),
+#         ("ROLE", "Role"),
+#         ("CLASS", "Class"),
+#         ("SPECIFIC", "Specific User"),
+#     ]
 
-    announcement = models.ForeignKey(
-        Announcement, on_delete=models.CASCADE, related_name="targets"
-    )
+#     announcement = models.ForeignKey(
+#         Announcement, on_delete=models.CASCADE, related_name="targets"
+#     )
 
-    target_type = models.CharField(max_length=10, choices=TARGET_TYPE)
-    target_id = models.IntegerField(null=True, blank=True)
+#     target_type = models.CharField(max_length=10, choices=TARGET_TYPE)
+#     target_id = models.IntegerField(null=True, blank=True)
 
-    class Meta:
-        db_table = "announcement_target"
+#     class Meta:
+#         db_table = "announcement_target"
 
 
 # =============FEE MANAGEMENT TABLE=================
@@ -2696,13 +2696,16 @@ class Announcement(models.Model):
         ("Teacher","teacher"),
         ("Clerk","clerk"),
         ("Fee-manager","fee-manager"),
-        ("Librarian","librarian")
+        ("Librarian","librarian"),
         ("Student","student"),
-        ("Parent","parent")
+        ("Parent","parent"),
     ]
     school=models.ForeignKey(School, on_delete=models.CASCADE)
     title=models.CharField(max_length=50)
     description=models.CharField(max_length=50)
     announcement_for=models.CharField(max_length=50,choices=SENT_CHOICES,default="Teacher")
     is_everyone=models.BooleanField(default=False)
-    created_at=models.DateField(auto_now_add=False)
+    created_at=models.DateField(auto_now_add=True)
+    
+    class Meta:
+         db_table = "announcement"

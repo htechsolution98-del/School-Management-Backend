@@ -415,7 +415,8 @@ class LoginView(APIView):
                 "school_id": response_data["school_id"],
                 "school_slug": response_data["school_slug"],
                 "roles": response_data["roles"],
-                "modules": response_data["modules"]
+                "modules": response_data["modules"],
+                "access": access_token,
             },
             status=status.HTTP_200_OK,
         )
@@ -2814,53 +2815,53 @@ class GetRemainingLeavePerStaffView(APIView):
             "reamining_leaves":remaining_leaves_left.data
         })
 
-class AnnouncementView(ModelViewSet):
-    queryset = Announcement.objects.all()
-    serializer_class = AnnouncementSerializer
-    permission_classes = [IsAuthenticated, Isprincipal]
+# class AnnouncementView(ModelViewSet):
+#     queryset = Announcement.objects.all()
+#     serializer_class = AnnouncementSerializer
+#     permission_classes = [IsAuthenticated, Isprincipal]
 
 
-class GetAnnouncementView(ModelViewSet):
-    queryset = Announcement.objects.all()
-    serializer_class = GetAnnouncementSerializer
-    permission_classes = [IsAuthenticated]
+# class GetAnnouncementView(ModelViewSet):
+#     queryset = Announcement.objects.all()
+#     serializer_class = GetAnnouncementSerializer
+#     permission_classes = [IsAuthenticated]
 
-    def get_queryset(self):
-        user = self.request.user
-        now = timezone.now()
+#     def get_queryset(self):
+#         user = self.request.user
+#         now = timezone.now()
 
-        print(user.id)
-        print(type(user.id))
-        # Base filter (active announcements)
-        base_filter = Q(school=user.school, publish_at__lte=now) & (
-            Q(expires_at__gte=now) | Q(expires_at__isnull=True)
-        )
+#         print(user.id)
+#         print(type(user.id))
+#         # Base filter (active announcements)
+#         base_filter = Q(school=user.school, publish_at__lte=now) & (
+#             Q(expires_at__gte=now) | Q(expires_at__isnull=True)
+#         )
 
-        # ALL users
-        # all_filter = Q(targets__target_type='ALL')
+#         # ALL users
+#         # all_filter = Q(targets__target_type='ALL')
 
-        # SPECIFIC user
-        specific_filter = Q(targets__target_type="SPECIFIC", targets__target_id=user.id)
+#         # SPECIFIC user
+#         specific_filter = Q(targets__target_type="SPECIFIC", targets__target_id=user.id)
 
-        # ROLE-based
-        user_groups = user.groups.values_list("id", flat=True)
-        print(user_groups)
-        role_filter = Q(targets__target_type="ROLE", targets__target_id__in=user_groups)
+#         # ROLE-based
+#         user_groups = user.groups.values_list("id", flat=True)
+#         print(user_groups)
+#         role_filter = Q(targets__target_type="ROLE", targets__target_id__in=user_groups)
 
-        # 4️ CLASS-based (only if student)
-        class_filter = Q()
-        if hasattr(user, "student"):
-            class_filter = Q(
-                targets__target_type="CLASS",
-                targets__target_id=user.student.school_class_id,
-            )
+#         # 4️ CLASS-based (only if student)
+#         class_filter = Q()
+#         if hasattr(user, "student"):
+#             class_filter = Q(
+#                 targets__target_type="CLASS",
+#                 targets__target_id=user.student.school_class_id,
+#             )
 
-        # Combine everything
-        queryset = Announcement.objects.filter(specific_filter | base_filter).order_by(
-            "-created_at"
-        )
+#         # Combine everything
+#         queryset = Announcement.objects.filter(specific_filter | base_filter).order_by(
+#             "-created_at"
+#         )
 
-        return queryset
+#         return queryset
 
     # def school_wise_report(request, school_id):
     #     # Example: Get all students in the school
