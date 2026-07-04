@@ -264,5 +264,44 @@ class StudyMaterialConsumer(AsyncWebsocketConsumer):
         except Student.DoesNotExist:
             return None
     
+class AnnouncementConsumer(AsyncWebsocketConsumer):
+    async def connect(self):
+        user=self.scope["user"]
+        if user.is_anonymous:
+            await self.close()
+            return
+        school=user.school
+        role=user.role.lower()
+        self.role_group=f"school_{school.id}_choice_{role}"
+        await self.group_layer.group_add(
+            self.role_group,
+            self.channel_layer
+        )
+
+        self.all_group=f"school_{school.id}_choice_all"
+        await self.group_layer.group_add(
+            self.all_group,
+            self.channel_layer
+        )
+        self.accept()
+
+    async def disconnect(self,close_code):
+        await self.channel_layer.group_discard(
+            self.role_group,
+            self.channel_name
+        )
+
+        await self.channel_layer.group_discard(
+            self.all_group,
+            self.channel_name
+        )
+
+    async def announcement_send(self,event):
+        await self.send(
+            text_data=json.dumps({
+                "title":event["title"],
+                "description":event["description"]
+            })
+        )
 
 

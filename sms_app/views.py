@@ -3932,9 +3932,14 @@ class HomeworkViewSet(ModelViewSet):
     def get_queryset(self):
         """Filter homework by school"""
         school = self.request.user.school
+        
         queryset = Homework.objects.filter(school=school).select_related(
             "division", "teacher", "division__SchoolClass"
         )
+        print("User:", self.request.user)
+        
+        
+
 
         # If user is a student, only show homework for their division
         # if self.is_student():
@@ -3955,6 +3960,8 @@ class HomeworkViewSet(ModelViewSet):
         #         queryset = queryset.none()
                 
         if self.is_student():
+            print("Student class:", student.school_class_id)
+            print("Student division:", student.division_id)
             try:
                 student = self.request.user.student
             except Student.DoesNotExist:
@@ -4711,15 +4718,40 @@ class ExamView(APIView):
             status=status.HTTP_201_CREATED
         )
 
-class HomeworkSubmissionView(APIView):
-    permission_classes=[Isstudent]
-    def post(self,request):
-        serializer=HomeworkSubmissionSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save(student=request.user.student)
-            print("After save")
-            return Response(serializer.data)
-        return Response(serializer.errors,status=404)
+class HomeworkSubmissionViewSet(ModelViewSet):
+    serializer_class = HomeworkSubmissionSerializer
+    queryset = HomeworkSubmission.objects.all()
+    permission_classes = []
+
+
+
+    def get_permissions(self):
+        if self.action == "list":
+            return [Isteacher() | Isstudent()]
+        return [Isstudent()]
+
+    def get_queryset(self):
+        id = self.kwargs.get("pk") 
+        # Student: only see their own submissions
+        if hasattr(self.request.user, "student"):
+            return HomeworkSubmission.objects.filter(
+                student=self.request.user.student
+            )
+
+        # Teacher: see submissions for homework they created
+        elif hasattr(self.request.user, "staff"):
+            return HomeworkSubmission.objects.filter(
+                homework__teacher=self.request.user.staff,
+                homework__school=self.request.user.school,
+                id=id
+            )
+
+        return HomeworkSubmission.objects.none()
+
+    def perform_create(self, serializer):
+        serializer.save(
+            student=self.request.user.student
+        )
     
 class MonthlyProgressReportView(APIView):
     permission_classes = [Isteacher]
@@ -4830,7 +4862,7 @@ def progress_group(school_id, student_id):
 
 
 class DueFeesView(APIView):
-    permission_classes = [IsAuthenticated, Isparent]
+    permission_classes = [IsAuthenticated, Isparent,Isstudent]
 
     def get(self, request):
 
@@ -4867,7 +4899,7 @@ class DueFeesView(APIView):
 
 class PaymentHistoryView(APIView):
 
-    permission_classes = [IsAuthenticated, Isparent]
+    permission_classes = [IsAuthenticated, Isparent,Isstudent]
 
     def get(self, request):
 
@@ -4890,7 +4922,7 @@ class PaymentHistoryView(APIView):
         return Response(serializer.data)
     
 class FeesPaymentView(APIView):
-    permission_classes = [Isparent]
+    permission_classes = [Isparent,Isstudent]
 
     def post(self, request):
 
@@ -4942,7 +4974,7 @@ class FeesPaymentView(APIView):
         })
     
 class VerifypaymentView(APIView):
-    permission_classes = [IsAuthenticated, Isparent]
+    permission_classes = [IsAuthenticated, Isparent,Isstudent]
 
     def post(self, request):
 
@@ -5279,3 +5311,34 @@ class BudgetExpenseViewset(ModelViewSet):
     
     def perform_create(self, serializer):
         serializer.save()
+
+class AnnouncementView(APIView):
+    def post(self,request):
+        school=request.user.school
+        serializer=AnnouncementSerializer(data=request.data)
+        if serializer.is_valid():
+            announcement=serializer.save(school=school)
+            
+            if announcement.is_everyone:
+                group_name = f"school_{school.id}_choice_all"
+            else:
+                group_name = f"school_{school.id}_choice_{announcement.announcement_for}"
+
+
+
+            channel_layer=get_channel_layer()
+            
+            async_to_sync(channel_layer.group_send)(
+                group_name,
+                {
+                    "type":"announcement_send",
+                    "title":announcement.title,
+                    "description":announcement.description
+                    
+                }
+            )
+            return Response(serializer.data,status=200)
+        return Response(serializer.errors,status=400)
+
+        
+

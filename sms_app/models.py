@@ -1996,15 +1996,15 @@ class StudentAttendance(models.Model):
 class Homework(models.Model):
 
     school = models.ForeignKey(
-        "School", on_delete=models.CASCADE, related_name="homeworks"
+        School, on_delete=models.CASCADE, related_name="homeworks"
     )
 
     division = models.ForeignKey(
-        "Division", on_delete=models.CASCADE, related_name="homeworks"
+        Division, on_delete=models.CASCADE, related_name="homeworks"
     )
 
     teacher = models.ForeignKey(
-        "Staff",
+        Staff,
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
@@ -2666,3 +2666,18 @@ class BookIssued(models.Model):
     class Meta:
         db_table = "book_issued"
 
+class Announcement(models.Model):
+    SENT_CHOICES=[
+        ("Teacher","teacher"),
+        ("Clerk","clerk"),
+        ("Fee-manager","fee-manager"),
+        ("Librarian","librarian")
+        ("Student","student"),
+        ("Parent","parent")
+    ]
+    school=models.ForeignKey(School, on_delete=models.CASCADE)
+    title=models.CharField(max_length=50)
+    description=models.CharField(max_length=50)
+    announcement_for=models.CharField(max_length=50,choices=SENT_CHOICES,default="Teacher")
+    is_everyone=models.BooleanField(default=False)
+    created_at=models.DateField(auto_now_add=False)
