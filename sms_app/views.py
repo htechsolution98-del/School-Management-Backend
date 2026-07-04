@@ -2704,16 +2704,25 @@ class GetLocationView(APIView):
 
         return Response(serializer.data, status=status.HTTP_200_OK)
 
-# class DeleteUpdateLocationView(APIView):
-#     permission_classes=[IsAuthenticated,IsCLerk]
 
-#     def delete(self,request,pk):
-#         attendancelocation=get_object_or_404(AttendanceLocation,pk=pk)
-#         attendancelocation.delete()
-#         return Response(
-#             {"message": "Location deleted successfully"},
-#              status=status.HTTP_204_NO_CONTENT
-#         )
+
+class DeleteUpdateLocationView(APIView):
+    permission_classes = [IsAuthenticated, IsCLerk]
+
+    def delete(self, request, pk):
+        attendancelocation = get_object_or_404(AttendanceLocation, pk=pk)
+
+        if attendancelocation.time_rule:
+            attendancelocation.time_rule.delete()
+
+        attendancelocation.delete()
+
+        return Response(
+            {"message": "Location deleted successfully"},
+            status=status.HTTP_204_NO_CONTENT
+        )
+
+
 
 #     def put(self,pk):
 #         attendancelocation=get_object_or_404(AttendanceLocation,pk=pk)
