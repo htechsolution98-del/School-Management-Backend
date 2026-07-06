@@ -2693,12 +2693,12 @@ class BookIssued(models.Model):
 
 class Announcement(models.Model):
     SENT_CHOICES=[
-        ("Teacher","teacher"),
-        ("Clerk","clerk"),
-        ("Fee-manager","fee-manager"),
-        ("Librarian","librarian"),
-        ("Student","student"),
-        ("Parent","parent"),
+        ("TEACHER","Teacher"),
+        ("CLERK","Clerk"),
+        ("FEE-MANAGER","Fee-manager"),
+        ("LIBRARIAN","Librarian"),
+        ("STUDENT","Student"),
+        ("PARENT","Parent"),
     ]
     school=models.ForeignKey(School, on_delete=models.CASCADE)
     title=models.CharField(max_length=50)
