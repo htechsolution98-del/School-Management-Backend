@@ -90,6 +90,10 @@ import os
 
 REDIS_URL = os.getenv("REDIS_URL")
 
+
+if not REDIS_URL:
+    REDIS_URL = "redis://127.0.0.1:6379/1"
+    
 CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
@@ -99,8 +103,6 @@ CHANNEL_LAYERS = {
     },
 }
 
-if not REDIS_URL:
-    REDIS_URL = "redis://127.0.0.1:6379/1"
     
     
 CACHES = {

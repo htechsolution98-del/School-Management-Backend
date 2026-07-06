@@ -2779,51 +2779,51 @@ class GetRemainingLeaveSerializer(serializers.ModelSerializer):
         fields = ["leave_template"]
 
 
-class AnnouncementTargetSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = AnnouncementTarget
-        fields = "__all__"
-        read_only_fields = ["school", "announcement"]
+# class AnnouncementTargetSerializer(serializers.ModelSerializer):
+#     class Meta:
+#         model = AnnouncementTarget
+#         fields = "__all__"
+#         read_only_fields = ["school", "announcement"]
 
 
-class AnnouncementSerializer(serializers.ModelSerializer):
-    targets = AnnouncementTargetSerializer(many=True, required=False)
+# class AnnouncementSerializer(serializers.ModelSerializer):
+#     targets = AnnouncementTargetSerializer(many=True, required=False)
 
-    class Meta:
-        model = Announcement
-        fields = [
-            "id",
-            "title",
-            "description",
-            "publish_at",
-            "expires_at",
-            "targets",
-            "school",
-        ]
-        read_only_fields = ["school"]
+#     class Meta:
+#         model = Announcement
+#         fields = [
+#             "id",
+#             "title",
+#             "description",
+#             "publish_at",
+#             "expires_at",
+#             "targets",
+#             "school",
+#         ]
+#         read_only_fields = ["school"]
 
-    def create(self, validated_data):
-        targets_data = validated_data.pop("targets", [])
-        user = self.context["request"].user
+#     def create(self, validated_data):
+#         targets_data = validated_data.pop("targets", [])
+#         user = self.context["request"].user
 
-        print(targets_data)
+#         print(targets_data)
 
-        announcement = Announcement.objects.create(school=user.school, **validated_data)
+#         announcement = Announcement.objects.create(school=user.school, **validated_data)
 
-        for target_data in targets_data:
-            AnnouncementTarget.objects.create(
-                school=user.school, announcement=announcement, **target_data
-            )
+#         for target_data in targets_data:
+#             AnnouncementTarget.objects.create(
+#                 school=user.school, announcement=announcement, **target_data
+#             )
 
-        return announcement
+#         return announcement
 
 
-class GetAnnouncementSerializer(serializers.ModelSerializer):
-    targets = AnnouncementTargetSerializer(many=True, read_only=True)
+# class GetAnnouncementSerializer(serializers.ModelSerializer):
+#     targets = AnnouncementTargetSerializer(many=True, read_only=True)
 
-    class Meta:
-        model = Announcement
-        fields = ["id", "title", "description", "publish_at", "expires_at", "targets"]
+#     class Meta:
+#         model = Announcement
+#         fields = ["id", "title", "description", "publish_at", "expires_at", "targets"]
 
 
 # =================FEE MANAGEMENT SERIALIZERS====================
@@ -4484,7 +4484,8 @@ class HomeworkSerializer(serializers.ModelSerializer):
 
     def get_submission_count(self, obj):
         """Return count of total submissions for this homework"""
-        return obj.submissions.count()
+        # return obj.submissions.count()
+        return HomeworkSubmission.objects.all().count()
 
     def validate(self, attrs):
         request = self.context.get("request")
@@ -5075,3 +5076,9 @@ class BudgetExpenseSerializer(serializers.ModelSerializer):
     class Meta:
         model=BudgetExpense
         fields=["id","budget","expense_type","amount","description"]
+
+class AnnouncementSerializer(serializers.ModelSerializer):
+    class Meta:
+        model=Announcement
+        fields=["school","title","description","announcement_for","is_everyone","created_at"]
+        read_only_fields=["school","created_at"]

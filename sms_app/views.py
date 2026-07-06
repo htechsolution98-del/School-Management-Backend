@@ -2814,53 +2814,53 @@ class GetRemainingLeavePerStaffView(APIView):
             "reamining_leaves":remaining_leaves_left.data
         })
 
-class AnnouncementView(ModelViewSet):
-    queryset = Announcement.objects.all()
-    serializer_class = AnnouncementSerializer
-    permission_classes = [IsAuthenticated, Isprincipal]
+# class AnnouncementView(ModelViewSet):
+#     queryset = Announcement.objects.all()
+#     serializer_class = AnnouncementSerializer
+#     permission_classes = [IsAuthenticated, Isprincipal]
 
 
-class GetAnnouncementView(ModelViewSet):
-    queryset = Announcement.objects.all()
-    serializer_class = GetAnnouncementSerializer
-    permission_classes = [IsAuthenticated]
+# class GetAnnouncementView(ModelViewSet):
+#     queryset = Announcement.objects.all()
+#     serializer_class = GetAnnouncementSerializer
+#     permission_classes = [IsAuthenticated]
 
-    def get_queryset(self):
-        user = self.request.user
-        now = timezone.now()
+#     def get_queryset(self):
+#         user = self.request.user
+#         now = timezone.now()
 
-        print(user.id)
-        print(type(user.id))
-        # Base filter (active announcements)
-        base_filter = Q(school=user.school, publish_at__lte=now) & (
-            Q(expires_at__gte=now) | Q(expires_at__isnull=True)
-        )
+#         print(user.id)
+#         print(type(user.id))
+#         # Base filter (active announcements)
+#         base_filter = Q(school=user.school, publish_at__lte=now) & (
+#             Q(expires_at__gte=now) | Q(expires_at__isnull=True)
+#         )
 
-        # ALL users
-        # all_filter = Q(targets__target_type='ALL')
+#         # ALL users
+#         # all_filter = Q(targets__target_type='ALL')
 
-        # SPECIFIC user
-        specific_filter = Q(targets__target_type="SPECIFIC", targets__target_id=user.id)
+#         # SPECIFIC user
+#         specific_filter = Q(targets__target_type="SPECIFIC", targets__target_id=user.id)
 
-        # ROLE-based
-        user_groups = user.groups.values_list("id", flat=True)
-        print(user_groups)
-        role_filter = Q(targets__target_type="ROLE", targets__target_id__in=user_groups)
+#         # ROLE-based
+#         user_groups = user.groups.values_list("id", flat=True)
+#         print(user_groups)
+#         role_filter = Q(targets__target_type="ROLE", targets__target_id__in=user_groups)
 
-        # 4️ CLASS-based (only if student)
-        class_filter = Q()
-        if hasattr(user, "student"):
-            class_filter = Q(
-                targets__target_type="CLASS",
-                targets__target_id=user.student.school_class_id,
-            )
+#         # 4️ CLASS-based (only if student)
+#         class_filter = Q()
+#         if hasattr(user, "student"):
+#             class_filter = Q(
+#                 targets__target_type="CLASS",
+#                 targets__target_id=user.student.school_class_id,
+#             )
 
-        # Combine everything
-        queryset = Announcement.objects.filter(specific_filter | base_filter).order_by(
-            "-created_at"
-        )
+#         # Combine everything
+#         queryset = Announcement.objects.filter(specific_filter | base_filter).order_by(
+#             "-created_at"
+#         )
 
-        return queryset
+#         return queryset
 
     # def school_wise_report(request, school_id):
     #     # Example: Get all students in the school
@@ -3949,9 +3949,14 @@ class HomeworkViewSet(ModelViewSet):
     def get_queryset(self):
         """Filter homework by school"""
         school = self.request.user.school
+        
         queryset = Homework.objects.filter(school=school).select_related(
             "division", "teacher", "division__SchoolClass"
         )
+        print("User:", self.request.user)
+        
+        
+
 
         # If user is a student, only show homework for their division
         # if self.is_student():
@@ -3972,6 +3977,8 @@ class HomeworkViewSet(ModelViewSet):
         #         queryset = queryset.none()
                 
         if self.is_student():
+            print("Student class:", student.school_class_id)
+            print("Student division:", student.division_id)
             try:
                 student = self.request.user.student
             except Student.DoesNotExist:
@@ -4728,15 +4735,40 @@ class ExamView(APIView):
             status=status.HTTP_201_CREATED
         )
 
-class HomeworkSubmissionView(APIView):
-    permission_classes=[Isstudent]
-    def post(self,request):
-        serializer=HomeworkSubmissionSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save(student=request.user.student)
-            print("After save")
-            return Response(serializer.data)
-        return Response(serializer.errors,status=404)
+class HomeworkSubmissionViewSet(ModelViewSet):
+    serializer_class = HomeworkSubmissionSerializer
+    queryset = HomeworkSubmission.objects.all()
+    permission_classes = []
+
+
+
+    def get_permissions(self):
+        if self.action == "list":
+            return [Isteacher() | Isstudent()]
+        return [Isstudent()]
+
+    def get_queryset(self):
+        id = self.kwargs.get("pk") 
+        # Student: only see their own submissions
+        if hasattr(self.request.user, "student"):
+            return HomeworkSubmission.objects.filter(
+                student=self.request.user.student
+            )
+
+        # Teacher: see submissions for homework they created
+        elif hasattr(self.request.user, "staff"):
+            return HomeworkSubmission.objects.filter(
+                homework__teacher=self.request.user.staff,
+                homework__school=self.request.user.school,
+                id=id
+            )
+
+        return HomeworkSubmission.objects.none()
+
+    def perform_create(self, serializer):
+        serializer.save(
+            student=self.request.user.student
+        )
     
 class MonthlyProgressReportView(APIView):
     permission_classes = [Isteacher]
@@ -4847,7 +4879,7 @@ def progress_group(school_id, student_id):
 
 
 class DueFeesView(APIView):
-    permission_classes = [IsAuthenticated, Isparent]
+    permission_classes = [IsAuthenticated, Isparent,Isstudent]
 
     def get(self, request):
 
@@ -4884,7 +4916,7 @@ class DueFeesView(APIView):
 
 class PaymentHistoryView(APIView):
 
-    permission_classes = [IsAuthenticated, Isparent]
+    permission_classes = [IsAuthenticated, Isparent,Isstudent]
 
     def get(self, request):
 
@@ -4907,7 +4939,7 @@ class PaymentHistoryView(APIView):
         return Response(serializer.data)
     
 class FeesPaymentView(APIView):
-    permission_classes = [Isparent]
+    permission_classes = [Isparent,Isstudent]
 
     def post(self, request):
 
@@ -4959,7 +4991,7 @@ class FeesPaymentView(APIView):
         })
     
 class VerifypaymentView(APIView):
-    permission_classes = [IsAuthenticated, Isparent]
+    permission_classes = [IsAuthenticated, Isparent,Isstudent]
 
     def post(self, request):
 
@@ -5296,3 +5328,34 @@ class BudgetExpenseViewset(ModelViewSet):
     
     def perform_create(self, serializer):
         serializer.save()
+
+class AnnouncementView(APIView):
+    def post(self,request):
+        school=request.user.school
+        serializer=AnnouncementSerializer(data=request.data)
+        if serializer.is_valid():
+            announcement=serializer.save(school=school)
+            
+            if announcement.is_everyone:
+                group_name = f"school_{school.id}_choice_all"
+            else:
+                group_name = f"school_{school.id}_choice_{announcement.announcement_for}"
+
+
+
+            channel_layer=get_channel_layer()
+            
+            async_to_sync(channel_layer.group_send)(
+                group_name,
+                {
+                    "type":"announcement_send",
+                    "title":announcement.title,
+                    "description":announcement.description
+                    
+                }
+            )
+            return Response(serializer.data,status=200)
+        return Response(serializer.errors,status=400)
+
+        
+

@@ -139,8 +139,8 @@ router.register(r'get-student',GetStudentView,basename='get-student')
 # FOR ATTENDANCE TRACKING METHOD [GET,POST,PUT,DELETE]
 router.register(r'attendance', AttendanceView, basename='attendance') 
 
-router.register(r'announcements', AnnouncementView, basename='announcements')# For managing announcements
-router.register(r'get-announcements', GetAnnouncementView, basename='get-announcements')# For get announcement for student,staff with filter [school filter add remainig]   
+# router.register(r'announcements', AnnouncementView, basename='announcements')# For managing announcements
+# router.register(r'get-announcements', GetAnnouncementView, basename='get-announcements')# For get announcement for student,staff with filter [school filter add remainig]   
 router.register(r'razardata', RazarDataView, basename='razardata')# For get announcement for student,staff with filter [school filter add remainig]   
 
 router.register(r'academic-year', AcademicYearViewSet, basename='academic-year') # For Only get
@@ -166,6 +166,7 @@ router.register(r'loss-prevention',LossPreventionViewset,basename='loss-preventi
 router.register(r'budget',BudgetViewset,basename='budget')
 router.register(r'budget-expense',BudgetExpenseViewset,basename='budget-expense')
 router.register(r'homework', HomeworkViewSet, basename='homework')
+router.register(r'homework-submission', HomeworkSubmissionViewSet, basename='homework-submission')
 router.register(r'studentget', StudentGetView, basename='studentget')
 
 
@@ -176,13 +177,19 @@ router.register(r"attendance-location", AttendanceLocationViewSet, basename="att
 
 
 # for cerificate type to set
-router.register(r"certificate-type", CertificateTypeSerializer, basename="certificate-type")
+# router.register(r"certificate-type", CertificateTypeViewSet, basename="certificate-type")
 
-#student ask for certificate
-router.register(r"certificate-request", CertificateRequestViewSet, basename="certificate-request")
+# #student ask for certificate
+# router.register(r"certificate-request", CertificateRequestViewSet, basename="certificate-request")
 
 
-router.register(r"clerk-certificate-request", ClerkCertificateRequestViewSet, basename="clerk-certificate-request")
+# router.register(r"clerk-certificate-request", ClerkCertificateRequestViewSet, basename="clerk-certificate-request")
+
+
+
+router.register(r"certificate-types", CertificateTypeViewSet, basename="certificate-type")
+router.register(r"certificate-requests", CertificateRequestViewSet, basename="certificate-request")       # student
+router.register(r"clerk-requests", ClerkCertificateRequestViewSet, basename="clerk-request")
 
 
 
@@ -273,7 +280,8 @@ urlpatterns = [
      path('api/get-leave-requests-staff/',GetStaffLeaveRequest.as_view()),
      
      
-     path('api/approve-all-leave/<int:pk>/',ChangeAllLeaveView.as_view()), # clerk approve all day at once
+     path("api/approve-all-leave/<int:pk>/",ChangeAllLeaveView.as_view()),
+     path("api/announcement/",AnnouncementView.as_view()),
      
 
 
@@ -297,7 +305,7 @@ urlpatterns = [
     path('face-enroll/',StaffFaceEnrollView.as_view()),
     path('face-verify/',StaffFaceVerifyView.as_view()),
     path('perstaff-leave/',GetRemainingLeavePerStaffView.as_view()),
-    path('homework-submission/',HomeworkSubmissionView.as_view()),
+    # path('homework-submission/',HomeworkSubmissionView.as_view()),
     path('api/student-documents/',StudentDocumentView.as_view()),
     path('api/exam-notification/',ExamView.as_view()),
     path('api/attendance-notification/',StudentNotificationView.as_view()),
