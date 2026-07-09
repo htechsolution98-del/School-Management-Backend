@@ -4957,7 +4957,7 @@ class ExamNotificationSerializer(serializers.ModelSerializer):
 class HomeworkSubmissionSerializer(serializers.ModelSerializer):
     class Meta():
         model=HomeworkSubmission
-        fields=["homework","file","submitted_at"]
+        fields=["id","homework","file","submitted_at"]
         read_only_fields=["student","submitted_at"]
 
     def validate(self, attrs):

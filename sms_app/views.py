@@ -416,6 +416,7 @@ class LoginView(APIView):
                 "school_slug": response_data["school_slug"],
                 "roles": response_data["roles"],
                 "modules": response_data["modules"],
+                "access_token":access_token,
                
             },
             status=status.HTTP_200_OK,
@@ -5331,6 +5332,8 @@ class BudgetExpenseViewset(ModelViewSet):
 
 class AnnouncementView(APIView):
     def get(self, request, id=None):
+        print("Current:", timezone.now())
+        print("Expires:", Announcement.objects.get(id=37).expires_at)
         Announcement.objects.filter(
         expires_at__lte=timezone.now()
             ).delete()
@@ -5398,7 +5401,7 @@ class AnnouncementView(APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
 
-        serializer = AnnouncementSerializer(
+        serializer =AnnouncementSerializer(
             announcement,
             data=request.data,
             partial=False
