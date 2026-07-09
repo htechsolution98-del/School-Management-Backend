@@ -416,7 +416,7 @@ class LoginView(APIView):
                 "school_slug": response_data["school_slug"],
                 "roles": response_data["roles"],
                 "modules": response_data["modules"],
-                "access_token":access_token,
+               
                
             },
             status=status.HTTP_200_OK,
@@ -4694,29 +4694,34 @@ class ExamView(APIView):
 
     def get_permissions(self):
         if self.request.method == "GET":
-            return [IsAuthenticated(), Isparent()]
+            if self.request.user.groups.filter(name="PARENT").exists():
+                return [IsAuthenticated(), Isparent()]
+            elif self.request.user.groups.filter(name="TEACHER").exists():
+                return [IsAuthenticated(), Isteacher()]
+            return [IsAuthenticated()]
+
         return [IsAuthenticated(), Isteacher()]
 
-    def get(self, request):
 
+    def get(self, request):
+        if hasattr(request.user, "staff"):
+            # Teacher: show exams created by this teacher
+            exams = Exam.objects.filter(
+                created_by=request.user.staff
+            ).order_by("-created_at")
+
+            serializer = ExamSerializer(exams, many=True)
+            return Response(serializer.data)
+
+        # Parent
         student_ids = (
-            Perents.objects.filter(
-                user=request.user
-            )
-            .values_list(
-                "perents_of_id",
-                flat=True
-            )
+            Perents.objects.filter(user=request.user)
+            .values_list("perents_of_id", flat=True)
         )
 
         class_ids = (
-            Student.objects.filter(
-                id__in=student_ids
-            )
-            .values_list(
-                "school_class_id",
-                flat=True
-            )
+            Student.objects.filter(id__in=student_ids)
+            .values_list("school_class_id", flat=True)
         )
 
         notifications = (
@@ -4778,6 +4783,66 @@ class ExamView(APIView):
             ExamSerializer(exam).data,
             status=status.HTTP_201_CREATED
         )
+    
+    def put(self, request, id):
+        try:
+            exam = Exam.objects.get(
+                id=id,
+                school=request.user.school
+            )
+        except Exam.DoesNotExist:
+            return Response(
+                {"error": "Exam not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        serializer = ExamSerializer(
+            exam,
+            data=request.data
+        )
+
+        if serializer.is_valid():
+            serializer.save()
+
+            # Update notification if it exists
+            notification = ExamNotification.objects.filter(
+                exam=exam
+            ).first()
+
+            if notification:
+                notification.title = f"Updated Exam: {exam.title}"
+                notification.message = (
+                    f"Exam scheduled on {exam.exam_date} "
+                    f"from {exam.start_time} to {exam.end_time}"
+                )
+                notification.save()
+
+            return Response(serializer.data)
+
+        return Response(
+            serializer.errors,
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+
+    def delete(self, request, id):
+        try:
+            exam = Exam.objects.get(
+                id=id,
+                school=request.user.school
+            )
+        except Exam.DoesNotExist:
+            return Response(
+                {"error": "Exam not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        exam.delete()
+
+        return Response(
+            {"message": "Exam deleted successfully"},
+            status=status.HTTP_204_NO_CONTENT
+        )
 
 class HomeworkSubmissionViewSet(ModelViewSet):
     serializer_class = HomeworkSubmissionSerializer
@@ -4817,28 +4882,30 @@ class MonthlyProgressReportView(APIView):
     permission_classes = [Isteacher]
 
 
-    def get(self, request):
-        # Get divisions where the logged-in teacher is the class teacher
-        division_ids = AssignClass.objects.filter(
+    def get(self, request, id=None):
+
+        if id:
+            report = get_object_or_404(
+                MonthlyProgressReport,
+                id=id,
+                school=request.user.school,
+                created_by=request.user.staff
+            )
+
+            serializer = MonthlyProgressReportSerializer(report)
+            return Response(serializer.data)
+
+        reports = MonthlyProgressReport.objects.filter(
             school=request.user.school,
-            teacher=request.user.staff,
-            is_class_teacher=True
-        ).values_list("division_id", flat=True)
+            created_by=request.user.staff
+        ).order_by("-created_at")
 
-        students = Student.objects.filter(
-            school=request.user.school,
-            division_id__in=division_ids
-)
+        serializer = MonthlyProgressReportSerializer(
+            reports,
+            many=True
+        )
 
-        data = [
-            {
-                "id": student.id,
-                "name": f"{student.name} {student.surname}".strip()
-            }
-            for student in students
-        ]
-
-        return Response(data, status=status.HTTP_200_OK)
+        return Response(serializer.data)
 
     def post(self, request):
         
@@ -4914,10 +4981,80 @@ class MonthlyProgressReportView(APIView):
             status=status.HTTP_400_BAD_REQUEST
         )
     
+    def put(self, request, id):
+        report = get_object_or_404(
+            MonthlyProgressReport,
+            id=id,
+            school=request.user.school,
+            created_by=request.user.staff
+        )
+
+        serializer = MonthlyProgressReportSerializer(
+            report,
+            data=request.data
+        )
+
+        if serializer.is_valid():
+            report = serializer.save()
+
+            data = MonthlyProgressReportSerializer(report).data
+
+            channel_layer = get_channel_layer()
+
+            async_to_sync(channel_layer.group_send)(
+                progress_group(
+                    report.school.id,
+                    report.student.id
+                ),
+                {
+                    "type": "progressreport_message",
+                    "student": report.student.id,
+                    "month": report.month,
+                    "year": report.year,
+                    "attendance_percentage": round(
+                        float(report.attendance_percentage), 2
+                    ),
+                    "overall_score": round(
+                        float(report.overall_score), 2
+                    ),
+                    "grade": data["grade"],
+                    "discipline": report.discipline,
+                    "communication_skills": report.communication_skills,
+                    "emotional_development": report.emotional_development,
+                    "social_development": report.social_development,
+                    "freindly_with_others": report.freindly_with_others,
+                    "remark": report.remark,
+                }
+            )
+
+            return Response(
+                serializer.data,
+                status=status.HTTP_200_OK
+            )
+
+        return Response(
+            serializer.errors,
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    def delete(self, request, id):
+        report = get_object_or_404(
+            MonthlyProgressReport,
+            id=id,
+            school=request.user.school,
+            created_by=request.user.staff
+        )
+
+        report.delete()
+
+        return Response(
+            {"message": "Progress report deleted successfully."},
+            status=status.HTTP_204_NO_CONTENT
+        )
 
 
 def progress_group(school_id, student_id):
     return f"school_{school_id}_student_{student_id}_progress-report"
+
 
 
 
