@@ -5080,5 +5080,12 @@ class BudgetExpenseSerializer(serializers.ModelSerializer):
 class AnnouncementSerializer(serializers.ModelSerializer):
     class Meta:
         model=Announcement
-        fields=["school","title","description","announcement_for","is_everyone","created_at"]
+        fields=["id","school","title","description","announcement_for","is_everyone","created_at","expires_at"]
         read_only_fields=["school","created_at"]
+    
+    def validate_expires_at(self, value):
+        if value <= timezone.now():
+            raise serializers.ValidationError(
+                "Expiry date and time must be in the future."
+            )
+        return value

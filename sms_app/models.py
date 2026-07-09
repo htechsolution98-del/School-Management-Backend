@@ -2746,8 +2746,7 @@ class BookIssued(models.Model):
     class Meta:
         db_table = "book_issued"
 
-def get_expiry():
-        return timezone.now() + timedelta(days=1)
+
 
 class Announcement(models.Model):
     
@@ -2767,7 +2766,7 @@ class Announcement(models.Model):
     default=None)
     is_everyone=models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
-    expires_at = models.DateTimeField(default=get_expiry)
+    expires_at = models.DateTimeField()
 
     
     class Meta:

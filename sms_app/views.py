@@ -415,7 +415,8 @@ class LoginView(APIView):
                 "school_id": response_data["school_id"],
                 "school_slug": response_data["school_slug"],
                 "roles": response_data["roles"],
-                "modules": response_data["modules"]
+                "modules": response_data["modules"],
+                "access_token":access_token
             },
             status=status.HTTP_200_OK,
         )
@@ -4564,7 +4565,7 @@ class StaffFaceVerifyView(APIView):
 class StudentDocumentView(APIView):
     def get_permissions(self):
         if self.request.method == "GET":
-            return [IsAuthenticated(), Isparent(),Isstudent()]
+            return [IsAuthenticated(), Isparent(),Isstudent(),Isteacher()]
         return [IsAuthenticated(), Isteacher()]
 
     def get(self,request):
@@ -5331,7 +5332,7 @@ class BudgetExpenseViewset(ModelViewSet):
 class AnnouncementView(APIView):
     def get(self, request, id=None):
         Announcement.objects.filter(
-                expires_at__lte=timezone.now()
+        expires_at__lte=timezone.now()
             ).delete()
         if id:
             try:
@@ -5357,12 +5358,14 @@ class AnnouncementView(APIView):
     def post(self,request):
         school=request.user.school
         serializer=AnnouncementSerializer(data=request.data)
+        print("Before valid")
         if serializer.is_valid():
+            print("yes valid")
             announcement=serializer.save(
-                school=school,
-                expires_at=timezone.now() + timedelta(days=1)
+                school=school
+                
                  )
-           
+            print(AnnouncementSerializer().fields.keys())
             if announcement.is_everyone:
                 group_name = f"school_{school.id}_choice_all"
             else:
@@ -5402,7 +5405,7 @@ class AnnouncementView(APIView):
         )
 
         if serializer.is_valid():
-            serializer.save(expires_at=timezone.now() + timedelta(days=1))
+            serializer.save()
             return Response(serializer.data)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
