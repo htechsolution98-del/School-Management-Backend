@@ -177,13 +177,19 @@ router.register(r"attendance-location", AttendanceLocationViewSet, basename="att
 
 
 # for cerificate type to set
-router.register(r"certificate-type", CertificateTypeSerializer, basename="certificate-type")
+# router.register(r"certificate-type", CertificateTypeViewSet, basename="certificate-type")
 
-#student ask for certificate
-router.register(r"certificate-request", CertificateRequestViewSet, basename="certificate-request")
+# #student ask for certificate
+# router.register(r"certificate-request", CertificateRequestViewSet, basename="certificate-request")
 
 
-router.register(r"clerk-certificate-request", ClerkCertificateRequestViewSet, basename="clerk-certificate-request")
+# router.register(r"clerk-certificate-request", ClerkCertificateRequestViewSet, basename="clerk-certificate-request")
+
+
+
+router.register(r"certificate-types", CertificateTypeViewSet, basename="certificate-type")
+router.register(r"certificate-requests", CertificateRequestViewSet, basename="certificate-request")       # student
+router.register(r"clerk-requests", ClerkCertificateRequestViewSet, basename="clerk-request")
 
 
 
