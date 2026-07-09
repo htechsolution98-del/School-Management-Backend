@@ -4743,24 +4743,23 @@ class HomeworkSubmissionViewSet(ModelViewSet):
 
 
     def get_permissions(self):
-        if self.action == "list":
+        if self.action in ["list", "retrieve"]:
             return [Isteacher() | Isstudent()]
+
         return [Isstudent()]
 
     def get_queryset(self):
-        id = self.kwargs.get("pk") 
-        # Student: only see their own submissions
+    # Student: only their own submissions
         if hasattr(self.request.user, "student"):
             return HomeworkSubmission.objects.filter(
                 student=self.request.user.student
             )
 
-        # Teacher: see submissions for homework they created
+        # Teacher: all submissions for homework created by them
         elif hasattr(self.request.user, "staff"):
             return HomeworkSubmission.objects.filter(
                 homework__teacher=self.request.user.staff,
-                homework__school=self.request.user.school,
-                id=id
+                homework__school=self.request.user.school
             )
 
         return HomeworkSubmission.objects.none()
