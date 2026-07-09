@@ -4947,12 +4947,12 @@ class StudentNotificationSerializer(serializers.ModelSerializer):
 class ExamSerializer(serializers.ModelSerializer):
     class Meta:
         model=Exam
-        fields=["title","description","exam_date","start_time","end_time","class_group"]
+        fields=["id","title","description","exam_date","start_time","end_time","class_group"]
 
 class ExamNotificationSerializer(serializers.ModelSerializer):
     class Meta:
         model=ExamNotification
-        fields=["exam","title","message"]
+        fields=["id","exam","title","message"]
 
 class HomeworkSubmissionSerializer(serializers.ModelSerializer):
     class Meta():
