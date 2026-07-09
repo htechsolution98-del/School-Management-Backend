@@ -4582,6 +4582,48 @@ class StudentDocumentView(APIView):
             serializer.save(school=request.user.school,uploaded_by=request.user.staff)
             return Response(serializer.data)
         return Response(serializer.errors,status=404)
+    
+    def put(self, request, id):
+        student_document = get_object_or_404(
+            StudentDocument,
+            id=id,
+            school=request.user.school
+        )
+
+        serializer = StudentDocumentSerializer(
+            student_document,
+            data=request.data
+        )
+
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def delete(self, request, id):
+        student_document = get_object_or_404(
+            StudentDocument,
+            id=id,
+            school=request.user.school
+        )
+
+        student_document.delete()
+
+        return Response(
+            {"message": "Student document deleted successfully."},
+            status=status.HTTP_204_NO_CONTENT
+        )
+    
+class StudentListView(APIView):
+    permission_classes = [IsAuthenticated, Isteacher]
+
+    def get(self, request):
+        students = Student.objects.filter(
+            school=request.user.school
+        ).values("id", "name")
+
+        return Response(students)
 
 
 
