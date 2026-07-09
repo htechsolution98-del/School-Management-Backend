@@ -2760,7 +2760,7 @@ class Announcement(models.Model):
     ]
     school=models.ForeignKey(School, on_delete=models.CASCADE)
     title=models.CharField(max_length=50)
-    description=models.CharField(max_length=50)
+    description=models.CharField(max_length=200)
     announcement_for=models.CharField(max_length=50,choices=SENT_CHOICES, null=True,
     blank=True,
     default=None)
