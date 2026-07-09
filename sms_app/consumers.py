@@ -274,20 +274,20 @@ class AnnouncementConsumer(AsyncWebsocketConsumer):
             return
         school=await self.get_school(user)
         print(school)
-        role=user.role.lower()
+        role=user.role.upper()
         print("Role",role)
         self.role_group=f"school_{school.id}_choice_{role}"
-        await self.group_layer.group_add(
+        await self.channel_layer.group_add(
             self.role_group,
-            self.channel_layer
+            self.channel_name
         )
 
         self.all_group=f"school_{school.id}_choice_all"
         await self.channel_layer.group_add(
             self.all_group,
-            self.channel_layer
+            self.channel_name
         )
-        self.accept()
+        await self.accept()
 
     async def disconnect(self,close_code):
         if hasattr(self, "role_group"):

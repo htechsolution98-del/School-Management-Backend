@@ -8,7 +8,8 @@ from django.utils.text import slugify
 from django.core.validators import MinValueValidator
 from django.conf import settings
 from django.db.models import Sum
-
+from django.utils import timezone
+from datetime import timedelta
 
 class OTP(models.Model):
     email = models.EmailField(null=True, blank=True)
@@ -2745,21 +2746,29 @@ class BookIssued(models.Model):
     class Meta:
         db_table = "book_issued"
 
+def get_expiry():
+        return timezone.now() + timedelta(days=1)
+
 class Announcement(models.Model):
+    
     SENT_CHOICES=[
-        ("Teacher","teacher"),
-        ("Clerk","clerk"),
-        ("Fee-manager","fee-manager"),
-        ("Librarian","librarian"),
-        ("Student","student"),
-        ("Parent","parent"),
+        ("TEACHER","Teacher"),
+        ("CLERK","Clerk"),
+        ("FEE-MANAGER","Fee-manager"),
+        ("LIBRARIAN","Librarian"),
+        ("STUDENT","Student"),
+        ("PARENT","Parent"),
     ]
     school=models.ForeignKey(School, on_delete=models.CASCADE)
     title=models.CharField(max_length=50)
     description=models.CharField(max_length=50)
-    announcement_for=models.CharField(max_length=50,choices=SENT_CHOICES,default="Teacher")
+    announcement_for=models.CharField(max_length=50,choices=SENT_CHOICES, null=True,
+    blank=True,
+    default=None)
     is_everyone=models.BooleanField(default=False)
-    created_at=models.DateField(auto_now_add=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField(default=get_expiry)
+
     
     class Meta:
          db_table = "announcement"

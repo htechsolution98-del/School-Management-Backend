@@ -282,6 +282,7 @@ urlpatterns = [
      
      path("api/approve-all-leave/<int:pk>/",ChangeAllLeaveView.as_view()),
      path("api/announcement/",AnnouncementView.as_view()),
+      path("api/announcement/<int:id>/", AnnouncementView.as_view()), 
      
 
 

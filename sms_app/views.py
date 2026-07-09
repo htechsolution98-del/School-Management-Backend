@@ -5330,12 +5330,40 @@ class BudgetExpenseViewset(ModelViewSet):
         serializer.save()
 
 class AnnouncementView(APIView):
+    def get(self, request, id=None):
+        Announcement.objects.filter(
+                expires_at__lte=timezone.now()
+            ).delete()
+        if id:
+            try:
+                announcement = Announcement.objects.get(
+                    id=id,
+                    school=request.user.school
+                )
+            except Announcement.DoesNotExist:
+                return Response(
+                    {"error": "Announcement not found"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
+            serializer = AnnouncementSerializer(announcement)
+            return Response(serializer.data)
+       
+        announcements = Announcement.objects.filter(
+            school=request.user.school
+        ).order_by("-created_at")
+
+        serializer = AnnouncementSerializer(announcements, many=True)
+        return Response(serializer.data)
     def post(self,request):
         school=request.user.school
         serializer=AnnouncementSerializer(data=request.data)
         if serializer.is_valid():
-            announcement=serializer.save(school=school)
-            
+            announcement=serializer.save(
+                school=school,
+                expires_at=timezone.now() + timedelta(days=1)
+                 )
+           
             if announcement.is_everyone:
                 group_name = f"school_{school.id}_choice_all"
             else:
@@ -5356,6 +5384,48 @@ class AnnouncementView(APIView):
             )
             return Response(serializer.data,status=200)
         return Response(serializer.errors,status=400)
+    def put(self, request, id):
+        try:
+            announcement = Announcement.objects.get(
+                id=id,
+                school=request.user.school
+            )
+        except Announcement.DoesNotExist:
+            return Response(
+                {"error": "Announcement not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        serializer = AnnouncementSerializer(
+            announcement,
+            data=request.data,
+            partial=False
+        )
+
+        if serializer.is_valid():
+            serializer.save(expires_at=timezone.now() + timedelta(days=1))
+            return Response(serializer.data)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def delete(self, request, id):
+        try:
+            announcement = Announcement.objects.get(
+                id=id,
+                school=request.user.school
+            )
+        except Announcement.DoesNotExist:
+            return Response(
+                {"error": "Announcement not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        announcement.delete()
+
+        return Response(
+            {"message": "Announcement deleted successfully"},
+            status=status.HTTP_204_NO_CONTENT
+        )
 
         
 
