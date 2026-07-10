@@ -281,6 +281,7 @@ urlpatterns = [
      
      path("api/approve-all-leave/<int:pk>/",ChangeAllLeaveView.as_view()),
      path("api/announcement/",AnnouncementView.as_view()),
+      path("api/announcement/<int:id>/", AnnouncementView.as_view()), 
      
 
 
@@ -301,14 +302,18 @@ urlpatterns = [
     path('api/offline/payment/',OffilinePaymentView.as_view()),
     path('api/get_receipt/<int:student_id>/<int:form_id>/',get_receipt),
     path('api/schoollist/',SchoolListView.as_view()),
-    path('face-enroll/',StaffFaceEnrollView.as_view()),
-    path('face-verify/',StaffFaceVerifyView.as_view()),
+    path('api/face-enroll/',StaffFaceEnrollView.as_view()),
+    path('api/face-verify/',StaffFaceVerifyView.as_view()),
     path('perstaff-leave/',GetRemainingLeavePerStaffView.as_view()),
     # path('homework-submission/',HomeworkSubmissionView.as_view()),
     path('api/student-documents/',StudentDocumentView.as_view()),
+    path("api/student-document/<int:id>/", StudentDocumentView.as_view()),
+    path("api/students/", StudentListView.as_view()),
     path('api/exam-notification/',ExamView.as_view()),
+    path('api/exam-notification/<int:id>/',ExamView.as_view()),
     path('api/attendance-notification/',StudentNotificationView.as_view()),
     path('api/monthly-report/',MonthlyProgressReportView.as_view()),
+    path("api/monthly-report/<int:id>/",MonthlyProgressReportView.as_view()),
     path('api/duefeesview/',DueFeesView.as_view()),
     path('api/payment-history/',PaymentHistoryView.as_view()),
     path('api/fee-payment/',FeesPaymentView.as_view()),
