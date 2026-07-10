@@ -2570,7 +2570,7 @@ class ProcurementItem(models.Model):
 class LossPrevention(models.Model):
     school=models.ForeignKey(School,on_delete=models.CASCADE)
     maintenance=models.ForeignKey(AssetMaintenance, on_delete=models.CASCADE)
-    remark=models.TextField(max_length=50)
+    remark=models.TextField(max_length=250)
     created_at=models.DateField(auto_now_add=True)
 
     @property
@@ -2618,7 +2618,7 @@ class BudgetExpense(models.Model):
     budget=models.ForeignKey(Budget,related_name="expenses", on_delete=models.CASCADE)
     expense_type=models.CharField(max_length=50,choices=EXPENSE_TYPE)
     amount=models.IntegerField()
-    description=models.TextField(max_length=50)
+    description=models.TextField(max_length=250)
     created_at=models.DateTimeField(auto_now_add=True)
 
     
