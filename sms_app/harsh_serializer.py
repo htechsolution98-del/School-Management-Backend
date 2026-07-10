@@ -436,81 +436,43 @@ class AttendanceLocationViewSerializer(serializers.ModelSerializer):
     
 
 
-# --- NEW: field definition serializer, nested inside CerificateTypeSerializer ---
-
-class CertificateFieldDefinitionSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = CertificateFieldDefinition
-        fields = ["id", "field_name", "label", "field_type", "required", "order"]
-        read_only_fields = ["field_name"]
- 
- 
 class CerificateTypeSerializer(serializers.ModelSerializer):
-    fields = CertificateFieldDefinitionSerializer(many=True, required=False)
- 
     class Meta:
         model = CertificateType
-        fields = "__all__"
-        # template_file is set by a developer directly (Django admin, fixture,
-        # or migration) when they add the static HTML design for this type —
-        # it is never sent by the clerk through this API.
-        read_only_fields = ["school", "template_file"]
- 
-    def create(self, validated_data):
-        fields_data = validated_data.pop("fields", [])
-        certificate_type = CertificateType.objects.create(**validated_data)
-        for index, field_data in enumerate(fields_data):
-            field_data.setdefault("order", index)  # use sent order if present, else array position
-            CertificateFieldDefinition.objects.create(
-                certificate_type=certificate_type, **field_data
-            )
-        return certificate_type
- 
-    def update(self, instance, validated_data):
-        fields_data = validated_data.pop("fields", None)
-        instance = super().update(instance, validated_data)
- 
-        if fields_data is not None:
-            # Replace all fields with the new set (simple approach for setup screen)
-            instance.fields.all().delete()
-            for index, field_data in enumerate(fields_data):
-                field_data.setdefault("order", index)  # use sent order if present, else array position
-                CertificateFieldDefinition.objects.create(
-                    certificate_type=instance, **field_data
-                )
-        return instance
- 
- 
+        fields = '__all__'
+        read_only_fields = ['school']    
+        
+        
+
 class CertificateRequestSerializer(serializers.ModelSerializer):
-    certificate_type_name = serializers.CharField(source="certificate_type.name", read_only=True)
+    certificate_type_name = serializers.CharField(source="certificate_type.name",read_only=True)
     certificate_file = serializers.SerializerMethodField()
- 
+
     class Meta:
         model = CertificateRequest
         fields = [
             "id",
-            "certificate_type",
-            "certificate_type_name",
-            "status",
-            "certificate_file",
+            "certificate_type",       # write (on create)
+            "certificate_type_name",  # read
+            "status",                 # read-only for student
+            "certificate_file",       # read-only, shows URL when approved
             "created_at",
         ]
         read_only_fields = ["student", "status", "created_at"]
- 
+
     def get_certificate_file(self, obj):
         try:
             return obj.certificate.file.url
         except Certificate.DoesNotExist:
             return None
- 
- 
+    
+    
+    
 class ClerkCertificateRequestSerializer(serializers.ModelSerializer):
-    student_name = serializers.CharField(source="student.user.username", read_only=True)
-    certificate_type_name = serializers.CharField(source="certificate_type.name", read_only=True)
+    student_name = serializers.CharField(source="student.user.username",read_only=True)
+    certificate_type_name = serializers.CharField(source="certificate_type.name",read_only=True)
     certificate_file = serializers.SerializerMethodField()
-    has_template = serializers.SerializerMethodField()
-    is_auto_generated = serializers.SerializerMethodField()
- 
+
     class Meta:
         model = CertificateRequest
         fields = [
@@ -520,9 +482,7 @@ class ClerkCertificateRequestSerializer(serializers.ModelSerializer):
             "certificate_type",
             "certificate_type_name",
             "status",
-            "certificate_file",
-            "has_template",
-            "is_auto_generated",
+            "certificate_file",   # clerk can see the uploaded file too
             "created_at",
         ]
         read_only_fields = [
@@ -530,31 +490,12 @@ class ClerkCertificateRequestSerializer(serializers.ModelSerializer):
             "certificate_type",
             "created_at",
         ]
- 
+
     def get_certificate_file(self, obj):
         try:
             return obj.certificate.file.url
         except Certificate.DoesNotExist:
             return None
- 
-    def get_has_template(self, obj):
-        return bool(obj.certificate_type.template_file)
- 
-    def get_is_auto_generated(self, obj):
-        try:
-            return obj.certificate.is_auto_generated
-        except Certificate.DoesNotExist:
-            return None
- 
- 
-class CertificateGenerateSerializer(serializers.Serializer):
-    certificate_number = serializers.CharField(max_length=50)
-    issue_date = serializers.DateField()
- 
-    def validate_certificate_number(self, value):
-        if Certificate.objects.filter(certificate_number=value).exists():
-            raise serializers.ValidationError("This certificate number is already used.")
-        return value
         
         
         

@@ -195,49 +195,37 @@ from datetime import datetime
 
 
 
-def render_pdf(html_string: str) -> bytes:
-    result = BytesIO()
-    pisa.CreatePDF(html_string, dest=result)
-    return result.getvalue()
- 
- 
-class CertificateTypeViewSet(ModelViewSet):  # for create, read, update, delete certificate type - Bonafide
+class CertificateTypeViewSet(ModelViewSet): #for create, read, update, delete  certificate type - Bonafide
     serializer_class = CerificateTypeSerializer
- 
-    def get_permissions(self):
-        # FIX: list/retrieve must allow students too — get_queryset() below
-        # already scopes it correctly, but IsCLerk on all actions was
-        # blocking students before get_queryset ever ran.
-        if self.action in ["list", "retrieve"]:
-            return [IsAuthenticated()]
-        return [IsAuthenticated(), IsCLerk()]
- 
+    permission_classes = [IsAuthenticated, IsCLerk]
+
     def get_queryset(self):
         user = self.request.user
- 
-        # Clerk access
+
+        # Clerk access (same as before)
         staff = Staff.objects.filter(user=user, category="CLERK").first()
         if staff:
-            return CertificateType.objects.filter(school=staff.school).prefetch_related("fields")
- 
+            return CertificateType.objects.filter(school=staff.school)
+
         # Student access
         student = Student.objects.filter(user=user).first()
         if student:
-            return CertificateType.objects.filter(school=student.school).prefetch_related("fields")
- 
+            return CertificateType.objects.filter(school=student.school)
+
         return CertificateType.objects.none()
- 
+
+
     def perform_create(self, serializer):
         staff = Staff.objects.filter(
             user=self.request.user,
             category="CLERK"
         ).first()
- 
+
         if not staff:
             raise ValidationError("Clerk profile not found.")
- 
+
         name = serializer.validated_data.get("name")
- 
+
         if CertificateType.objects.filter(
             school=staff.school,
             name__iexact=name
@@ -245,84 +233,37 @@ class CertificateTypeViewSet(ModelViewSet):  # for create, read, update, delete 
             raise ValidationError(
                 {"name": "This Certificate already exists."}
             )
- 
+
         serializer.save(school=staff.school)
- 
-    def perform_update(self, serializer):
-        staff = Staff.objects.filter(
-            user=self.request.user,
-            category="CLERK"
-        ).first()
- 
-        if not staff:
-            raise ValidationError("Clerk profile not found.")
- 
-        instance = self.get_object()
-        if instance.school_id != staff.school_id:
-            raise ValidationError("You cannot edit another school's certificate type.")
- 
-        # FIX: duplicate-name check was only enforced on create, not update —
-        # a clerk could rename a type to collide with an existing one.
-        name = serializer.validated_data.get("name")
-        if name and CertificateType.objects.filter(
-            school=staff.school,
-            name__iexact=name
-        ).exclude(pk=instance.pk).exists():
-            raise ValidationError(
-                {"name": "This Certificate already exists."}
-            )
- 
-        serializer.save()
- 
-    @action(detail=True, methods=["get"], url_path="available-fields")
-    def available_fields(self, request, pk=None):
-        """
-        GET /certificate-types/<id>/available-fields/
-        Reference for developers writing the static .html template file for
-        this certificate type — lists every placeholder tag the template
-        can use. Not used to build/store a template; the .html file itself
-        lives in your templates directory and is written by hand.
-        """
-        certificate_type = self.get_object()
- 
-        system_fields = [
-            {"field_name": "school_name", "label": "School Name"},
-            {"field_name": "certificate_number", "label": "Certificate Number"},
-            {"field_name": "issue_date", "label": "Issue Date"},
-        ]
-        custom_fields = [
-            {"field_name": f.field_name, "label": f.label}
-            for f in certificate_type.fields.all()
-        ]
-        return Response({"system_fields": system_fields, "custom_fields": custom_fields})
- 
- 
+
+
+
 class CertificateRequestViewSet(ModelViewSet):
     """Student-facing viewset: create requests, view status & certificate."""
     serializer_class = CertificateRequestSerializer
     permission_classes = [IsAuthenticated, Isstudent]
     http_method_names = ["get", "post", "head", "options"]  # Students can't update/delete
- 
+
     def get_queryset(self):
         student = Student.objects.filter(user=self.request.user).first()
- 
+
         if not student:
             return CertificateRequest.objects.none()
- 
+
         return (
             CertificateRequest.objects.filter(student=student)
             .select_related("certificate_type")
             .prefetch_related("certificate")
         )
- 
+
     def perform_create(self, serializer):
         student = Student.objects.filter(user=self.request.user).first()
- 
+
         if not student:
             raise ValidationError("Student profile not found.")
- 
+
         certificate_type = serializer.validated_data["certificate_type"]
- 
+
         # Prevent duplicate pending requests for the same certificate type
         if CertificateRequest.objects.filter(
             student=student,
@@ -332,195 +273,79 @@ class CertificateRequestViewSet(ModelViewSet):
             raise ValidationError(
                 "You already have a pending request for this certificate type."
             )
- 
+
         serializer.save(student=student, school=student.school)
- 
- 
+        
+        
+        
+        
+        
 class ClerkCertificateRequestViewSet(ModelViewSet):
-    """Clerk-facing viewset: view all school requests, approve/reject, generate."""
+    """Clerk-facing viewset: view all school requests, approve/reject."""
     serializer_class = ClerkCertificateRequestSerializer
     permission_classes = [IsAuthenticated, IsCLerk]
-    http_method_names = ["get", "patch", "post", "head", "options"]  # "post" needed for the generate action
- 
+    http_method_names = ["get", "patch", "head", "options"]  # Clerks can only read + update
+
     def get_queryset(self):
         staff = Staff.objects.filter(
             user=self.request.user,
             category="CLERK"
         ).first()
- 
+
         if not staff:
             return CertificateRequest.objects.none()
- 
+
         queryset = (
             CertificateRequest.objects.filter(school=staff.school)
             .select_related("student__user", "certificate_type")
             .prefetch_related("certificate")
         )
- 
-        status_param = self.request.query_params.get("status")
-        if status_param:
-            queryset = queryset.filter(status=status_param.upper())
- 
+
+        # Optional filtering by status: /clerk-requests/?status=PENDING
+        status = self.request.query_params.get("status")
+        if status:
+            queryset = queryset.filter(status=status.upper())
+
         return queryset
- 
+
     def perform_update(self, serializer):
-        # Manual-upload approve/reject flow (unchanged)
         instance = self.get_object()
- 
+
+        # Prevent re-processing an already handled request
         if instance.status != "PENDING":
             raise ValidationError(
                 f"This request has already been {instance.status.lower()}."
             )
- 
+
         new_status = serializer.validated_data.get("status")
- 
+
         if new_status == "APPROVED":
+            # Validate file BEFORE saving status, so we don't save APPROVED with no file
             file = self.request.FILES.get("file")
             if not file:
                 raise ValidationError(
                     "A certificate file (PDF) is required to approve this request."
                 )
- 
+
+            # Now safe to save
             serializer.save(status="APPROVED")
- 
+
             Certificate.objects.create(
                 request=instance,
                 certificate_number=f"CERT-{uuid4().hex[:8].upper()}",
-                file=file,
-                is_auto_generated=False,
-                generated_by=self.request.user,
+                file=file
             )
- 
+            
+            
             instance.refresh_from_db()
- 
+
         elif new_status == "REJECTED":
             serializer.save(status="REJECTED")
- 
+
         else:
             raise ValidationError(
                 "Status must be either APPROVED or REJECTED."
             )
- 
-    @action(detail=True, methods=["get"], url_path="generate-fields")
-    def generate_fields(self, request, pk=None):
-        """
-        GET /clerk-requests/<id>/generate-fields/
-        Returns the dynamic field schema so the frontend can render the
-        "Generate Certificate" form for this specific request's type.
-        """
-        instance = self.get_object()
- 
-        if not instance.certificate_type.template_file:
-            return Response(
-                {"detail": "No template configured for this certificate type."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
- 
-        schema = [
-            {
-                "field_name": f.field_name,
-                "label": f.label,
-                "field_type": f.field_type,
-                "required": f.required,
-            }
-            for f in instance.certificate_type.fields.all()
-        ]
-        return Response({
-            "certificate_type": instance.certificate_type.name,
-            "system_fields": ["certificate_number", "issue_date"],
-            "dynamic_fields": schema,
-        })
- 
-    @action(detail=True, methods=["post"], url_path="generate")
-    def generate(self, request, pk=None):
-        """
-        POST /clerk-requests/<id>/generate/
-        {
-            "certificate_number": "LC-2026-001",
-            "issue_date": "2026-07-04",
-            "date_of_admission": "2020-06-01",
-            "reason_for_leaving": "Family relocation"
-        }
-        Renders the type's template with submitted data, saves the PDF,
-        marks request APPROVED. Same guard rails as perform_update.
-        """
-        instance = self.get_object()
- 
-        if instance.status != "PENDING":
-            raise ValidationError(
-                f"This request has already been {instance.status.lower()}."
-            )
- 
-        certificate_type = instance.certificate_type
-        if not certificate_type.template_file:
-            raise ValidationError("No template configured for this certificate type.")
- 
-        base_serializer = CertificateGenerateSerializer(data=request.data)
-        base_serializer.is_valid(raise_exception=True)
-        base_data = base_serializer.validated_data
- 
-        field_defs = certificate_type.fields.all()
-        dynamic_data = {}
-        errors = {}
- 
-        for fd in field_defs:
-            value = request.data.get(fd.field_name)
- 
-            if fd.required and (value is None or value == ""):
-                errors[fd.field_name] = "This field is required."
-                continue
- 
-            # FIX: dynamic date fields were stored as raw strings from the
-            # frontend (usually ISO "YYYY-MM-DD"), while the system issue_date
-            # field was reformatted to "DD-MM-YYYY" — producing inconsistent
-            # date formats on the same generated certificate. Parse and
-            # reformat dynamic date fields the same way here.
-            if value and fd.field_type == "date":
-                try:
-                    value = datetime.strptime(value, "%Y-%m-%d").strftime("%d-%m-%Y")
-                except ValueError:
-                    errors[fd.field_name] = "Invalid date format, expected YYYY-MM-DD."
-                    continue
- 
-            dynamic_data[fd.field_name] = value
- 
-        if errors:
-            raise ValidationError(errors)
- 
-        context = {
-            **dynamic_data,
-            "certificate_number": base_data["certificate_number"],
-            "issue_date": base_data["issue_date"].strftime("%d-%m-%Y"),
-            "school_name": instance.school.name if instance.school else "",
-        }
- 
-        # Render the developer-authored static .html file for this type,
-        # e.g. "certificates/leaving_certificate.html" under your TEMPLATES dir.
-        rendered_html = render_to_string(certificate_type.template_file, context)
- 
-        pdf_bytes = render_pdf(rendered_html)
- 
-        certificate = Certificate.objects.create(
-            request=instance,
-            certificate_number=base_data["certificate_number"],
-            data=context,
-            is_auto_generated=True,
-            generated_by=request.user,
-        )
-        certificate.file.save(
-            f"{base_data['certificate_number']}.pdf",
-            ContentFile(pdf_bytes),
-            save=True,
-        )
- 
-        instance.status = "APPROVED"
-        instance.save()
-        instance.refresh_from_db()
- 
-        return Response(
-            ClerkCertificateRequestSerializer(instance).data,
-            status=status.HTTP_201_CREATED,
-        )
 
 
 
