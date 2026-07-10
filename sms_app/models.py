@@ -2095,67 +2095,20 @@ class Homework(models.Model):
 class CertificateType(models.Model):
     name = models.CharField(max_length=100, null=True, blank=True)
     school = models.ForeignKey(School, on_delete=models.CASCADE, null=True)
- 
-    # Path to a static HTML file under your templates directory, e.g.
-    # "certificates/leaving_certificate.html". Written by a developer,
-    # NOT editable by the clerk through the API. The clerk only defines
-    # which fields exist (below); the developer's template file must use
-    # the same {{ field_name }} placeholders as those field definitions.
-    template_file = models.CharField(max_length=255, blank=True, null=True)
- 
+    
     def __str__(self):
         return self.name
- 
+    
     class Meta:
         db_table = "certificate_type"
- 
- 
-class CertificateFieldDefinition(models.Model):
-    FIELD_TYPES = [
-        ("text", "Text"),
-        ("textarea", "Long Text"),
-        ("date", "Date"),
-        ("number", "Number"),
-    ]
- 
-    certificate_type = models.ForeignKey(
-        CertificateType, on_delete=models.CASCADE, related_name="fields"
-    )
-    field_name = models.SlugField(max_length=100, blank=True)
-    label = models.CharField(max_length=100)
-    field_type = models.CharField(max_length=20, choices=FIELD_TYPES, default="text")
-    required = models.BooleanField(default=True)
-    order = models.PositiveIntegerField(default=0)
- 
-    class Meta:
-        db_table = "certificate_field_definition"
-        unique_together = ("certificate_type", "field_name")
-        ordering = ["order", "id"]
- 
-    def save(self, *args, **kwargs):
-        if not self.field_name:
-            base_slug = slugify(self.label).replace("-", "_")
-            slug = base_slug
-            counter = 1
-            # FIX: avoid IntegrityError when two fields on the same type
-            # slugify to the same field_name (e.g. two fields both labeled "Date")
-            while CertificateFieldDefinition.objects.filter(
-                certificate_type=self.certificate_type, field_name=slug
-            ).exclude(pk=self.pk).exists():
-                counter += 1
-                slug = f"{base_slug}_{counter}"
-            self.field_name = slug
-        super().save(*args, **kwargs)
- 
-    def __str__(self):
-        return f"{self.certificate_type.name} - {self.label}"
- 
- 
+    
+    
+    
 class CertificateRequest(models.Model):
     student = models.ForeignKey(Student, on_delete=models.CASCADE, null=True)
     certificate_type = models.ForeignKey(CertificateType, on_delete=models.CASCADE)
     school = models.ForeignKey(School, on_delete=models.CASCADE, null=True)
- 
+
     status = models.CharField(
         max_length=20,
         choices=[
@@ -2165,30 +2118,24 @@ class CertificateRequest(models.Model):
         ],
         default="PENDING"
     )
- 
+
     created_at = models.DateTimeField(auto_now_add=True)
- 
+    
     class Meta:
         db_table = "certificate_request"
- 
- 
+        
+        
+        
 class Certificate(models.Model):
-    request = models.OneToOneField(
-        CertificateRequest, on_delete=models.CASCADE, related_name="certificate"
-    )
+    request = models.OneToOneField(CertificateRequest,on_delete=models.CASCADE,related_name="certificate")
     certificate_number = models.CharField(max_length=50, unique=True)
-    file = models.FileField(upload_to="certificates/")
-    issued_at = models.DateTimeField(auto_now_add=True)
- 
-    data = models.JSONField(default=dict, blank=True)
-    is_auto_generated = models.BooleanField(default=False)
-    generated_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True
-    )
- 
+    generated_data = models.JSONField(default=dict)
+    file = models.FileField(upload_to="certificates/",null=True,blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
     class Meta:
         db_table = "certificate"
- 
+
     def __str__(self):
         return self.certificate_number
     

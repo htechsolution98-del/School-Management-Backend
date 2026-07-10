@@ -618,7 +618,7 @@ class SchoolFeatureView(ModelViewSet):
 class GetFeatureView(ModelViewSet):
     queryset = SchoolFeature.objects.all()
     serializer_class = GetFeatureSerializer
-    permission_classes = [IsAuthenticated, Is_admin_trustee]
+    permission_classes = [IsAuthenticated]
 
     http_method_names = ["get"]
 
