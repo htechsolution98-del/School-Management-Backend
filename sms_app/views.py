@@ -416,6 +416,8 @@ class LoginView(APIView):
                 "school_slug": response_data["school_slug"],
                 "roles": response_data["roles"],
                 "modules": response_data["modules"],
+                "access_token":access_token,
+                
                
                
             },
@@ -538,7 +540,7 @@ class Isparent(BasePermission):
         return (
             request.user
             and request.user.is_authenticated
-            and request.user.groups.filter(name="parents").exists()
+            and request.user.groups.filter(name="PARENT").exists()
         )
 
 class Isteacher(BasePermission):
@@ -5059,7 +5061,7 @@ def progress_group(school_id, student_id):
 
 
 class DueFeesView(APIView):
-    permission_classes = [IsAuthenticated, Isparent,Isstudent]
+    permission_classes = [IsAuthenticated, Isparent]
 
     def get(self, request):
 
@@ -5096,8 +5098,8 @@ class DueFeesView(APIView):
 
 class PaymentHistoryView(APIView):
 
-    permission_classes = [IsAuthenticated, Isparent,Isstudent]
-
+    permission_classes = [IsAuthenticated, Isparent]
+    
     def get(self, request):
 
         student_ids = Perents.objects.filter(
@@ -5119,8 +5121,22 @@ class PaymentHistoryView(APIView):
         return Response(serializer.data)
     
 class FeesPaymentView(APIView):
-    permission_classes = [Isparent,Isstudent]
+    permission_classes = [Isparent]
+    
+    def get(self, request):
+        student_ids = Perents.objects.filter(
+            user=request.user
+        ).values_list(
+            "perents_of_id",
+            flat=True
+        )
 
+        fees = StudentFee.objects.filter(
+            student_id__in=student_ids
+        ).order_by("-created_at")   # or "-billing_period"
+
+        serializer = StudentFeeSerializer(fees, many=True)
+        return Response(serializer.data)
     def post(self, request):
 
         fee_id = request.data.get("fee_id")
@@ -5131,7 +5147,7 @@ class FeesPaymentView(APIView):
             "perents_of_id",
             flat=True
         )
-
+        print(student_ids)
         try:
             fee = StudentFee.objects.get(
                 id=fee_id,
@@ -5267,9 +5283,9 @@ class VerifypaymentView(APIView):
         })
 
 
-
-class StudyMaterialView(APIView):
+class TeacherAssignmentView(APIView):
     permission_classes = [Isteacher]
+
     def get(self, request):
         assignments = AssignClass.objects.filter(
             school=request.user.school,
@@ -5286,11 +5302,27 @@ class StudyMaterialView(APIView):
             data.append({
                 "subject_id": assignment.subject.id,
                 "subject_name": assignment.subject.name,
-                "class_id": assignment.division.SchoolClass.id,
+                "student_class": assignment.division.id,   # or SchoolClass.id depending on your StudyMaterial model
                 "class_name": assignment.division.SchoolClass.get_school_class_display(),
+                "division": assignment.division.division,
             })
 
         return Response(data)
+class StudyMaterialView(APIView):
+    permission_classes = [Isteacher]
+    def get(self, request):
+        materials = StudyMaterial.objects.filter(
+            school=request.user.school,
+            staff=request.user.staff
+        ).order_by("-created_at")
+
+        serializer = StudyMaterialSerializer(
+            materials,
+            many=True,
+            context={"request": request}
+        )
+
+        return Response(serializer.data)
 
     def post(self, request):
         school = request.user.school
@@ -5325,6 +5357,40 @@ class StudyMaterialView(APIView):
             return Response(serializer.data, status=201)
 
         return Response(serializer.errors, status=400)
+    def put(self, request, id):
+        material = get_object_or_404(
+            StudyMaterial,
+            id=id,
+            school=request.user.school,
+            staff=request.user.staff
+        )
+
+        serializer = StudyMaterialSerializer(
+            material,
+            data=request.data,
+            partial=True
+        )
+
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+
+        return Response(serializer.errors, status=400)
+
+    def delete(self, request, id):
+        material = get_object_or_404(
+            StudyMaterial,
+            id=id,
+            school=request.user.school,
+            staff=request.user.staff
+        )
+
+        material.delete()
+
+        return Response(
+            {"message": "Study material deleted successfully."},
+            status=204
+        )
 
     
 class StockItemsViewset(ModelViewSet):
@@ -5353,13 +5419,7 @@ class StockItemsViewset(ModelViewSet):
 
 
 class StockRequestViewset(ModelViewSet):
-    def get_permissions(self):
-        if self.request.method=='GET':
-            return [IsAuthenticated()]
-        elif self.request.method=='POST':
-            return [IsAuthenticated(),Isteacher()]
-        else:
-            return [IsAuthenticated(),Isinventory()]
+    permission_classes = [IsAuthenticated, Isteacher]
         
     queryset=StockRequest.objects.all()
     serializer_class=StockRequestSerializer
@@ -5371,26 +5431,74 @@ class StockRequestViewset(ModelViewSet):
         return StockRequest.objects.filter(teacher=self.request.user.staff)
     def perform_create(self, serializer):
         serializer.save(school=self.request.user.school,teacher=self.request.user.staff)
+    def update(self, request, *args, **kwargs):
+        stock_request = self.get_object()
 
-    def  partial_update(self, serializer,pk):
-        try:
-            stock_request = StockRequest.objects.get(
-                pk=pk,
-                school=self.request.user.school
-            )
-        except StockRequest.DoesNotExist:
+        if stock_request.status != "pending":
             return Response(
-                {"error": "Stock request not found."},
-                status=status.HTTP_404_NOT_FOUND
-            ) #get item which we want to edit
-        status_value= self.request.data.get("status") # status of inventory manager
+                {"error": "Only pending requests can be updated."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        return super().update(request, *args, **kwargs)
+
+    def partial_update(self, request, *args, **kwargs):
+        stock_request = self.get_object()
+
+        if stock_request.status != "pending":
+            return Response(
+                {"error": "Only pending requests can be updated."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        return super().partial_update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        stock_request = self.get_object()
+
+        if stock_request.status != "pending":
+            return Response(
+                {"error": "Only pending requests can be deleted."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        stock_request.delete()
+
+        return Response(
+            {"message": "Request deleted successfully."},
+            status=status.HTTP_204_NO_CONTENT
+        )
+    
+class InventoryStockRequestViewSet(ModelViewSet):
+    permission_classes = [IsAuthenticated, Isinventory]
+    serializer_class = StockRequestSerializer
+    queryset = StockRequest.objects.all()
+
+   
+
+    def get_queryset(self):
+        return StockRequest.objects.filter(
+            school=self.request.user.school
+        )
+
+    def partial_update(self, request, *args, **kwargs):
+        stock_request = self.get_object()
+
+        if stock_request.status != "pending":
+            return Response(
+                {"error": "Request has already been processed."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        status_value = request.data.get("status")
+
         if status_value not in ["approved", "rejected"]:
             return Response(
                 {"error": "Status must be 'approved' or 'rejected'."},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        if status_value == "approved":
 
+        if status_value == "approved":
             item = stock_request.stock_item
 
             if item.quantity < stock_request.quantity:
@@ -5404,11 +5512,9 @@ class StockRequestViewset(ModelViewSet):
 
         stock_request.status = status_value
         stock_request.save()
-        serializer = StockRequestSerializer(stock_request)
 
-        return Response(serializer.data)
-    
-    
+        serializer = self.get_serializer(stock_request)
+        return Response(serializer.data) 
 
     
 class AssetViewSet(ModelViewSet):

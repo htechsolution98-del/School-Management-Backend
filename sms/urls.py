@@ -162,6 +162,7 @@ router.register(r'procurement',ProcurementViewSet,basename='procurement')
 router.register(r'procurement-item',ProcurementItemViewSet,basename='procurement-item')
 router.register(r'stock-items',StockItemsViewset,basename='stock-items')
 router.register(r'stock-request',StockRequestViewset,basename='stock-request')
+router.register("inventory-stock-request",InventoryStockRequestViewSet,basename="inventory-stock-request")
 router.register(r'loss-prevention',LossPreventionViewset,basename='loss-prevention')
 router.register(r'budget',BudgetViewset,basename='budget')
 router.register(r'budget-expense',BudgetExpenseViewset,basename='budget-expense')
@@ -320,7 +321,9 @@ urlpatterns = [
     path('api/fee-payment/',FeesPaymentView.as_view()),
     path('api/verify-payment/',VerifypaymentView.as_view()),
     path('api/studymaterial/',StudyMaterialView.as_view()),
-    path("teacher/classes/",TeacherClassesView.as_view()),
+    path('api/studymaterial/<int:id>/', StudyMaterialView.as_view()),
+    path("api/teacher-assignments/", TeacherAssignmentView.as_view()),
+    path("api/teacher/classes/",TeacherClassesView.as_view()),
     
     # ITS FOR GET STIDENT FOR ATTENDANSE
     

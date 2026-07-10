@@ -5035,15 +5035,36 @@ class StockItemsSerializer(serializers.ModelSerializer):
         fields=["id","name","category","quantity","min_quantity"]
 
 class StockRequestSerializer(serializers.ModelSerializer):
+    teacher_name = serializers.SerializerMethodField()
+
     class Meta:
-        model=StockRequest
-        fields=["stock_item","quantity","status","teacher"]  
-        read_only_fields=["teacher"] 
+        model = StockRequest
+        fields = [
+            "id",
+            "stock_item",
+            "quantity",
+            "status",
+            "teacher",
+            "teacher_name",
+        ]
+        read_only_fields = ["teacher", "teacher_name"]
+
+    def get_teacher_name(self, obj):
+        return " ".join(
+            filter(
+                None,
+                [
+                    
+                    obj.teacher.name
+                    
+                ],
+            )
+        )
         
 class AssetSerializer(serializers.ModelSerializer):
     class Meta:
         model=Asset
-        fields=["id","asset_name","category","asset_code","quantity","purchase_date","total_value"]
+        fields=["id","asset_name","category","asset_code","quantity","unit_price","purchase_date","total_value"]
     
 class AssetMaintenanceSerializer(serializers.ModelSerializer):
     class Meta:
