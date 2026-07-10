@@ -193,7 +193,6 @@ router.register(r"clerk-requests", ClerkCertificateRequestViewSet, basename="cle
 
 
 
-
 router.register(r"leave-templates", LeaveTemplateViewSet, basename="leave-templates")
 
 router.register(r"leave-types", LeaveTypeViewSet, basename="leave-types")
