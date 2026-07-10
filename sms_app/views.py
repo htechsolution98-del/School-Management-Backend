@@ -416,7 +416,7 @@ class LoginView(APIView):
                 "school_slug": response_data["school_slug"],
                 "roles": response_data["roles"],
                 "modules": response_data["modules"],
-                "access_token":access_token,
+               
                 
                
                
@@ -3902,6 +3902,73 @@ class StudentAttendanceView(APIView):
         return Response(
             response_serializer.data,
             status=status.HTTP_201_CREATED
+        )
+    def put(self, request, id):
+        attendance = get_object_or_404(
+            StudentAttendance,
+            id=id,
+            school=request.user.school
+        )
+
+        serializer = StudentAttendanceSerializer(
+            attendance,
+            data=request.data,
+            context={"request": request}
+        )
+
+        serializer.is_valid(raise_exception=True)
+        attendance = serializer.save()
+
+        if attendance.is_present:
+            status_text = "Present"
+        elif attendance.is_absent:
+            status_text = "Absent"
+        else:
+            status_text = "Not Marked"
+
+        notification = StudentNotification.objects.create(
+            school=attendance.school,
+            student=attendance.student,
+            created_by=request.user.staff,
+            notification_type="ATTENDANCE",
+            title="Attendance Updated",
+            message=(
+                f"Your child's attendance has been updated to "
+                f"{status_text} on {attendance.attendance_date}"
+            )
+        )
+
+        group_name = (
+            f"school_{attendance.school_id}"
+            f"_student_{attendance.student_id}"
+            f"_attendance"
+        )
+
+        channel_layer = get_channel_layer()
+
+        async_to_sync(channel_layer.group_send)(
+            group_name,
+            {
+                "type": "attendance_message",
+                "notification_id": notification.id,
+                "title": notification.title,
+                "message": notification.message,
+            }
+        )
+
+        return Response(serializer.data)
+    def delete(self, request, id):
+        attendance = get_object_or_404(
+            StudentAttendance,
+            id=id,
+            school=request.user.school
+        )
+
+        attendance.delete()
+
+        return Response(
+            {"message": "Attendance deleted successfully."},
+            status=status.HTTP_204_NO_CONTENT
         )
 
       
