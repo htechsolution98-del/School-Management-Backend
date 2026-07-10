@@ -337,6 +337,7 @@ urlpatterns = [
         StudentAttendanceView.as_view(),
         name="student-attendance"
     ),
+    path("api/student-attendance/<int:id>/", StudentAttendanceView.as_view()),
     
     
     path('api/specific-student-attendance/', StudentAttendanceListView.as_view()), # student see their attendance
