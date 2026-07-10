@@ -471,6 +471,9 @@ class CertificateRequestSerializer(serializers.ModelSerializer):
 class ClerkCertificateRequestSerializer(serializers.ModelSerializer):
     student_name = serializers.CharField(source="student.user.username",read_only=True)
     certificate_type_name = serializers.CharField(source="certificate_type.name",read_only=True)
+    school_name = serializers.CharField(source="student.school.name",read_only=True)
+    student_father_name = serializers.CharField(source="student.father_name", read_only=True)
+    student_mother_name = serializers.CharField(source="student.mother_name", read_only=True)
     certificate_file = serializers.SerializerMethodField()
 
     class Meta:
@@ -479,6 +482,9 @@ class ClerkCertificateRequestSerializer(serializers.ModelSerializer):
             "id",
             "student",
             "student_name",
+            "student_father_name",
+            "student_mother_name",
+            "school_name",
             "certificate_type",
             "certificate_type_name",
             "status",
@@ -489,6 +495,7 @@ class ClerkCertificateRequestSerializer(serializers.ModelSerializer):
             "student",
             "certificate_type",
             "created_at",
+            "school_name",
         ]
 
     def get_certificate_file(self, obj):

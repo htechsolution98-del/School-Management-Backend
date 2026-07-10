@@ -31,7 +31,7 @@ class Isstudent(BasePermission):
         return (
             request.user
             and request.user.is_authenticated
-            and request.user.groups.filter(name="student").exists()
+            and request.user.groups.filter(name="STUDENT").exists()
         )
         
 class Isteacher(BasePermission):

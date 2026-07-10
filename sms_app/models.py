@@ -2128,15 +2128,16 @@ class CertificateRequest(models.Model):
         
 class Certificate(models.Model):
     request = models.OneToOneField(CertificateRequest,on_delete=models.CASCADE,related_name="certificate")
-
-    certificate_number = models.CharField(max_length=50,unique=True)
-
-    file = models.FileField(upload_to="certificates/")
-
-    issued_at = models.DateTimeField(auto_now_add=True)
+    certificate_number = models.CharField(max_length=50, unique=True)
+    generated_data = models.JSONField(default=dict)
+    file = models.FileField(upload_to="certificates/",null=True,blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         db_table = "certificate"
+
+    def __str__(self):
+        return self.certificate_number
     
 
 
