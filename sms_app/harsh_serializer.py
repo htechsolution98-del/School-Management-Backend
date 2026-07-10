@@ -142,15 +142,14 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
 
 
 class StaffRemainingLeaveSerializer(serializers.ModelSerializer):
-    leave_type = serializers.CharField(
-        source="leave_template.leave_type", read_only=True
-    )
+    leave_type_name = serializers.CharField(source="leave_type.leave_type", read_only=True)
+    leave_template_timeline = serializers.CharField(source="leave_template.time_line", read_only=True)
     staff_name = serializers.CharField(source="staff.name", read_only=True)
     
     class Meta:
         model = StaffRemainingLeave
-        fields = ["id", "staff", "staff_name", "leave_type", "total_levaes", "remaining_leaves" ]
-        read_only_fields = ["id"]
+        fields = ["id", "staff", "staff_name", "leave_type", "leave_type_name", "leave_template", "leave_template_timeline", "total_levaes", "remaining_leaves"]
+        read_only_fields = ["id", "month", "year"]
 
 
 
