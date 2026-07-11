@@ -663,6 +663,8 @@ class StudentAttendanceListSerializer(serializers.ModelSerializer):
         
 class SyllabusListSerializer(serializers.ModelSerializer):
     subject_name = serializers.CharField(source = 'subject.name', read_only = True)
+    divison_name = serializers.CharField(source = 'division.division', read_only = True)
+    school_class = serializers.CharField(source = 'division.SchoolClass', read_only = True)
     class Meta:
         model = Syllabus
         fields = '__all__'
