@@ -2101,6 +2101,74 @@ class CertificateType(models.Model):
     
     class Meta:
         db_table = "certificate_type"
+        
+        
+        
+class CertificateTemplate(models.Model):
+    certificate_type = models.OneToOneField(
+        CertificateType,
+        on_delete=models.CASCADE,
+        related_name="template"
+    )
+
+    title = models.CharField(max_length=200)
+
+    is_active = models.BooleanField(default=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "certificate_template"
+
+    def __str__(self):
+        return self.title
+    
+    
+    
+    
+class CertificateTemplateField(models.Model):
+
+    FIELD_TYPES = (
+        ("text", "Text"),
+        ("date", "Date"),
+        ("number", "Number"),
+        ("textarea", "Textarea"),
+    )
+
+    template = models.ForeignKey(
+        CertificateTemplate,
+        on_delete=models.CASCADE,
+        related_name="fields"
+    )
+
+    field_name = models.CharField(max_length=100)
+
+    label = models.CharField(max_length=100)
+
+    field_type = models.CharField(
+        max_length=20,
+        choices=FIELD_TYPES,
+        default="text"
+    )
+
+    editable = models.BooleanField(default=True)
+
+    required = models.BooleanField(default=False)
+
+    default_value = models.CharField(
+        max_length=255,
+        blank=True,
+        null=True
+    )
+
+    display_order = models.PositiveIntegerField(default=1)
+
+    class Meta:
+        ordering = ["display_order"]
+        db_table = "certificate_template_field"
+
+    def __str__(self):
+        return self.label
     
     
     
@@ -2124,20 +2192,23 @@ class CertificateRequest(models.Model):
     class Meta:
         db_table = "certificate_request"
         
-        
-        
+
+
+    
 class Certificate(models.Model):
+
     request = models.OneToOneField(CertificateRequest,on_delete=models.CASCADE,related_name="certificate")
     certificate_number = models.CharField(max_length=50, unique=True)
     generated_data = models.JSONField(default=dict)
-    file = models.FileField(upload_to="certificates/",null=True,blank=True)
+    file = models.FileField(upload_to="certificates/",blank=True,null=True)
     created_at = models.DateTimeField(auto_now_add=True)
-
+    
     class Meta:
         db_table = "certificate"
 
     def __str__(self):
         return self.certificate_number
+    
     
 
 

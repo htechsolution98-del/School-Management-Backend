@@ -348,6 +348,100 @@ class ClerkCertificateRequestViewSet(ModelViewSet):
             )
 
 
+class CertificateTemplateAPIView(APIView):
+    permission_classes = [IsAuthenticated, IsCLerk]
+
+    def get(self, request, pk):
+        staff = Staff.objects.filter(
+            user=request.user,
+            category="CLERK"
+        ).first()
+
+        if not staff:
+            raise ValidationError("Clerk not found.")
+
+        certificate_request = get_object_or_404(
+            CertificateRequest.objects.select_related(
+                "student",
+                "certificate_type",
+                "student__school_class",
+                "student__division",
+                "student__academic_year",
+            ),
+            pk=pk,
+            school=staff.school,
+        )
+
+        serializer = CertificateTemplateSerializer(certificate_request)
+        return Response(serializer.data)
+    
+    
+    
+class CertificateGenerateAPIView(APIView):
+
+    permission_classes = [IsAuthenticated, IsCLerk]
+
+    def patch(self, request, pk):
+
+        serializer = CertificateGenerateSerializer(
+            data=request.data
+        )
+
+        serializer.is_valid(raise_exception=True)
+
+        staff = Staff.objects.filter(
+            user=request.user,
+            category="CLERK"
+        ).first()
+
+        if not staff:
+            raise ValidationError("Clerk not found.")
+
+        certificate_request = get_object_or_404(
+            CertificateRequest,
+            pk=pk,
+            school=staff.school
+        )
+
+        if certificate_request.status != "PENDING":
+            raise ValidationError(
+                "This request has already been processed."
+            )
+
+        status = serializer.validated_data["status"]
+
+        if status == "REJECTED":
+
+            certificate_request.status = "REJECTED"
+            certificate_request.save()
+
+            return Response({
+                "message": "Certificate request rejected."
+            })
+
+        generated_data = serializer.validated_data.get(
+            "generated_data"
+        )
+
+        if not generated_data:
+            raise ValidationError(
+                "generated_data is required."
+            )
+
+        certificate = Certificate.objects.create(
+            request=certificate_request,
+            generated_data=generated_data
+        )
+
+        certificate_request.status = "APPROVED"
+        certificate_request.save()
+
+        return Response({
+            "message": "Certificate approved successfully.",
+            "certificate_number": certificate.certificate_number,
+            "generated_data": certificate.generated_data
+        })
+
 
 
 

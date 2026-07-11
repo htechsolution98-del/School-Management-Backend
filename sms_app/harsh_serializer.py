@@ -504,6 +504,44 @@ class ClerkCertificateRequestSerializer(serializers.ModelSerializer):
             return None
         
         
+class CertificateTemplateSerializer(serializers.Serializer):
+    id = serializers.IntegerField(read_only=True)
+    certificate_type = serializers.CharField(read_only=True)
+    status = serializers.CharField(read_only=True)
+    fields = serializers.SerializerMethodField()
+
+    def get_fields(self, obj):
+        student = obj.student
+
+        return {
+            "surname": student.surname,
+            "name": student.name,
+            "father_name": student.father_name,
+            "mother_name": student.mother_name,
+            "gr_no": student.gr_no,
+            "date_of_birth": student.date_of_birth,
+            "admission_date": student.admission_date,
+            "school_class": student.school_class.school_class if student.school_class else "",
+            "division": student.division.division if student.division else "",
+            "academic_year": student.academic_year.name if student.academic_year else "",
+            "mobile": student.mobile,
+            "aadhar_number": student.aadhar_number,
+            "issue_date": str(timezone.localdate()),
+            "principal_name": ""
+        }
+
+
+class CertificateGenerateSerializer(serializers.Serializer):
+
+    status = serializers.ChoiceField(
+        choices=["APPROVED", "REJECTED"]
+    )
+
+    generated_data = serializers.DictField(
+        required=False
+    )
+        
+        
         
         
         
@@ -779,7 +817,7 @@ class ResultPublishSerializer(serializers.Serializer):
 
 class ResultViewSerializer(serializers.ModelSerializer):
     exam_title = serializers.CharField(source="exam.title")
-    subject = serializers.CharField(source="exam.subject.name")
+    subject = serializers.CharField(source="exam.subject.name",allow_null=True,read_only=True)
 
     class Meta:
         model = Result
