@@ -351,6 +351,9 @@ urlpatterns = [
     path('api/classes/',SchoolClassesView.as_view()), # classes to see for examtimetable
     
     
+    path( "api/certificate-requests/<int:pk>/template/", CertificateTemplateAPIView.as_view(), name="certificate-template" ),
+    
+    path("api/certificate-request/<int:pk>/generate/", CertificateGenerateAPIView.as_view(),name="certificate-generate"),
     
     
     
