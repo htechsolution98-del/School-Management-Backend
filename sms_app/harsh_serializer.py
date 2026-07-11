@@ -504,42 +504,79 @@ class ClerkCertificateRequestSerializer(serializers.ModelSerializer):
             return None
         
         
-class CertificateTemplateSerializer(serializers.Serializer):
-    id = serializers.IntegerField(read_only=True)
-    certificate_type = serializers.CharField(read_only=True)
-    status = serializers.CharField(read_only=True)
-    fields = serializers.SerializerMethodField()
 
-    def get_fields(self, obj):
-        student = obj.student
 
-        return {
-            "surname": student.surname,
-            "name": student.name,
-            "father_name": student.father_name,
-            "mother_name": student.mother_name,
-            "gr_no": student.gr_no,
-            "date_of_birth": student.date_of_birth,
-            "admission_date": student.admission_date,
-            "school_class": student.school_class.school_class if student.school_class else "",
-            "division": student.division.division if student.division else "",
-            "academic_year": student.academic_year.name if student.academic_year else "",
-            "mobile": student.mobile,
-            "aadhar_number": student.aadhar_number,
-            "issue_date": str(timezone.localdate()),
-            "principal_name": ""
-        }
+class CertificateTemplateSerializer(serializers.ModelSerializer):
+
+    certificate_type = serializers.CharField(
+        source="certificate_type.name",
+        read_only=True
+    )
+
+    template_fields = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CertificateRequest
+        fields = [
+            "id",
+            "certificate_type",
+            "status",
+            "template_fields",
+        ]
+
+    def get_template_fields(self, obj):
+        template = obj.certificate_type.template
+
+        serializer = CertificateTemplateFieldSerializer(
+            template.fields.all(),
+            many=True,
+            context={
+                "student": obj.student
+            }
+        )
+
+        return serializer.data
 
 
 class CertificateGenerateSerializer(serializers.Serializer):
 
-    status = serializers.ChoiceField(
-        choices=["APPROVED", "REJECTED"]
-    )
+    status = serializers.ChoiceField(choices=["APPROVED", "REJECTED"])
 
-    generated_data = serializers.DictField(
-        required=False
-    )
+    generated_data = serializers.DictField(required=False)
+    
+    
+
+class CertificateTemplateFieldSerializer(serializers.ModelSerializer):
+    value = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CertificateTemplateField
+        fields = [
+            "field_name",
+            "label",
+            "field_type",
+            "editable",
+            "required",
+            "value",
+        ]
+
+    def get_value(self, obj):
+        student = self.context["student"]
+
+        source = obj.source
+
+        if not source:
+            return obj.default_value or ""
+
+        value = student
+
+        for attr in source.split(".")[1:]:
+            value = getattr(value, attr, None)
+
+            if value is None:
+                return ""
+
+        return value
         
         
         
@@ -778,7 +815,7 @@ class ResultBulkCreateSerializer(serializers.Serializer):
         if exam.school != staff.school:
             raise serializers.ValidationError({"exam": "Invalid exam."})
 
-        if exam.created_by != staff and exam.subject not in staff.subjects.all():
+        if exam.created_by != staff:
             # adjust this check based on how you track subject-teacher assignment
             raise serializers.ValidationError({"exam": "You are not authorized for this exam."})
 
