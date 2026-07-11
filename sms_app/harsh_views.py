@@ -819,7 +819,7 @@ class ResultBulkCreateViewSet(GenericAPIView):
 
         for entry in entries:
             marks = None if entry["is_absent"] else entry.get("marks_obtained")
-            grade = calculate_grade(marks, max_ma nrks)
+            grade = calculate_grade(marks, max_marks)
 
             obj, is_created = Result.objects.update_or_create(
                 exam=exam,
