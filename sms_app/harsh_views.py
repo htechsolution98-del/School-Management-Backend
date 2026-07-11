@@ -41,6 +41,16 @@ class Isteacher(BasePermission):
             and request.user.is_authenticated
             and request.user.groups.filter(name="TEACHER").exists()
         )
+        
+class IsClassTeacher(BasePermission):
+    message = "You are not a class teacher."
+
+    def has_permission(self, request, view):
+        staff = Staff.objects.filter(user=request.user).first()
+        return AssignClass.objects.filter(
+            teacher=staff,
+            is_class_teacher=True
+        ).exists()
    
    
 class IsLibrarian(BasePermission):     
@@ -739,9 +749,32 @@ class ExamViewTeacher(ListAPIView):
         
         staff = Staff.objects.filter(user=self.request.user).first()
         
-        qs=Exam.objects.filter(school=staff.school)
+        qs=Exam.objects.filter(school=staff.school, created_by=staff)
         
         return qs
+    
+    
+class ExamViewClassTeacher(ListAPIView):
+    serializer_class = ExamViewSerializer
+    permission_classes = [IsAuthenticated, IsClassTeacher]
+    
+    def get_queryset(self):
+        staff = Staff.objects.filter(user=self.request.user).first()
+
+        if not staff:
+            raise ValidationError("Staff record not found.")
+
+        assign_class = AssignClass.objects.filter(
+            teacher=staff,
+            is_class_teacher=True
+        ).first()
+
+        if not assign_class:
+            raise ValidationError("You are not a class teacher.")
+
+        return Exam.objects.filter(
+            school=assign_class.school
+        )
 
 
 class ExamViewSet(ListAPIView):
