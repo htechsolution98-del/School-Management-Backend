@@ -356,6 +356,7 @@ urlpatterns = [
     path("api/certificate-request/<int:pk>/generate/", CertificateGenerateAPIView.as_view(),name="certificate-generate"),
     
     
+    path('api/school-exams/', ExamViewClassTeacher.as_view(), name="exam-list"), # GET  (Teacher: own class exams)
     
     path('api/exams/', ExamViewTeacher.as_view(), name="exam-list"), # GET  (Teacher: own class exams)
     
