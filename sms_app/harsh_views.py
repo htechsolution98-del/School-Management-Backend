@@ -348,31 +348,33 @@ class ClerkCertificateRequestViewSet(ModelViewSet):
             )
 
 
+
 class CertificateTemplateAPIView(APIView):
+
     permission_classes = [IsAuthenticated, IsCLerk]
 
     def get(self, request, pk):
-        staff = Staff.objects.filter(
+
+        staff = get_object_or_404(
+            Staff,
             user=request.user,
             category="CLERK"
-        ).first()
-
-        if not staff:
-            raise ValidationError("Clerk not found.")
+        )
 
         certificate_request = get_object_or_404(
             CertificateRequest.objects.select_related(
                 "student",
                 "certificate_type",
-                "student__school_class",
-                "student__division",
-                "student__academic_year",
+                "certificate_type__template",
             ),
             pk=pk,
             school=staff.school,
         )
 
-        serializer = CertificateTemplateSerializer(certificate_request)
+        serializer = CertificateTemplateSerializer(
+            certificate_request
+        )
+
         return Response(serializer.data)
     
     
@@ -757,41 +759,36 @@ class ExamViewSet(ListAPIView):
 class ExamCreateViewSet(GenericAPIView):
     serializer_class = ExamViewSerializer
     permission_classes = [IsAuthenticated, Isteacher]
-    
+
     def post(self, request, *args, **kwargs):
         staff = Staff.objects.filter(user=self.request.user).first()
-        
-        serializer = self.get_serializer(data=request.data)
-        
-        if serializer.is_valid():
-            title = serializer.validated_data['title']
-            description = serializer.validated_data['description']
-            subject = serializer.validated_data['subject']
-            exam_date = serializer.validated_data['exam_date']
-            start_time = serializer.validated_data['start_time']
-            end_time = serializer.validated_data['end_time']
-            class_group = serializer.validated_data['class_group']
+        if not staff:
+            return Response({"detail": "Staff profile not found."}, status=status.HTTP_400_BAD_REQUEST)
 
+        serializer = self.get_serializer(
+            data=request.data,
+            context={"request": request},
+        )
 
-            exam = Exam.objects.create(
-                school = staff.school,
-                created_by = staff,
-                title = title,
-                description = description,
-                subject = subject,
-                exam_date= exam_date,
-                start_time = start_time,
-                end_time = end_time,
-                class_group = class_group
-            )
-            
-            exam.save()
-            
-            return Response({
-                "detail":"exam scheduled"
-            })
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        exam = Exam.objects.create(
+            school=staff.school,
+            created_by=staff,
+            title=serializer.validated_data["title"],
+            description=serializer.validated_data["description"],
+            subject=serializer.validated_data["subject"],
+            exam_date=serializer.validated_data["exam_date"],
+            start_time=serializer.validated_data["start_time"],
+            end_time=serializer.validated_data["end_time"],
+            class_group=serializer.validated_data["class_group"],
+        )
+
+        exam.save()
         
-        return Response(serializer.errors)
+        return Response({"detail": "exam scheduled"}, status=status.HTTP_201_CREATED)
+    
 
 def calculate_grade(marks, max_marks):
     if marks is None:
@@ -822,7 +819,7 @@ class ResultBulkCreateViewSet(GenericAPIView):
 
         for entry in entries:
             marks = None if entry["is_absent"] else entry.get("marks_obtained")
-            grade = calculate_grade(marks, max_marks)
+            grade = calculate_grade(marks, max_ma nrks)
 
             obj, is_created = Result.objects.update_or_create(
                 exam=exam,
