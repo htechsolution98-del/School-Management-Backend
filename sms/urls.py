@@ -189,8 +189,11 @@ router.register(r"attendance-location", AttendanceLocationViewSet, basename="att
 
 
 router.register(r"certificate-types", CertificateTypeViewSet, basename="certificate-type")
-router.register(r"certificate-requests", CertificateRequestViewSet, basename="certificate-request")       # student
-router.register(r"clerk-requests", ClerkCertificateRequestViewSet, basename="clerk-request")
+router.register(r"request-certificate", CertificateRequestViewSet, basename="request-certificate")       # student
+router.register(r"certificate-requests", ClerkCertificateRequestViewSet, basename="certificate-requests")
+router.register(r"certificate-templates",CertificateTemplateAdminViewSet,basename="certificate-template")
+router.register(r"certificate-template-fields",CertificateTemplateFieldAdminViewSet,basename="certificate-template-field")
+router.register(r"certificates",CertificateAPIView,basename="certificates")
 
 
 
@@ -347,13 +350,23 @@ urlpatterns = [
     
     
     path('api/classes/<int:class_id>/subjects/',SubjectByClassAPIView.as_view()), # in timetable first select class than subjects
-    
+        
     path('api/classes/',SchoolClassesView.as_view()), # classes to see for examtimetable
     
     
-    path( "api/certificate-requests/<int:pk>/template/", CertificateTemplateAPIView.as_view(), name="certificate-template" ),
     
-    path("api/certificate-request/<int:pk>/generate/", CertificateGenerateAPIView.as_view(),name="certificate-generate"),
+    
+    
+    path("api/certificate-template-field-options/",CertificateTemplateFieldOptionsAPIView.as_view(),name="certificate-template-field-options"),
+    
+    path("api/certificate-requests/<int:pk>/template/", CertificateTemplateAPIView.as_view(), name="certificate-template"),
+    
+    path("api/certificate-requests/<int:pk>/generate/", CertificateGenerateAPIView.as_view(),name="certificate-generate"),
+    
+    path("api/certificates/<int:pk>/upload-pdf/",CertificateUploadAPIView.as_view(), name="certificate-upload"),
+       
+    
+    
     
     
     path('api/school-exams/', ExamViewClassTeacher.as_view(), name="exam-list"), # GET  (Teacher: own class exams)
