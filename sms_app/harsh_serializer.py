@@ -442,66 +442,205 @@ class CerificateTypeSerializer(serializers.ModelSerializer):
         read_only_fields = ['school']    
         
         
+class CertificateTemplateAdminSerializer(serializers.ModelSerializer):
+
+    certificate_type_name = serializers.CharField(source="certificate_type.name",read_only=True)
+
+    class Meta:
+        model = CertificateTemplate
+
+        fields = [
+            "id",
+            "certificate_type",
+            "certificate_type_name",
+            "title",
+            "is_active",
+            "created_at",
+        ]
+
+        read_only_fields = [
+            "created_at"
+        ]
+        
+
+class CertificateTemplateFieldAdminSerializer(serializers.ModelSerializer):
+
+    class Meta:
+        model = CertificateTemplateField
+
+        fields = [
+            "id",
+            "template",
+            "field_name",
+            "label",
+            "field_type",
+            "editable",
+            "required",
+            "default_value",
+            "display_order",
+        ]
+        
+        
+class CertificateFieldOptionSerializer(serializers.Serializer):
+    key = serializers.CharField()
+    label = serializers.CharField()
+    field_type = serializers.CharField()
+    editable = serializers.BooleanField()
+        
+        
 
 class CertificateRequestSerializer(serializers.ModelSerializer):
+
     certificate_type_name = serializers.CharField(source="certificate_type.name",read_only=True)
-    certificate_file = serializers.SerializerMethodField()
+
+    status = serializers.CharField(read_only=True)
 
     class Meta:
         model = CertificateRequest
         fields = [
             "id",
-            "certificate_type",       # write (on create)
-            "certificate_type_name",  # read
-            "status",                 # read-only for student
-            "certificate_file",       # read-only, shows URL when approved
+            "certificate_type",
+            "certificate_type_name",
+            "status",
             "created_at",
         ]
-        read_only_fields = ["student", "status", "created_at"]
-
-    def get_certificate_file(self, obj):
-        try:
-            return obj.certificate.file.url
-        except Certificate.DoesNotExist:
-            return None
+        read_only_fields = [
+            "status",
+            "created_at",
+        ]
     
     
     
 class ClerkCertificateRequestSerializer(serializers.ModelSerializer):
-    student_name = serializers.CharField(source="student.user.username",read_only=True)
-    certificate_type_name = serializers.CharField(source="certificate_type.name",read_only=True)
-    school_name = serializers.CharField(source="student.school.name",read_only=True)
-    student_father_name = serializers.CharField(source="student.father_name", read_only=True)
-    student_mother_name = serializers.CharField(source="student.mother_name", read_only=True)
-    certificate_file = serializers.SerializerMethodField()
+
+    student_name = serializers.SerializerMethodField()
+
+    certificate_type = serializers.CharField(
+        source="certificate_type.name"
+    )
 
     class Meta:
         model = CertificateRequest
+
         fields = [
             "id",
-            "student",
             "student_name",
-            "student_father_name",
-            "student_mother_name",
-            "school_name",
             "certificate_type",
-            "certificate_type_name",
             "status",
-            "certificate_file",   # clerk can see the uploaded file too
             "created_at",
-        ]
-        read_only_fields = [
-            "student",
-            "certificate_type",
-            "created_at",
-            "school_name",
         ]
 
-    def get_certificate_file(self, obj):
+    def get_student_name(self, obj):
+
+        student = obj.student
+
+        return f"{student.name} {student.surname}".strip()
+        
+        
+        
+        
+class CertificateTemplateFieldSerializer(serializers.ModelSerializer):
+
+    value = serializers.SerializerMethodField()
+
+    STUDENT_FIELD_MAP = {
+        "surname": "surname",
+        "name": "name",
+        "father_name": "father_name",
+        "mother_name": "mother_name",
+        "gr_no": "gr_no",
+        "date_of_birth": "date_of_birth",
+        "admission_date": "admission_date",
+        "mobile": "mobile",
+        "aadhar_number": "aadhar_number",
+    }
+
+    class Meta:
+        model = CertificateTemplateField
+        fields = [
+            "field_name",
+            "label",
+            "field_type",
+            "editable",
+            "required",
+            "value",
+        ]
+
+    def get_value(self, obj):
+        student = self.context["student"]
+
+        field = self.STUDENT_FIELD_MAP.get(obj.field_name)
+
+        if field:
+            return getattr(student, field, "")
+
+        return obj.default_value or ""
+    
+    
+    
+
+class CertificateTemplateSerializer(serializers.ModelSerializer):
+
+    certificate_type = serializers.CharField(source="certificate_type.name")
+    
+    student_name = serializers.CharField(source="student.name", read_only=True)
+
+    template_fields = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CertificateRequest
+
+        fields = [
+            "id",
+            "certificate_type",
+            "status",
+            "student",
+            "student_name",
+            "template_fields",
+        ]
+        
+        read_only_fields = ["student"]
+
+    def get_template_fields(self, obj):
         try:
-            return obj.certificate.file.url
-        except Certificate.DoesNotExist:
-            return None
+            template = obj.certificate_type.template
+        except CertificateTemplate.DoesNotExist:
+            return []
+
+        serializer = CertificateTemplateFieldSerializer(
+            template.fields.all(),
+            many=True,
+            context={"student": obj.student}
+        )
+
+        return serializer.data
+
+
+class CertificateGenerateSerializer(serializers.Serializer):
+
+    generated_data = serializers.DictField()
+    
+    
+class CertificateUploadSerializer(serializers.Serializer):
+
+    file = serializers.FileField()
+    
+    
+class CertificateDetailSerializer(serializers.ModelSerializer):
+
+    class Meta:
+
+        model = Certificate
+
+        fields = [
+            "id",
+            "certificate_number",
+            "generated_data",
+            "file",
+            "created_at",
+        ]
+    
+    
         
         
         
@@ -663,6 +802,8 @@ class StudentAttendanceListSerializer(serializers.ModelSerializer):
         
 class SyllabusListSerializer(serializers.ModelSerializer):
     subject_name = serializers.CharField(source = 'subject.name', read_only = True)
+    divison_name = serializers.CharField(source = 'division.division', read_only = True)
+    school_class = serializers.CharField(source = 'division.SchoolClass', read_only = True)
     class Meta:
         model = Syllabus
         fields = '__all__'
@@ -738,7 +879,7 @@ class ResultBulkCreateSerializer(serializers.Serializer):
         if exam.school != staff.school:
             raise serializers.ValidationError({"exam": "Invalid exam."})
 
-        if exam.created_by != staff and exam.subject not in staff.subjects.all():
+        if exam.created_by != staff:
             # adjust this check based on how you track subject-teacher assignment
             raise serializers.ValidationError({"exam": "You are not authorized for this exam."})
 
@@ -777,7 +918,7 @@ class ResultPublishSerializer(serializers.Serializer):
 
 class ResultViewSerializer(serializers.ModelSerializer):
     exam_title = serializers.CharField(source="exam.title")
-    subject = serializers.CharField(source="exam.subject.name")
+    subject = serializers.CharField(source="exam.subject.name",allow_null=True,read_only=True)
 
     class Meta:
         model = Result

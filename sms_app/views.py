@@ -2416,6 +2416,7 @@ from rest_framework import status
 class SyllabusView(ModelViewSet):
     queryset = Syllabus.objects.all()
     serializer_class = SyllabusSerializer
+    permission_classes = [IsAuthenticated]
 
     # ✅ Restrict to user's school
     def get_queryset(self):

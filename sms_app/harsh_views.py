@@ -41,6 +41,16 @@ class Isteacher(BasePermission):
             and request.user.is_authenticated
             and request.user.groups.filter(name="TEACHER").exists()
         )
+        
+class IsClassTeacher(BasePermission):
+    message = "You are not a class teacher."
+
+    def has_permission(self, request, view):
+        staff = Staff.objects.filter(user=request.user).first()
+        return AssignClass.objects.filter(
+            teacher=staff,
+            is_class_teacher=True
+        ).exists()
    
    
 class IsLibrarian(BasePermission):     
@@ -110,7 +120,6 @@ def carry_forward_leave(staff):
             continue
 
         if srl.month == current_month and srl.year == current_year:
-            print("already current", lt.id)
             continue
 
         carry = srl.remaining_leaves or 0
@@ -195,6 +204,415 @@ from datetime import datetime
 
 
 
+
+
+class CertificateTemplateAdminViewSet(ModelViewSet):
+
+    serializer_class = CertificateTemplateAdminSerializer
+
+    permission_classes = [
+        IsAuthenticated,
+        IsCLerk
+    ]
+
+    def get_queryset(self):
+
+        staff = Staff.objects.filter(
+            user=self.request.user,
+            category="CLERK"
+        ).first()
+
+        return CertificateTemplate.objects.filter(
+            certificate_type__school=staff.school
+        )
+        
+
+
+
+
+class CertificateTemplateFieldAdminViewSet(ModelViewSet):
+
+    serializer_class = CertificateTemplateFieldAdminSerializer
+
+    permission_classes = [
+        IsAuthenticated,
+        IsCLerk
+    ]
+
+    def get_queryset(self):
+
+        staff = Staff.objects.filter(
+            user=self.request.user,
+            category="CLERK"
+        ).first()
+
+        queryset = CertificateTemplateField.objects.filter(
+            template__certificate_type__school=staff.school
+        )
+
+        template = self.request.query_params.get("template")
+
+        if template:
+            queryset = queryset.filter(
+                template_id=template
+            )
+
+        return queryset
+
+
+
+
+
+class CertificateTemplateAPIView(APIView):
+
+    permission_classes = [IsAuthenticated, IsCLerk]
+
+    def get(self, request, pk):
+
+        staff = get_object_or_404(
+            Staff,
+            user=request.user,
+            category="CLERK"
+        )
+
+        certificate_request = get_object_or_404(
+            CertificateRequest.objects.select_related(
+                "student",
+                "certificate_type",
+                "certificate_type__template",
+            ),
+            pk=pk,
+            school=staff.school
+        )
+
+        serializer = CertificateTemplateSerializer(
+            certificate_request
+        )
+
+        return Response(serializer.data)
+    
+    
+    
+    
+    
+class CertificateGenerateAPIView(APIView):
+
+    permission_classes = [IsAuthenticated, IsCLerk]
+
+    STUDENT_FIELD_MAP = {
+        "surname": "surname",
+        "name": "name",
+        "father_name": "father_name",
+        "mother_name": "mother_name",
+        "gr_no": "gr_no",
+        "date_of_birth": "date_of_birth",
+        "admission_date": "admission_date",
+        "mobile": "mobile",
+        "aadhar_number": "aadhar_number",
+    }
+
+    def get_student_value(self, student, field_name):
+
+        if field_name == "school_class":
+            return (
+                student.school_class.school_class
+                if student.school_class else ""
+            )
+
+        if field_name == "division":
+            return (
+                student.division.division
+                if student.division else ""
+            )
+
+        if field_name == "academic_year":
+            return (
+                student.academic_year.name
+                if student.academic_year else ""
+            )
+
+        field = self.STUDENT_FIELD_MAP.get(field_name)
+
+        if field:
+            return getattr(student, field, "")
+
+        return None
+
+    def patch(self, request, pk):
+
+        serializer = CertificateGenerateSerializer(data=request.data)
+
+        serializer.is_valid(raise_exception=True)
+
+        staff = get_object_or_404(
+            Staff,
+            user=request.user,
+            category="CLERK"
+        )
+
+        certificate_request = get_object_or_404(
+            CertificateRequest.objects.select_related(
+                "student",
+                "certificate_type__template"
+            ),
+            pk=pk,
+            school=staff.school
+        )
+
+        if certificate_request.status != "PENDING":
+            raise ValidationError(
+                "This request has already been processed."
+            )
+
+        student = certificate_request.student
+
+        template = certificate_request.certificate_type.template
+
+        editable_data = serializer.validated_data["generated_data"]
+
+        final_data = {}
+        
+        print("Editable Data:", editable_data)
+
+        for field in template.fields.all():
+            
+            print(f"--- Field: {field.field_name} ---",f"Editable: {field.editable}",f"Value: {editable_data.get(field.field_name)}",sep="\n")
+
+            if field.editable:
+
+                value = editable_data.get(field.field_name)
+
+                if field.required and not value:
+                    raise ValidationError(
+                        {
+                            field.field_name:
+                            f"{field.label} is required."
+                        }
+                    )
+
+                final_data[field.field_name] = value
+
+            else:
+
+                value = self.get_student_value(
+                    student,
+                    field.field_name
+                )
+
+                if value is None:
+                    value = field.default_value or ""
+
+                final_data[field.field_name] = value
+
+        certificate_number = (
+            f"CERT-{uuid4().hex[:8].upper()}"
+        )
+
+        final_data["certificate_number"] = certificate_number
+
+        final_data["issue_date"] = str(timezone.localdate())
+
+        certificate = Certificate.objects.create(
+            request=certificate_request,
+            certificate_number=certificate_number,
+            generated_data=final_data,
+        )
+
+        certificate_request.status = "APPROVED"
+        certificate_request.save(update_fields=["status"])
+
+        return Response(
+            {
+                "message": "Certificate generated successfully.",
+                "certificate_id": certificate.id,
+                "certificate_number": certificate.certificate_number,
+                "generated_data": certificate.generated_data,
+            },
+            status=status.HTTP_200_OK,
+        )
+        
+        
+        
+
+
+class CertificateUploadAPIView(APIView):
+
+    permission_classes = [IsAuthenticated, IsCLerk]
+
+    def patch(self, request, pk):
+
+        serializer = CertificateUploadSerializer(
+            data=request.data
+        )
+
+        serializer.is_valid(raise_exception=True)
+
+        staff = get_object_or_404(
+            Staff,
+            user=request.user,
+            category="CLERK"
+        )
+
+        certificate = get_object_or_404(
+            Certificate.objects.select_related(
+                "request__school"
+            ),
+            pk=pk,
+            request__school=staff.school
+        )
+
+        certificate.file = serializer.validated_data["file"]
+
+        certificate.save(update_fields=["file"])
+
+        return Response(
+            {
+                "message": "Certificate uploaded successfully.",
+                "certificate_id": certificate.id,
+                "file": certificate.file.url,
+            },
+            status=status.HTTP_200_OK
+        )
+        
+        
+        
+        
+        
+class CertificateTemplateFieldOptionsAPIView(APIView):
+
+    permission_classes = [IsAuthenticated, IsCLerk]
+
+    FIELD_OPTIONS = [
+        {
+            "key": "name",
+            "label": "Student Name",
+            "field_type": "text",
+            "editable": False,
+        },
+        {
+            "key": "surname",
+            "label": "Surname",
+            "field_type": "text",
+            "editable": False,
+        },
+        {
+            "key": "father_name",
+            "label": "Father Name",
+            "field_type": "text",
+            "editable": False,
+        },
+        {
+            "key": "mother_name",
+            "label": "Mother Name",
+            "field_type": "text",
+            "editable": False,
+        },
+        {
+            "key": "gr_no",
+            "label": "GR Number",
+            "field_type": "text",
+            "editable": False,
+        },
+        {
+            "key": "date_of_birth",
+            "label": "Date of Birth",
+            "field_type": "date",
+            "editable": False,
+        },
+        {
+            "key": "admission_date",
+            "label": "Admission Date",
+            "field_type": "date",
+            "editable": False,
+        },  
+        {
+            "key": "mobile",
+            "label": "Mobile",
+            "field_type": "text",
+            "editable": False,
+        },
+        {
+            "key": "aadhar_number",
+            "label": "Aadhar Number",
+            "field_type": "text",
+            "editable": False,
+        },
+    ]
+
+    def get(self, request):
+        serializer = CertificateFieldOptionSerializer(
+            self.FIELD_OPTIONS,
+            many=True
+        )
+        return Response(serializer.data)
+    
+    
+
+
+
+class CertificateDetailAPIView(APIView):
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+
+        certificate = get_object_or_404(
+            Certificate.objects.select_related(
+                "request",
+                "request__student",
+            ),
+            pk=pk,
+        )
+
+        serializer = CertificateDetailSerializer(
+            certificate
+        )
+
+        return Response(serializer.data)
+    
+    
+    
+    
+    
+class CertificateAPIView(ModelViewSet):
+
+    serializer_class = CertificateDetailSerializer
+    permission_classes = [IsAuthenticated]
+    http_method_names = ["get"]
+
+    def get_queryset(self):
+
+        staff = Staff.objects.filter(user=self.request.user).first()
+        
+        if staff:
+            
+            return Certificate.objects.select_related(
+                "request",
+                "request__student",
+                "request__certificate_type",
+            ).filter(
+                request__school=staff.school
+            )
+            
+        else:
+             
+            student = get_object_or_404(
+                Student,
+                user=self.request.user,
+            )
+            
+            return Certificate.objects.select_related(
+                "request",
+                "request__student",
+                "request__certificate_type",
+            ).filter(
+                request__school=student.school
+            )
+
+
+
+
+
 class CertificateTypeViewSet(ModelViewSet): #for create, read, update, delete  certificate type - Bonafide
     serializer_class = CerificateTypeSerializer
     permission_classes = [IsAuthenticated, IsCLerk]
@@ -235,6 +653,8 @@ class CertificateTypeViewSet(ModelViewSet): #for create, read, update, delete  c
             )
 
         serializer.save(school=staff.school)
+
+
 
 
 
@@ -346,8 +766,6 @@ class ClerkCertificateRequestViewSet(ModelViewSet):
             raise ValidationError(
                 "Status must be either APPROVED or REJECTED."
             )
-
-
 
 
 
@@ -643,9 +1061,32 @@ class ExamViewTeacher(ListAPIView):
         
         staff = Staff.objects.filter(user=self.request.user).first()
         
-        qs=Exam.objects.filter(school=staff.school)
+        qs=Exam.objects.filter(school=staff.school, created_by=staff)
         
         return qs
+    
+    
+class ExamViewClassTeacher(ListAPIView):
+    serializer_class = ExamViewSerializer
+    permission_classes = [IsAuthenticated, IsClassTeacher]
+    
+    def get_queryset(self):
+        staff = Staff.objects.filter(user=self.request.user).first()
+
+        if not staff:
+            raise ValidationError("Staff record not found.")
+
+        assign_class = AssignClass.objects.filter(
+            teacher=staff,
+            is_class_teacher=True
+        ).first()
+
+        if not assign_class:
+            raise ValidationError("You are not a class teacher.")
+
+        return Exam.objects.filter(
+            school=assign_class.school
+        )
 
 
 class ExamViewSet(ListAPIView):
@@ -663,41 +1104,36 @@ class ExamViewSet(ListAPIView):
 class ExamCreateViewSet(GenericAPIView):
     serializer_class = ExamViewSerializer
     permission_classes = [IsAuthenticated, Isteacher]
-    
+
     def post(self, request, *args, **kwargs):
         staff = Staff.objects.filter(user=self.request.user).first()
-        
-        serializer = self.get_serializer(data=request.data)
-        
-        if serializer.is_valid():
-            title = serializer.validated_data['title']
-            description = serializer.validated_data['description']
-            subject = serializer.validated_data['subject']
-            exam_date = serializer.validated_data['exam_date']
-            start_time = serializer.validated_data['start_time']
-            end_time = serializer.validated_data['end_time']
-            class_group = serializer.validated_data['class_group']
+        if not staff:
+            return Response({"detail": "Staff profile not found."}, status=status.HTTP_400_BAD_REQUEST)
 
+        serializer = self.get_serializer(
+            data=request.data,
+            context={"request": request},
+        )
 
-            exam = Exam.objects.create(
-                school = staff.school,
-                created_by = staff,
-                title = title,
-                description = description,
-                subject = subject,
-                exam_date= exam_date,
-                start_time = start_time,
-                end_time = end_time,
-                class_group = class_group
-            )
-            
-            exam.save()
-            
-            return Response({
-                "detail":"exam scheduled"
-            })
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        exam = Exam.objects.create(
+            school=staff.school,
+            created_by=staff,
+            title=serializer.validated_data["title"],
+            description=serializer.validated_data["description"],
+            subject=serializer.validated_data["subject"],
+            exam_date=serializer.validated_data["exam_date"],
+            start_time=serializer.validated_data["start_time"],
+            end_time=serializer.validated_data["end_time"],
+            class_group=serializer.validated_data["class_group"],
+        )
+
+        exam.save()
         
-        return Response(serializer.errors)
+        return Response({"detail": "exam scheduled"}, status=status.HTTP_201_CREATED)
+    
 
 def calculate_grade(marks, max_marks):
     if marks is None:
