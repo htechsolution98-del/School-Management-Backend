@@ -4431,7 +4431,7 @@ class StudentAttendanceSerializer(serializers.ModelSerializer):
 
 
 from rest_framework import serializers
-from .models import Homework, HomeworkSubmission
+from .models import Homework, HomeworkSubmissions
 
 # ======================== HOMEWORK SERIALIZERS ========================
 
@@ -4731,96 +4731,96 @@ class GetHomeworkSerializer(serializers.ModelSerializer):
 #         return super().create(validated_data)
 
 
-class HomeworkSubmissionDetailSerializer(serializers.ModelSerializer):
-    """
-    Detailed serializer for viewing a single submission with all details.
-    """
+# class HomeworkSubmissionDetailSerializer(serializers.ModelSerializer):
+#     """
+#     Detailed serializer for viewing a single submission with all details.
+#     """
 
-    student_name = serializers.SerializerMethodField()
-    homework_title = serializers.CharField(source="homework.title", read_only=True)
-    teacher_name = serializers.CharField(source="checked_by.staff.name", read_only=True)
+#     student_name = serializers.SerializerMethodField()
+#     homework_title = serializers.CharField(source="homework.title", read_only=True)
+#     teacher_name = serializers.CharField(source="checked_by.staff.name", read_only=True)
 
-    class Meta:
-        model = HomeworkSubmission
-        fields = [
-            "id",
-            "homework",
-            "homework_title",
-            "student",
-            "student_name",
-            "attachment",
-            "submitted_at",
-            "status",
-            "marks",
-            "teacher_remark",
-            "checked_by",
-            "teacher_name",
-            "checked_at",
-        ]
-        read_only_fields = fields
+#     class Meta:
+#         model = HomeworkSubmission
+#         fields = [
+#             "id",
+#             "homework",
+#             "homework_title",
+#             "student",
+#             "student_name",
+#             "attachment",
+#             "submitted_at",
+#             "status",
+#             "marks",
+#             "teacher_remark",
+#             "checked_by",
+#             "teacher_name",
+#             "checked_at",
+#         ]
+#         read_only_fields = fields
 
-    def get_student_name(self, obj):
-        return " ".join(
-            filter(
-                None,
-                [
-                    obj.student.surname,
-                    obj.student.name,
-                    obj.student.father_name,
-                ],
-            )
-        )
+#     def get_student_name(self, obj):
+#         return " ".join(
+#             filter(
+#                 None,
+#                 [
+#                     obj.student.surname,
+#                     obj.student.name,
+#                     obj.student.father_name,
+#                 ],
+#             )
+#         )
 
 
-class CheckHomeworkSubmissionSerializer(serializers.ModelSerializer):
-    """
-    Serializer for teachers to check and grade homework submissions.
-    """
+# class CheckHomeworkSubmissionSerializer(serializers.ModelSerializer):
+#     """
+#     Serializer for teachers to check and grade homework submissions.
+#     """
 
-    student_name = serializers.CharField(source="student.name", read_only=True)
+#     student_name = serializers.CharField(source="student.name", read_only=True)
 
-    class Meta:
-        model = HomeworkSubmission
-        fields = [
-            "id",
-            "student_name",
-            "status",
-            "marks",
-            "teacher_remark",
-            "checked_at",
-        ]
-        read_only_fields = [
-            "id",
-            "student_name",
-            "checked_at",
-        ]
+#     class Meta:
+#         model = HomeworkSubmission
+#         fields = [
+#             "id",
+#             "student_name",
+#             "status",
+#             "marks",
+#             "teacher_remark",
+#             "checked_at",
+#         ]
+#         read_only_fields = [
+#             "id",
+#             "student_name",
+#             "checked_at",
+#         ]
 
-    def validate_marks(self, value):
-        """Validate marks are between 0 and 100"""
-        if value is not None:
-            if value < 0 or value > 100:
-                raise serializers.ValidationError("Marks must be between 0 and 100.")
-        return value
+#     def validate_marks(self, value):
+#         """Validate marks are between 0 and 100"""
+#         if value is not None:
+#             if value < 0 or value > 100:
+#                 raise serializers.ValidationError("Marks must be between 0 and 100.")
+#         return value
 
-    def validate(self, attrs):
-        status = attrs.get("status", getattr(self.instance, "status", None))
+#     def validate(self, attrs):
+#         status = attrs.get("status", getattr(self.instance, "status", None))
 
-        if status == "checked" and not attrs.get("marks"):
-            raise serializers.ValidationError(
-                {"marks": "Marks are required when status is marked as 'checked'."}
-            )
+#         if status == "checked" and not attrs.get("marks"):
+#             raise serializers.ValidationError(
+#                 {"marks": "Marks are required when status is marked as 'checked'."}
+#             )
 
-        return attrs
+#         return attrs
 
-    def update(self, instance, validated_data):
-        request = self.context.get("request")
-        user = request.user if request and request.user.is_authenticated else None
+#     def update(self, instance, validated_data):
+#         request = self.context.get("request")
+#         user = request.user if request and request.user.is_authenticated else None
 
-        if validated_data.get("status") == "checked" and not instance.checked_by:
-            validated_data["checked_by"] = user
-            validated_data["checked_at"] = timezone.now()
+#         if validated_data.get("status") == "checked" and not instance.checked_by:
+#             validated_data["checked_by"] = user
+#             validated_data["checked_at"] = timezone.now()
 
-        return super().update(instance, validated_data)
+#         return super().update(instance, validated_data)
 
 
 class StudentHomeworkListSerializer(serializers.ModelSerializer):

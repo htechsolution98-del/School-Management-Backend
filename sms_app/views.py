@@ -4950,18 +4950,18 @@ class HomeworkSubmissionViewSet(ModelViewSet):
     def get_queryset(self):
     # Student: only their own submissions
         if hasattr(self.request.user, "student"):
-            return HomeworkSubmission.objects.filter(
+            return HomeworkSubmissions.objects.filter(
                 student=self.request.user.student
             )
 
         # Teacher: all submissions for homework created by them
         elif hasattr(self.request.user, "staff"):
-            return HomeworkSubmission.objects.filter(
+            return HomeworkSubmissions.objects.filter(
                 homework__teacher=self.request.user.staff,
                 homework__school=self.request.user.school
             )
 
-        return HomeworkSubmission.objects.none()
+        return HomeworkSubmissions.objects.none()
 
     def perform_create(self, serializer):
         serializer.save(
