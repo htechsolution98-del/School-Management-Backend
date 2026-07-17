@@ -533,7 +533,7 @@ class Isstudent(BasePermission):
         return (
             request.user
             and request.user.is_authenticated
-            and request.user.groups.filter(name="student").exists()
+            and request.user.groups.filter(name="STUDENT").exists()
         )
 class Isparent(BasePermission):
     def has_permission(self, request, view):
@@ -4048,16 +4048,27 @@ class HomeworkViewSet(ModelViewSet):
         #         queryset = queryset.none()
                 
         if self.is_student():
-            print("Student class:", student.school_class_id)
-            print("Student division:", student.division_id)
+            
             try:
                 student = self.request.user.student
             except Student.DoesNotExist:
                 return queryset.none()
+            print("Student class:", student.school_class_id)
+            print("Student division:", student.division_id)
 
             if not student.school_class_id or not student.division_id:
                 return queryset.none()
-
+            print(
+                    list(
+                        queryset.values(
+                            "id",
+                            "title",
+                            "division_id",
+                            "division__SchoolClass_id",
+                            "is_active",
+                        )
+                    )
+                )
             queryset = queryset.filter(
                 division__SchoolClass_id=student.school_class_id,
                 division_id=student.division_id,
@@ -4133,6 +4144,7 @@ class HomeworkViewSet(ModelViewSet):
                 {"error": "Student profile not found."},
                 status=status.HTTP_404_NOT_FOUND,
             )
+        
 
         if not student.school_class_id:
             return Response(
@@ -4164,7 +4176,7 @@ class HomeworkViewSet(ModelViewSet):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        submissions = homework.submissions.select_related("student", "checked_by")
+        submissions = homework.homeworksubmission_set.select_related("student", "checked_by")
         serializer = HomeworkSubmissionDetailSerializer(submissions, many=True)
         return Response(serializer.data)
 
@@ -4184,7 +4196,7 @@ class HomeworkViewSet(ModelViewSet):
                     division=division.division,
                     school=request.user.school,
                 ).count(),
-                "submitted_count": homework.submissions.filter(
+                "submitted_count": homework.homeworksubmission_set.filter(
                     status__in=["submitted", "checked"]
                 )
                 .values("student")
@@ -4429,7 +4441,7 @@ class HomeworkViewSet(ModelViewSet):
 #                 status=status.HTTP_403_FORBIDDEN,
 #             )
 
-#         submissions = homework.submissions.all()
+#         submissions = homework.homeworksubmission_set.all()
 #         total_students = Student.objects.filter(
 #             school_class=homework.division.SchoolClass,
 #             division=homework.division.division,
@@ -4915,14 +4927,22 @@ class ExamView(APIView):
 
 class HomeworkSubmissionViewSet(ModelViewSet):
     serializer_class = HomeworkSubmissionSerializer
-    queryset = HomeworkSubmission.objects.all()
+    queryset = HomeworkSubmissions.objects.all()
     permission_classes = []
 
 
 
     def get_permissions(self):
         if self.action in ["list", "retrieve"]:
-            return [Isteacher() | Isstudent()]
+            user = self.request.user
+
+            if hasattr(user, "staff"):
+                return [Isteacher()]
+
+            if hasattr(user, "student"):
+                return [Isstudent()]
+
+            return [IsAuthenticated()]
 
         return [Isstudent()]
 

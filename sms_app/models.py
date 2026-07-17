@@ -2383,8 +2383,8 @@ class Result(models.Model):
         
 
 
-class HomeworkSubmission(models.Model):
-    homework=models.ForeignKey(Homework,on_delete=models.CASCADE)
+class HomeworkSubmissions(models.Model):
+    homework=models.ForeignKey(Homework,on_delete=models.CASCADE,related_name='submissions')
     student=models.ForeignKey(Student,on_delete=models.CASCADE,related_name='submission')
     file = models.FileField(upload_to='homework_submissions/')
     submitted_at = models.DateTimeField(auto_now_add=True)

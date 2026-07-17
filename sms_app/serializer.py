@@ -4956,7 +4956,7 @@ class ExamNotificationSerializer(serializers.ModelSerializer):
 
 class HomeworkSubmissionSerializer(serializers.ModelSerializer):
     class Meta():
-        model=HomeworkSubmission
+        model=HomeworkSubmissions
         fields=["id","homework","file","submitted_at"]
         read_only_fields=["student","submitted_at"]
 
