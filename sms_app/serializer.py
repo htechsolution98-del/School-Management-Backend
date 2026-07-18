@@ -4485,7 +4485,7 @@ class HomeworkSerializer(serializers.ModelSerializer):
     def get_submission_count(self, obj):
         """Return count of total submissions for this homework"""
         # return obj.submissions.count()
-        return HomeworkSubmission.objects.all().count()
+        return HomeworkSubmissions.objects.all().count()
 
     def validate(self, attrs):
         request = self.context.get("request")
@@ -4518,80 +4518,80 @@ class HomeworkSerializer(serializers.ModelSerializer):
         return super().create(validated_data)
 
 
-class GetHomeworkSerializer(serializers.ModelSerializer):
-    """
-    Serializer for students to view homework for their division.
-    Shows homework details and submission status for the logged-in student.
-    """
+# class GetHomeworkSerializer(serializers.ModelSerializer):
+#     """
+#     Serializer for students to view homework for their division.
+#     Shows homework details and submission status for the logged-in student.
+#     """
 
-    division_name = serializers.CharField(source="division.division", read_only=True)
-    school_class_name = serializers.CharField(
-        source="division.SchoolClass.get_school_class_display", read_only=True
-    )
-    teacher_name = serializers.CharField(source="teacher.name", read_only=True)
+#     division_name = serializers.CharField(source="division.division", read_only=True)
+#     school_class_name = serializers.CharField(
+#         source="division.SchoolClass.get_school_class_display", read_only=True
+#     )
+#     teacher_name = serializers.CharField(source="teacher.name", read_only=True)
 
-    # Student's submission for this homework
-    student_submission = serializers.SerializerMethodField()
-    is_submitted = serializers.SerializerMethodField()
-    submission_status = serializers.SerializerMethodField()
-    is_late = serializers.SerializerMethodField()
+#     # Student's submission for this homework
+#     student_submission = serializers.SerializerMethodField()
+#     is_submitted = serializers.SerializerMethodField()
+#     submission_status = serializers.SerializerMethodField()
+#     is_late = serializers.SerializerMethodField()
 
-    class Meta:
-        model = Homework
-        fields = [
-            "id",
-            "division",
-            "division_name",
-            "school_class_name",
-            "teacher_name",
-            "title",
-            "description",
-            "assigned_date",
-            "due_date",
-            "attachment",
-            "is_active",
-            "is_submitted",
-            "submission_status",
-            "student_submission",
-            "is_late",
-        ]
-        read_only_fields = fields
+#     class Meta:
+#         model = Homework
+#         fields = [
+#             "id",
+#             "division",
+#             "division_name",
+#             "school_class_name",
+#             "teacher_name",
+#             "title",
+#             "description",
+#             "assigned_date",
+#             "due_date",
+#             "attachment",
+#             "is_active",
+#             "is_submitted",
+#             "submission_status",
+#             "student_submission",
+#             "is_late",
+#         ]
+#         read_only_fields = fields
 
-    def get_student_submission(self, obj):
-        """Get the logged-in student's submission for this homework"""
-        request = self.context.get("request")
-        if not request or not hasattr(request.user, "student"):
-            return None
+#     def get_student_submission(self, obj):
+#         """Get the logged-in student's submission for this homework"""
+#         request = self.context.get("request")
+#         if not request or not hasattr(request.user, "student"):
+#             return None
 
-        submission = obj.submissions.filter(student__user=request.user).first()
+#         submission = obj.submissions.filter(student__user=request.user).first()
 
-        if submission:
-            return HomeworkSubmissionDetailSerializer(submission).data
-        return None
+#         if submission:
+#             return HomeworkSubmissionDetailSerializer(submission).data
+#         return None
 
-    def get_is_submitted(self, obj):
-        """Check if the logged-in student has submitted this homework"""
-        request = self.context.get("request")
-        if not request or not hasattr(request.user, "student"):
-            return False
+#     def get_is_submitted(self, obj):
+#         """Check if the logged-in student has submitted this homework"""
+#         request = self.context.get("request")
+#         if not request or not hasattr(request.user, "student"):
+#             return False
 
-        return obj.submissions.filter(student__user=request.user).exists()
+#         return obj.submissions.filter(student__user=request.user).exists()
 
-    def get_submission_status(self, obj):
-        """Get the logged-in student's submission status"""
-        request = self.context.get("request")
-        if not request or not hasattr(request.user, "student"):
-            return None
+#     def get_submission_status(self, obj):
+#         """Get the logged-in student's submission status"""
+#         request = self.context.get("request")
+#         if not request or not hasattr(request.user, "student"):
+#             return None
 
-        submission = obj.submissions.filter(student__user=request.user).first()
+#         submission = obj.submissions.filter(student__user=request.user).first()
 
-        return submission.status if submission else None
+#         return submission.status if submission else None
 
-    def get_is_late(self, obj):
-        """Check if due date has passed"""
-        from django.utils import timezone
+#     def get_is_late(self, obj):
+#         """Check if due date has passed"""
+#         from django.utils import timezone
 
-        return timezone.now().date() > obj.due_date
+#         return timezone.now().date() > obj.due_date
 
 
 # class HomeworkSubmissionSerializer(serializers.ModelSerializer):
@@ -4937,7 +4937,7 @@ class StaffFaceVerifySerializer(serializers.Serializer):
 class StudentDocumentSerializer(serializers.ModelSerializer):
     class Meta:
         model=StudentDocument
-        fields=["student","document_type","title","description","document"]
+        fields=["id","student","document_type","title","description","document"]
 
 class StudentNotificationSerializer(serializers.ModelSerializer):
     class Meta:

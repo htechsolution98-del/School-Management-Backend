@@ -3998,6 +3998,7 @@ class HomeworkViewSet(ModelViewSet):
 
     permission_classes = [IsAuthenticated]
     queryset = Homework.objects.all()
+    serializer_class=HomeworkSerializer
 
     def get_student_division_name(self, student):
         # division_name = (student.division or "").strip()
@@ -4010,13 +4011,13 @@ class HomeworkViewSet(ModelViewSet):
 
         return division_name
 
-    def get_serializer_class(self):
-        """Return appropriate serializer based on action"""
-        if self.action == "student_homework":
-            return GetHomeworkSerializer
-        elif self.action == "list" and self.is_student():
-            return GetHomeworkSerializer
-        return HomeworkSerializer
+    # def get_serializer_class(self):
+    #     """Return appropriate serializer based on action"""
+    #     if self.action == "student_homework":
+    #         return GetHomeworkSerializer
+    #     elif self.action == "list" and self.is_student():
+    #         return GetHomeworkSerializer
+    #     return HomeworkSerializer
 
     def get_queryset(self):
         """Filter homework by school"""
@@ -4648,13 +4649,56 @@ class StaffFaceVerifyView(APIView):
 class StudentDocumentView(APIView):
     def get_permissions(self):
         if self.request.method == "GET":
-            return [IsAuthenticated(), Isparent(),Isstudent(),Isteacher()]
+            user = self.request.user
+
+            if hasattr(user, "staff"):
+                return [IsAuthenticated(), Isteacher()]
+
+            if hasattr(user, "student"):
+                return [IsAuthenticated(), Isstudent()]
+
+            if hasattr(user, "perents"):   
+                return [IsAuthenticated(), Isparent()]
+
+            return [IsAuthenticated()]
+
         return [IsAuthenticated(), Isteacher()]
 
-    def get(self,request):
-        parent=get_object_or_404(Perents,user=request.user)
-        studentdocument=StudentDocument.objects.filter(student__parent=parent)
-        serializer=StudentDocumentSerializer(studentdocument,many=True)
+    def get(self, request):
+
+        user = request.user
+
+    # Teacher → See all student documents of the school
+        if hasattr(user, "staff"):
+            student_documents = StudentDocument.objects.filter(
+                school=user.school
+            )
+
+        # Student → See only their own documents
+        elif hasattr(user, "student"):
+            student_documents = StudentDocument.objects.filter(
+                student=user.student
+            )
+
+        # Parent → See documents of their child/children
+        elif hasattr(user, "perents"):
+            parent = user.perents
+
+            student_documents = StudentDocument.objects.filter(
+                student__parent=parent
+            )
+
+        else:
+            return Response(
+                {"error": "Invalid user role."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        serializer = StudentDocumentSerializer(
+            student_documents,
+            many=True
+        )
+
         return Response(serializer.data)
     
     def post(self,request):
@@ -4701,9 +4745,25 @@ class StudentListView(APIView):
     permission_classes = [IsAuthenticated, Isteacher]
 
     def get(self, request):
+        try:
+            assign = AssignClass.objects.get(
+                teacher=request.user.staff,
+                school=request.user.school,
+                is_class_teacher=True
+            )
+        except AssignClass.DoesNotExist:
+            return Response(
+                {"error": "You are not assigned as a class teacher."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
         students = Student.objects.filter(
-            school=request.user.school
-        ).values("id", "name")
+            school=request.user.school,
+            division=assign.division
+        ).values(
+            "id",
+            "name"
+        )
 
         return Response(students)
 

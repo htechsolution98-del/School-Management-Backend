@@ -311,7 +311,7 @@ urlpatterns = [
     path('perstaff-leave/',GetRemainingLeavePerStaffView.as_view()),
     # path('homework-submission/',HomeworkSubmissionView.as_view()),
     path('api/student-documents/',StudentDocumentView.as_view()),
-    path("api/student-document/<int:id>/", StudentDocumentView.as_view()),
+    path("api/student-documents/<int:id>/", StudentDocumentView.as_view()),
     path("api/students/", StudentListView.as_view()),
     path('api/exam-notification/',ExamView.as_view()),
     path('api/exam-notification/<int:id>/',ExamView.as_view()),
