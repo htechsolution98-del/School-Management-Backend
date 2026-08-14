@@ -189,15 +189,38 @@ class GenerateSingleStudentFeeView(APIView):
         fee_wise_class_id = request.data.get("fee_wise_class")
         billing_period = request.data.get("billing_period")
 
-        if not all([student_id, academic_year_id, fee_wise_class_id, billing_period]):
+        if not student_id or not fee_wise_class_id or not billing_period:
             return Response({"error": "Missing required fields"}, status=status.HTTP_400_BAD_REQUEST)
 
         student = Student.objects.filter(id=student_id).first()
-        academic_year = AcademicYear.objects.filter(id=academic_year_id).first()
         fee_wise_class = FeeWiseClass.objects.filter(id=fee_wise_class_id).first()
 
-        if not student or not academic_year or not fee_wise_class:
+        if not student or not fee_wise_class:
             return Response({"error": "Invalid IDs provided"}, status=status.HTTP_404_NOT_FOUND)
+
+        academic_year = None
+        if academic_year_id and str(academic_year_id) != "0":
+            academic_year = AcademicYear.objects.filter(id=academic_year_id).first()
+
+        if not academic_year:
+            academic_year = (
+                AcademicYear.objects.filter(school=student.school, is_active=True).first()
+                or AcademicYear.objects.filter(school=student.school).first()
+                or AcademicYear.objects.first()
+            )
+
+        if not academic_year:
+            now_year = timezone.now().year
+            academic_year, _ = AcademicYear.objects.get_or_create(
+                name=f"{now_year}-{now_year + 1}",
+                defaults={
+                    "school": student.school,
+                    "is_active": True,
+                    "start_month": 4,
+                    "end_month": 3,
+                }
+            )
+
 
         existing = StudentFee.objects.filter(
             student=student, 
