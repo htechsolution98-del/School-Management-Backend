@@ -129,7 +129,7 @@ class SchoolView(ModelViewSet):
                 for feature in features
             ]
 
-            SchoolFeature.objects.bulk_create(school_features)
+            SchoolFeature.objects.bulk_create(school_features, ignore_conflicts=True)
 
             # ✅ Link user to school
             user.school = school  # if field exists
@@ -157,7 +157,8 @@ class SchoolView(ModelViewSet):
                 to_add = new_feature_ids - existing_feature_ids
                 if to_add:
                     new_sfs = [SchoolFeature(school=school, feature_id=fid, is_enabled=True) for fid in to_add]
-                    SchoolFeature.objects.bulk_create(new_sfs)
+                    SchoolFeature.objects.bulk_create(new_sfs, ignore_conflicts=True)
+
 
         cache.delete("school_list")
 
