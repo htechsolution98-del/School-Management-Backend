@@ -13,9 +13,10 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name="announcement",
             name="expires_at",
-            field=models.DateTimeField(default=1),
+            field=models.DateTimeField(default="2026-12-31 23:59:59"),
             preserve_default=False,
         ),
+
         migrations.AlterField(
             model_name="announcement",
             name="announcement_for",
