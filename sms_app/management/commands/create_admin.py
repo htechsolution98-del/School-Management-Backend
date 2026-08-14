@@ -1,31 +1,15 @@
 from django.core.management.base import BaseCommand
 from django.contrib.auth import get_user_model
-from sms_app.models import Feature
+from sms_app.models import School, Feature, SchoolFeature
+from sms_app.signals import seed_features_and_school_features, DEFAULT_FEATURES
 
 User = get_user_model()
 
-DEFAULT_FEATURES = [
-    "LIBRARIAN",
-    "FEES MANAGEMENT",
-    "INVENTORY",
-    "PRINCIPAL",
-    "TRANSPORTATION",
-    "TEACHER",
-    "CLERK",
-    "VICE PRINCIPAL",
-    "ASSISTANT CLERK",
-]
-
 class Command(BaseCommand):
-    help = "Creates default superadmin user and initial features"
+    help = "Creates default superadmin user, seeds features and initial demo school"
 
     def handle(self, *args, **options):
-        # 1. Seed Features
-        for feature_name in DEFAULT_FEATURES:
-            Feature.objects.get_or_create(name=feature_name)
-        self.stdout.write(self.style.SUCCESS("Default Features seeded successfully!"))
-
-        # 2. Seed Superadmin
+        # 1. Create/Update Superadmin User
         username = "superadmin"
         password = "adminpassword123"
         email = "superadmin@gmail.com"
@@ -49,3 +33,17 @@ class Command(BaseCommand):
             user.role = "superadmin"
             user.save()
             self.stdout.write(self.style.SUCCESS(f"Superadmin '{username}' updated successfully!"))
+
+        # 2. Ensure at least one default School exists if database is fresh
+        if not School.objects.exists():
+            school = School.objects.create(
+                login_id=user,
+                name="UMA SHIXAN TIRTH",
+                code="MG",
+                is_active=True,
+            )
+            self.stdout.write(self.style.SUCCESS(f"Default School '{school.name}' created!"))
+
+        # 3. Seed all features and attach to all schools dynamically
+        seed_features_and_school_features()
+        self.stdout.write(self.style.SUCCESS("All System Features seeded and attached to Schools!"))
