@@ -329,6 +329,20 @@ class ChangeModuleView(ModelViewSet):
 
 # =========PERMISSIONS===========
 
+from django.core.management import call_command
+from rest_framework import permissions
+
+class InitDatabaseView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        try:
+            call_command("create_admin")
+            return Response({"message": "Database initialized, Superadmin created, and Features seeded successfully!"}, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 
 
 

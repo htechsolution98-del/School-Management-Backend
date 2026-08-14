@@ -30,7 +30,9 @@ from drf_yasg import openapi
 from django.conf import settings
 from django.conf.urls.static import static
 from sms_app.views import *
+from sms_app.auth_views import InitDatabaseView
 from sms_app.finance_ledger_views import *
+
 
 
 from sms_app.harsh_views import *
@@ -251,7 +253,9 @@ router.register(r"reports", ReportsView, basename="report")
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('health/', health_check, name='health_check'),
+    path('api/init-db/', InitDatabaseView.as_view(), name='init_db'),
     path('api/',include(router.urls)),
+
     path('api/dashboard-count/', DashboardCountAPIView.as_view(), name='dashboard-count'),
     path('api/access/',CustomLoginView.as_view()),  
     
