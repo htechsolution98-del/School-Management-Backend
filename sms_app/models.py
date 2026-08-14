@@ -52,6 +52,9 @@ class School(models.Model):
     country = models.CharField(max_length=100, null=True, blank=True)
     pincode = models.CharField(max_length=10, null=True, blank=True)
 
+    logo = models.ImageField(upload_to="school_logos/", null=True, blank=True)
+    index_no = models.CharField(max_length=100, null=True, blank=True)
+
     is_active = models.BooleanField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
     updated_at = models.DateTimeField(auto_now=True, null=True, blank=True)
@@ -164,10 +167,28 @@ class CustomUser(AbstractUser):
         db_table = "custom_user"
 
 
+class Department(models.Model):
+    school = models.ForeignKey(School, on_delete=models.CASCADE, db_index=True)
+    name = models.CharField(max_length=100)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.name} - {self.school.name}"
+
+    class Meta:
+        db_table = "department"
+        unique_together = ("school", "name")
+
+
 class Staff(models.Model):
 
     school = models.ForeignKey(
         School, on_delete=models.CASCADE, null=True, blank=True, db_index=True
+    )
+    
+    department = models.ForeignKey(
+        Department, on_delete=models.SET_NULL, null=True, blank=True
     )
 
     # STAFF_CATEGORIES = [
@@ -254,40 +275,30 @@ class AcademicYear(models.Model):
         db_table = "academic_year"
 
 
+class ClassCategory(models.Model):
+    name = models.CharField(max_length=70)
+    school = models.ForeignKey(
+        School, on_delete=models.CASCADE, null=True, blank=True, db_index=True
+    )
+
+    def __str__(self):
+        return self.name
+
+    class Meta:
+        db_table = "class_category"
+
+
 class SchoolClass(models.Model):
 
     school = models.ForeignKey(
         School, on_delete=models.CASCADE, null=True, blank=True, db_index=True
     )
+    
+    category = models.ForeignKey(
+        ClassCategory, on_delete=models.CASCADE, null=True, blank=True
+    )
 
-    CLASS_CHOICES = [
-        ("nursery", "Nursery"),
-        ("lkg", "LKG"),
-        ("ukg", "UKG"),
-        ("class1", "Class 1"),
-        ("class2", "Class 2"),
-        ("class3", "Class 3"),
-        ("class4", "Class 4"),
-        ("class5", "Class 5"),
-        ("class6", "Class 6"),
-        ("class7", "Class 7"),
-        ("class8", "Class 8"),
-        ("class9_basic", "Class 9 Basic Math"),
-        ("class9_standard", "Class 9 Standard Math"),
-        ("class9_advanced", "Class 9 Advanced Math"),
-        ("class10_basic", "Class 10 Basic Math"),
-        ("class10_standard", "Class 10 Standard Math"),
-        ("class10_advanced", "Class 10 Advanced Math"),
-        # Streams after 10
-        ("class11_science", "Class 11 Science"),
-        ("class11_arts", "Class 11 Arts"),
-        ("class11_commerce", "Class 11 Commerce"),
-        ("class12_science", "Class 12 Science"),
-        ("class12_arts", "Class 12 Arts"),
-        ("class12_commerce", "Class 12 Commerce"),
-    ]
-
-    school_class = models.CharField(max_length=70, choices=CLASS_CHOICES)
+    school_class = models.CharField(max_length=70)
 
     def __str__(self):
         return self.school_class
@@ -574,12 +585,7 @@ class Student(models.Model):
         SchoolClass, on_delete=models.CASCADE, null=True, blank=True
     )
 
-    division = models.ForeignKey(
-        Division,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True
-    )
+    division = models.CharField(max_length=20, blank=True, null=True)
 
     admission_date = models.DateField(blank=True, null=True)
     gr_no = models.CharField(max_length=100, blank=True, null=True)
@@ -1105,7 +1111,12 @@ class LeaveType(models.Model):
     
 
     def __str__(self):
-        return f"{self.category.feature.name} - {self.leave_type}"
+        cat_name = (
+            self.category.feature.name
+            if (self.category and getattr(self.category, "feature", None))
+            else ""
+        )
+        return f"{cat_name} - {self.leave_type}" if cat_name else str(self.leave_type or "LeaveType")
 
     class Meta:
         db_table = "leave_type"
@@ -1132,6 +1143,7 @@ class LeaveRequest(models.Model):
 
     total_days = models.IntegerField(null=True, blank=True)
     reason = models.TextField(null=True, blank=True)
+    status = models.CharField(max_length=20, default="PENDING", null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
     updated_at = models.DateTimeField(
@@ -1376,9 +1388,11 @@ class StudentFee(models.Model):
         if (
             not self.late_fee_enabled
             or not self.due_date
-            or self.status in ["paid", "cancelled"]
         ):
             return 0
+            
+        if self.status in ["paid", "cancelled"]:
+            return self.fine_amount
 
         today = today or timezone.localdate()
         penalty_start_date = self.due_date + timedelta(days=self.grace_days)
@@ -1406,13 +1420,14 @@ class StudentFee(models.Model):
         return self.fine_amount
 
     def refresh_payment_status(self):
+        from django.db.models import Q
         from django.db.models import Sum
         from django.utils import timezone
 
         total_paid = (
-            self.payments.filter(is_verified=True).aggregate(total=Sum("amount"))[
-                "total"
-            ]
+            self.payments.filter(is_bounced=False)
+            .filter(Q(is_verified=True) | ~Q(payment_mode="cheque"))
+            .aggregate(total=Sum("amount"))["total"]
             or 0
         )
         self.paid_amount = total_paid
@@ -1428,7 +1443,8 @@ class StudentFee(models.Model):
             self.paid_at = None
 
         latest_payment = (
-            self.payments.filter(is_verified=True)
+            self.payments.filter(is_bounced=False)
+            .filter(Q(is_verified=True) | ~Q(payment_mode="cheque"))
             .order_by("-payment_date", "-created_at")
             .first()
         )
@@ -1479,6 +1495,7 @@ class StudentFeePayment(models.Model):
         ("cheque", "Cheque"),
         ("bank_transfer", "Bank Transfer"),
         ("upi", "UPI"),
+        ("card", "Card"),
     ]
 
     school = models.ForeignKey(School, on_delete=models.CASCADE, null=True, blank=True)
@@ -1508,6 +1525,7 @@ class StudentFeePayment(models.Model):
         related_name="collected_fee_payments",
     )
     is_verified = models.BooleanField(default=False)
+    is_bounced = models.BooleanField(default=False)
     verified_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,

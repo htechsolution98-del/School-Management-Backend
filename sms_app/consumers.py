@@ -274,9 +274,9 @@ class AnnouncementConsumer(AsyncWebsocketConsumer):
             return
         school=await self.get_school(user)
         print(school)
-        role=user.role.upper()
-        print("Role",role)
-        self.role_group=f"school_{school.id}_choice_{role}"
+        role = user.role.upper() if user.role else ""
+        print("Role", role)
+        self.role_group = f"school_{school.id}_choice_{role}"
         await self.channel_layer.group_add(
             self.role_group,
             self.channel_name
@@ -306,6 +306,15 @@ class AnnouncementConsumer(AsyncWebsocketConsumer):
             text_data=json.dumps({
                 "title":event["title"],
                 "description":event["description"]
+            })
+        )
+
+    async def school_deactivated(self,event):
+        await self.send(
+            text_data=json.dumps({
+                "type": "logout",
+                "reason": "school_deactivated",
+                "message": event.get("message", "School is deactivated. Contact administrator."),
             })
         )
 

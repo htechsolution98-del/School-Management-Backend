@@ -19,11 +19,13 @@ class JWTAuthMiddleware:
         for key, value in scope.get("headers", []):
             if key == b"authorization":
                 auth = value.decode()
-                print("AUTH:", auth)
-
                 if auth.startswith("Bearer "):
                     token = auth.split(" ")[1]
-                    print("TOKEN:", token)
+            elif key == b"cookie":
+                cookies = value.decode().split("; ")
+                for cookie in cookies:
+                    if cookie.startswith("access_token="):
+                        token = cookie.split("=")[1]
 
         if not token:
             query_string = scope.get("query_string", b"").decode()

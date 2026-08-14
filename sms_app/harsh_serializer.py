@@ -95,23 +95,21 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
         super().__init__(*args, **kwargs)
 
         request = self.context.get("request")
-        if request:
-            staff = Staff.objects.filter(
-                user=request.user,
-                school=request.user.school
-            ).first()
-
-            if staff:
-                self.fields["leave_type"].queryset = LeaveType.objects.filter(
-                    category__feature__name=staff.category,
-                    leave_template__school=request.user.school
-                )
+        if request and getattr(request.user, "school", None):
+            school = request.user.school
+            qs = LeaveType.objects.filter(leave_template__school=school)
+            staff = Staff.objects.filter(user=request.user, school=school).first()
+            if staff and getattr(staff, "category", None):
+                cat_qs = qs.filter(category__feature__name=staff.category)
+                if cat_qs.exists():
+                    qs = cat_qs
+            self.fields["leave_type"].queryset = qs
     
     def create(self, validated_data):
         start_date = validated_data.get("start_date")
         end_date = validated_data.get("end_date")
-        school = self.context.get("request").user.school
-        user = self.context.get("request").user
+        request = self.context.get("request")
+        user = request.user if request else None
 
         if end_date < start_date:
             raise serializers.ValidationError("End date cannot be before start date.")
@@ -119,21 +117,26 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
         # ✅ calculate total days
         total_days = (end_date - start_date).days + 1
         validated_data["total_days"] = total_days
-        validated_data["school"] = school
 
-        staff = Staff.objects.filter(user=user, school=school).first()
+        staff = Staff.objects.filter(user=user).first() if user else None
+        school = (user.school if user and getattr(user, "school", None) else None) or (staff.school if staff else None)
+
+        validated_data["school"] = school
         validated_data["staff"] = staff
 
+        validated_data.pop("status", None)
+
         # ✅ create main LeaveRequest first
-        leave_request = LeaveRequest.objects.create(**validated_data)
+        leave_request = LeaveRequest.objects.create(status="PENDING", **validated_data)
 
         # ✅ now create LeavePerDay entries
         current = start_date
         while current <= end_date:
             LeavePerDay.objects.create(
                 school=school,
-                leave=leave_request,  # ✅ correct instance
-                date=current,  # store as DateField (recommended)
+                leave=leave_request,
+                date=current,
+                status="PENDING",
             )
             current += timedelta(days=1)
 
@@ -164,8 +167,9 @@ class GetLeavePerDaySerializer(serializers.ModelSerializer):
 class GetLeaveRequestSerializer(serializers.ModelSerializer):
     leave_days = GetLeavePerDaySerializer(many=True, read_only=True)
     remaining_leaves = serializers.SerializerMethodField()
-    
     staff_name = serializers.CharField(source="staff.name", read_only=True)
+    leave_type_name = serializers.SerializerMethodField()
+    status = serializers.SerializerMethodField()
 
     class Meta:
         model = LeaveRequest
@@ -174,10 +178,12 @@ class GetLeaveRequestSerializer(serializers.ModelSerializer):
             "staff",
             "staff_name",
             "leave_type",
+            "leave_type_name",
             "reason",
             "total_days",
             "start_date",
             "end_date",
+            "status",
             "created_at",
             "updated_at",
             "leave_days",
@@ -192,9 +198,29 @@ class GetLeaveRequestSerializer(serializers.ModelSerializer):
             "remaining_leaves",
         ]
 
+    def get_leave_type_name(self, obj):
+        if obj.leave_type:
+            return getattr(obj.leave_type, "leave_type", str(obj.leave_type))
+        return "Casual Leave"
+
+    def get_status(self, obj):
+        if hasattr(obj, "status") and obj.status:
+            return obj.status
+        first_day = obj.leave_days.first() if hasattr(obj, "leave_days") else None
+        if first_day and first_day.status:
+            return first_day.status
+        return "PENDING"
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        # Ensure leave_type is represented as a name string if expected by frontend
+        if instance.leave_type:
+            data["leave_type"] = getattr(instance.leave_type, "leave_type", str(instance.leave_type))
+        return data
+
     def get_remaining_leaves(self, obj):
         queryset = StaffRemainingLeave.objects.filter(
-            staff=obj.staff, school=obj.school
+            staff=obj.staff
         )
         return StaffRemainingLeaveSerializer(queryset, many=True).data
     
@@ -308,6 +334,20 @@ class ChangeLeavePerDaySerializer(serializers.ModelSerializer):
 
         instance.status = new_status
         instance.save()
+
+        # Sync parent LeaveRequest status
+        if leave_request:
+            all_days = leave_request.leave_days.all()
+            if all_days.exists():
+                statuses = set(d.status for d in all_days)
+                if len(statuses) == 1:
+                    parent_status = list(statuses)[0]
+                elif "APPROVED" in statuses and ("REJECTED" in statuses or "PENDING" in statuses):
+                    parent_status = "PARTIAL"
+                else:
+                    parent_status = "PENDING"
+                leave_request.status = parent_status
+                leave_request.save()
 
         return instance
     
@@ -664,9 +704,11 @@ class NewLeaveTypeSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "created_at"]
  
     def get_category_name(self, obj):
-        if obj.category and hasattr(obj.category, "feature"):
-            return obj.category.feature.name
-        return None
+        if obj.category:
+            if hasattr(obj.category, "feature") and obj.category.feature:
+                return obj.category.feature.name
+            return getattr(obj.category, "feature_name", None)
+        return "All Staff"
  
     def get_fields(self):
         fields = super().get_fields()

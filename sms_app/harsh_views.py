@@ -1,12 +1,12 @@
 from django.utils import timezone
 from .models import StaffRemainingLeave
 from .models import *
-from .serializer import *
 from rest_framework.viewsets import ModelViewSet, ViewSet
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView;
 from rest_framework.response import Response
 from rest_framework.permissions import BasePermission
+from .permissions import IsClerkOrPrincipal, IsCLerk, Isprincipal, IsPrincipalOrTrustee
 from .harsh_serializer import *
 from rest_framework.generics import GenericAPIView, ListCreateAPIView, ListAPIView
 from rest_framework import status
@@ -779,16 +779,23 @@ from rest_framework.exceptions import PermissionDenied, NotFound
 
 
 # Helper
-def get_clerk_school(request):
+def get_user_school(request):
+    """Return the school for any staff-level user (CLERK, PRINCIPAL, TRUSTEE, ADMIN)."""
     user = request.user
-    if not hasattr(user, "role") or user.role != "CLERK":
-        raise PermissionDenied("Only clerks can perform this action.")
+    allowed_roles = ["CLERK", "PRINCIPAL", "TRUSTEE", "ADMIN"]
+    role = getattr(user, "role", None)
+    if role not in allowed_roles:
+        raise PermissionDenied("You do not have permission to perform this action.")
     school = getattr(user, "school", None)
     if school is None:
-        raise PermissionDenied("Clerk is not associated with any school.")
+        raise PermissionDenied("Your account is not associated with any school.")
     return school
- 
- 
+
+
+# Keep backward-compatible alias
+def get_clerk_school(request):
+    return get_user_school(request)
+
 
 # LeaveTemplate ViewSet
 class LeaveTemplateViewSet(ModelViewSet):
@@ -899,29 +906,31 @@ class GetStaffRemainingleave(ListAPIView): # perticular staff remaining leaves
     
     
     
-class GetStaffLeaveRequest(APIView): # perticular staff leave request to staff see there leave request
+class GetStaffLeaveRequest(APIView): # particular staff leave request to staff see their leave request
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        # leave_template = request.data.get("leave_template")
         user = request.user
-
         staff = Staff.objects.filter(user=user).first()
-        queryset = LeaveRequest.objects.filter(
-            staff=staff, school=user.school
-            # , leave_template=leave_template
-        )
+        if not staff:
+            return Response([])
 
+        school = user.school or staff.school
+        if school:
+            # Backfill school on any orphaned leave requests for this staff
+            LeaveRequest.objects.filter(staff=staff, school__isnull=True).update(school=school)
+
+        queryset = LeaveRequest.objects.filter(staff=staff).order_by("-id")
         serializer = GetLeaveRequestSerializer(queryset, many=True)
         return Response(serializer.data)
         
         
         
         
-class GetLeaveRequestView(ModelViewSet): #for all the leaves to clerk can see and approve
+class GetLeaveRequestView(ModelViewSet): #for all the leaves — clerk/principal/trustee can view
     queryset = LeaveRequest.objects.all()
     serializer_class = GetLeaveRequestSerializer
-    permission_classes = [IsAuthenticated, IsCLerk]
+    permission_classes = [IsAuthenticated, IsClerkOrPrincipal]
     http_method_names = ["get"]
 
     def get_queryset(self):
@@ -933,16 +942,16 @@ class GetLeaveRequestView(ModelViewSet): #for all the leaves to clerk can see an
     
     
     
-class ChangeLeaveView(ModelViewSet): # for approving day wise APPROVAL
+class ChangeLeaveView(ModelViewSet): # for approving day wise APPROVAL — principal/clerk/trustee
     queryset = LeavePerDay.objects.all()
     serializer_class = ChangeLeavePerDaySerializer
-    permission_classes = [IsAuthenticated, IsCLerk]
+    permission_classes = [IsAuthenticated, IsClerkOrPrincipal]
     http_method_names = ["patch"]
 
     def update(self, request, *args, **kwargs):
         instance = self.get_object()
 
-        if instance.leave.school != request.user.school:
+        if request.user.school and instance.leave.school and instance.leave.school != request.user.school:
             return Response(
                 {"error": "You are not allowed to modify this record"}, status=403
             )
@@ -952,17 +961,13 @@ class ChangeLeaveView(ModelViewSet): # for approving day wise APPROVAL
     
 
 
-class ChangeAllLeaveView(APIView): # for APPROVE all day leave
-    permission_classes = [IsAuthenticated, IsCLerk]
+class ChangeAllLeaveView(APIView): # for APPROVE all day leave — principal/clerk/trustee
+    permission_classes = [IsAuthenticated, IsClerkOrPrincipal]
 
     def patch(self, request, pk):
-        
         status_value = request.data.get("status")
 
-        leave_request = LeaveRequest.objects.filter(
-            id=pk,
-            school=request.user.school
-        ).first()
+        leave_request = LeaveRequest.objects.filter(id=pk).first()
 
         if not leave_request:
             return Response(
@@ -970,12 +975,9 @@ class ChangeAllLeaveView(APIView): # for APPROVE all day leave
                 status=404
             )
 
-        leave_days = leave_request.leave_days.filter(
-            status="PENDING"
-        )
+        leave_days = leave_request.leave_days.all()
 
         for leave_day in leave_days:
-
             serializer = ChangeLeavePerDaySerializer(
                 leave_day,  
                 data={"status": status_value},
@@ -986,8 +988,11 @@ class ChangeAllLeaveView(APIView): # for APPROVE all day leave
             serializer.is_valid(raise_exception=True)
             serializer.save()
 
+        leave_request.status = status_value
+        leave_request.save()
+
         return Response(
-            {"message": "All leave days approved"}
+            {"message": f"All leave days updated to {status_value}"}
         )
     
             

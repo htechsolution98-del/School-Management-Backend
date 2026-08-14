@@ -30,6 +30,7 @@ from drf_yasg import openapi
 from django.conf import settings
 from django.conf.urls.static import static
 from sms_app.views import *
+from sms_app.finance_ledger_views import *
 
 
 from sms_app.harsh_views import *
@@ -55,8 +56,9 @@ router.register(r'changefeaturestatus',ChangeFeatureStatusVIew, basename='change
 router.register(r'getmodule',ModuleView,basename='getmodule')
 
 router.register(r'SchoolView',SchoolView, basename='SchoolView') # DONE
-# router.register(r'schoollist',SchoolListView,basename='schoollist')
-# router.register(r'razardata',RazarDataView,basename='razardata')
+from sms_app.staff_views import DepartmentViewSet
+
+router.register(r'departments', DepartmentViewSet, basename='departments')
 router.register(r'StaffView',StaffView, basename='StaffView') # DONE
 # router.register(r'studentSignUp',StudentSignUpView, basename='studentSignUp') # On Changing
 
@@ -64,6 +66,7 @@ router.register(r'StaffView',StaffView, basename='StaffView') # DONE
 
 # =========ADMISSIONS PROCESS ROUTER========
 
+router.register(r'classcategory', ClassCategoryViewSet, basename='classcategory')
 router.register(r'schoolclass', SchoolClassView, basename='schoolclass')  #only use principle METHOD [GET,POST,PUT,DELETE]
 router.register(r'getclass', ClassView, basename='getclass')  #For Admission Form class Drop Down METHOD [GET]
 
@@ -252,7 +255,7 @@ urlpatterns = [
     path('api/dashboard-count/', DashboardCountAPIView.as_view(), name='dashboard-count'),
     path('api/access/',CustomLoginView.as_view()),  
     
-    path('api/refresh/',TokenRefreshView.as_view()),
+    path('api/refresh/', CookieTokenRefreshView.as_view(), name='token_refresh'),
     
     #FOR ATTENDANCE LOCATION
     path('api/get-location/', GetLocationView.as_view()),
@@ -297,12 +300,15 @@ urlpatterns = [
     
     # path('in/',TemplateView.as_view(template_name='index.html')),
     path('api/import-students/',upload_students.as_view()),
+
     path('api/today/',TodayAttendanceStatusView.as_view()),
     path('api/razor/order/',RazorpayOrderView.as_view()),
     path('api/payment/verify/',VerifyPaymentView.as_view()),
     path('api/my-fees/', MyStudentFeeView.as_view()),
     path('api/student-fee/razor/order/', StudentFeeRazorpayOrderView.as_view()),
     path('api/student-fee/razor/verify/', StudentFeeRazorpayVerifyView.as_view()),
+    path('api/student-ledger/schedule/', StudentLedgerScheduleView.as_view()),
+    path('api/student-ledger/generate-fee/', GenerateSingleStudentFeeView.as_view()),
     path('api/offline/payment/',OffilinePaymentView.as_view()),
     path('api/get_receipt/<int:student_id>/<int:form_id>/',get_receipt),
     path('api/schoollist/',SchoolListView.as_view()),

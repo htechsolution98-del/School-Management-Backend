@@ -1,5 +1,6 @@
 
 from rest_framework_simplejwt.authentication import JWTAuthentication
+from rest_framework_simplejwt.exceptions import AuthenticationFailed
 
 
 class CookieJWTAuthentication(JWTAuthentication):
@@ -37,4 +38,15 @@ class CookieJWTAuthentication(JWTAuthentication):
         # =====================================
         # Return Authenticated User
         # =====================================
-        return self.get_user(validated_token), validated_token
+        user = self.get_user(validated_token)
+
+        # =====================================
+        # Block Users Of Deactivated Schools
+        # =====================================
+        school = getattr(user, "school", None)
+        if school and school.is_active is False and not user.is_superuser:
+            raise AuthenticationFailed(
+                {"message": "School is deactivated. Contact administrator."}
+            )
+
+        return user, validated_token

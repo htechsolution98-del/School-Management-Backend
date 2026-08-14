@@ -55,14 +55,13 @@ ASGI_APPLICATION = "sms.asgi.application"
 ALLOWED_HOSTS = ['*']  # for testing
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
-    "django.middleware.common.CommonMiddleware",
-    "whitenoise.middleware.WhiteNoiseMiddleware",
-    
     "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "sms_app.school_middleware.SchoolStatusMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
@@ -109,11 +108,8 @@ CHANNEL_LAYERS = {
     
 CACHES = {
     "default": {
-        "BACKEND": "django_redis.cache.RedisCache",
-        "LOCATION": REDIS_URL,
-        "OPTIONS": {
-            "CLIENT_CLASS": "django_redis.client.DefaultClient",
-        }
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "unique-snowflake",
     }
 }
 
@@ -138,7 +134,9 @@ SIMPLE_JWT = {
 
 CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:8000",
-    "https://school-management-system-sms-z8kv.onrender.com"
+    "https://school-management-system-sms-z8kv.onrender.com",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
 ]
 
 SESSION_COOKIE_SAMESITE = "None"
@@ -158,7 +156,11 @@ REST_FRAMEWORK = {
     # "sms_app.authentication.JWTAuthentication",
     "sms_app.authentication.CookieJWTAuthentication",
     ),
-
+    "DEFAULT_RENDERER_CLASSES": (
+        "rest_framework.renderers.JSONRenderer",
+    ),
+    "DATE_FORMAT": "%d-%m-%Y",
+    "DATE_INPUT_FORMATS": ["%d-%m-%Y"],
 }
 
 RAZOR_PAY_KEY_ID = 'rzp_test_SFctsjgfvcrQ6h'
