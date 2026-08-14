@@ -18,13 +18,16 @@ class Command(BaseCommand):
                 email=email,
                 password=password,
             )
+            user.mobile = "superadmin"
             user.role = "superadmin"
             user.save()
             self.stdout.write(self.style.SUCCESS(f"Superadmin '{username}' created successfully!"))
         else:
             user.set_password(password)
+            user.mobile = "superadmin"
             user.is_superuser = True
             user.is_staff = True
             user.role = "superadmin"
             user.save()
             self.stdout.write(self.style.SUCCESS(f"Superadmin '{username}' updated successfully!"))
+
