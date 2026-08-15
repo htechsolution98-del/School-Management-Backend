@@ -1,0 +1,48 @@
+  name: School-Management-Backend
+
+  on:
+    push:
+      branches:
+        - stg
+
+  jobs:
+    deploy:
+      runs-on: ubuntu-latest
+      steps:
+        - name: Checkout Repository
+          uses: actions/checkout@v5
+              
+        - name: Install SSH Key
+          run: |
+            mkdir -p ~/.ssh
+            echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+            chmod 600 ~/.ssh/id_rsa
+            ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
+
+        - name: Deploy Backend
+          run: |
+            ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} << 'SSHEOF'
+              set -e
+              cd ${{ secrets.BACKEND_WORK_DIR }} 
+
+              echo "=== Git Pull ==="
+              git pull origin ${{ secrets.BACKEND_BRANCH }}
+
+              echo "=== Install/Update Dependencies ==="
+              docker exec ${{ secrets.BACKEND_CONT_NAME }} pip install --no-cache-dir -r requirements.txt
+
+              echo "=== Run Migrations ==="
+              docker exec ${{ secrets.BACKEND_CONT_NAME }} python manage.py migrate --noinput
+
+              echo "=== Collect Static Files ==="
+              docker exec ${{ secrets.BACKEND_CONT_NAME }} python manage.py collectstatic --noinput
+
+              echo "=== Restart Container ==="
+              docker restart ${{ secrets.BACKEND_CONT_NAME }}
+
+              echo "=== Deployment Successful... DevOps Team==="
+            SSHEOF
+
+        - name: Cleanup SSH
+          if: always()
+          run: rm -rf ~/.ssh
