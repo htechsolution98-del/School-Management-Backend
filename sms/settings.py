@@ -15,8 +15,6 @@ from pathlib import Path
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-
-
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
@@ -27,8 +25,6 @@ SECRET_KEY = "django-insecure-6d4gt&zg%n8(@qd1@=x0lcnrn%49q@r(xd1=fv6rs#8zmll^zj
 DEBUG = True
 
 # ALLOWED_HOSTS = []
-
-
 
 # Application definition
 
@@ -103,8 +99,6 @@ CHANNEL_LAYERS = {
         },
     },
 }
-
-    
     
 CACHES = {
     "default": {
@@ -122,13 +116,9 @@ SIMPLE_JWT = {
 
     # Refresh token lifetime
     "REFRESH_TOKEN_LIFETIME": timedelta(days=1),
-    
     "ROTATE_REFRESH_TOKENS": True,
-
     "BLACKLIST_AFTER_ROTATION": True,
-
     "UPDATE_LAST_LOGIN": True,
-
 
 }
 
