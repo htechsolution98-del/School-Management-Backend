@@ -28,6 +28,7 @@ class Command(BaseCommand):
             self.stdout.write(self.style.SUCCESS(f"Superadmin '{username}' created successfully!"))
         else:
             user.set_password(password)
+            user.email = email
             user.mobile = "superadmin"
             user.is_superuser = True
             user.is_staff = True

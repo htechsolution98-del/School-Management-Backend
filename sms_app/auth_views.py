@@ -2,7 +2,7 @@ from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.viewsets import ModelViewSet
 from rest_framework import generics
-from rest_framework_simplejwt.views import TokenObtainPairView
+from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from rest_framework.response import Response
 from rest_framework import status, viewsets
 from django.contrib.auth import authenticate
@@ -45,30 +45,46 @@ class CustomLoginView(TokenObtainPairView):
     #     return response
 
 
-# class CookieTokenRefreshView(TokenRefreshView):
-#     def post(self, request, *args, **kwargs):
+class CookieTokenRefreshView(TokenRefreshView):
+    def post(self, request, *args, **kwargs):
+        refresh_token = request.data.get("refresh") or request.COOKIES.get("refresh_token")
 
-#         refresh_token = request.COOKIES.get('refresh_token')
+        if not refresh_token:
+            return Response(
+                {"detail": "Refresh token is required.", "code": "token_not_valid"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-#         if not refresh_token:
-#             return None
+        data = request.data.copy() if hasattr(request.data, "copy") else dict(request.data)
+        data["refresh"] = refresh_token
 
-#         request.data['refresh'] = refresh_token
+        serializer = self.get_serializer(data=data)
 
-#         response = super().post(request, *args, **kwargs)
+        try:
+            serializer.is_valid(raise_exception=True)
+        except Exception:
+            return Response(
+                {"detail": "Token is invalid or expired", "code": "token_not_valid"},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
 
-#         if response.status_code == 200:
-#             access_token = response.get('access')
+        token_data = serializer.validated_data
+        access_token = token_data.get("access")
 
-#             response.set_cookie(
-#                 key='access_token',
-#                 value=access_token,
-#                 httponly=True,
-#                 secure=False,
-#                 samesite='Lax'
-#             )
+        is_secure = request.is_secure()
+        samesite = "None" if is_secure else "Lax"
 
-#         return response
+        response = Response(token_data, status=status.HTTP_200_OK)
+        if access_token:
+            response.set_cookie(
+                key="access_token",
+                value=access_token,
+                httponly=True,
+                secure=is_secure,
+                samesite=samesite,
+            )
+
+        return response
 
 
 # ====== CODE for GENERATE ID & CODE =====
