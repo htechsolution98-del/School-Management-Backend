@@ -143,6 +143,7 @@ CSRF_TRUSTED_ORIGINS = [
     "https://api.vidyapranali.in",
     "https://vidyapranali.in",
 ]
+
 SESSION_COOKIE_SAMESITE = "None"
 SESSION_COOKIE_SECURE = True
 
@@ -188,9 +189,6 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 #         'NAME': BASE_DIR / 'db.sqlite3',
 #     }
 # }
-
-
-
 
 import dj_database_url
 DATABASE_URL = os.environ.get("DATABASE_URL")
@@ -242,13 +240,9 @@ AUTH_PASSWORD_VALIDATORS = [
 
 # Internationalization
 # https://docs.djangoproject.com/en/6.0/topics/i18n/
-
 LANGUAGE_CODE = "en-us"
-
 TIME_ZONE = "UTC"
-
 USE_I18N = True
-
 USE_TZ = True
 
 
@@ -257,26 +251,14 @@ USE_TZ = True
 
 STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
-
-
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
-
-
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
-
 EMAIL_HOST = 'smtp.gmail.com'
-
 EMAIL_POST = 587
-
 EMAIL_USE_TLS = True
-
 EMAIL_HOST_USER = 'yash.error.1@gmail.com'
-
 EMAIL_HOST_PASSWORD = 'zjsartihpvaqfvpi'
-
 DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
-
 FACEPP_API_KEY='bjE_bVqsDDgX6ekpuqdDjwZnnydn27zG'
-
 FACEPP_API_SECRET='waQF9vWlZyH-HQtqKJezJlX7vAAjNYY4'
