@@ -140,41 +140,30 @@ class VerifyOTPSerializer(serializers.Serializer):
 
 
 class LoginSerializer(serializers.Serializer):
-    email = serializers.EmailField(required=False)
-    mobile = serializers.CharField(required=False)
-    username = serializers.CharField(required=False)
+    email = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    mobile = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    username = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     password = serializers.CharField(write_only=True)
 
     def validate(self, data):
         email = data.get("email")
         mobile = data.get("mobile")
+        username = data.get("username")
         password = data.get("password")
 
-        email = email.lower().strip() if email else None
-        mobile = mobile.strip() if mobile else None
-        # username = username.strip() if username else None
-
-        provided_credentials = [email, mobile]
-        provided_count = sum(1 for value in provided_credentials if value)
-
-        if provided_count == 0:
+        raw_identifier = email or mobile or username
+        if not raw_identifier:
             raise serializers.ValidationError(
                 {"message": "Provide email, mobile, or username"}
             )
 
-        if provided_count > 1:
-            raise serializers.ValidationError(
-                {"message": "Provide only one of email, mobile, or username"}
-            )
+        identifier = str(raw_identifier).strip()
 
-        if email:
-            user = CustomUser.objects.filter(email=email).first()
-
-        if mobile:
-            user = CustomUser.objects.filter(mobile=mobile).first()
-            if not user:
-                user = CustomUser.objects.filter(username=mobile).first()
-                print(user.password)
+        user = CustomUser.objects.filter(
+            Q(email__iexact=identifier)
+            | Q(username__iexact=identifier)
+            | Q(mobile=identifier)
+        ).first()
 
         if not user or not user.check_password(password):
             raise serializers.ValidationError({"message": "Invalid credentials"})
