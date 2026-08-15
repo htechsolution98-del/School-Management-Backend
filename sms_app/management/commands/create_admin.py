@@ -12,10 +12,10 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         # 1. Create/Update Superadmin User
         username = "superadmin"
-        password = "adminpassword123"
-        email = "superadmin@gmail.com"
+        password = "Super123"
+        email = "superadmin@example.com"
         
-        user = User.objects.filter(username=username).first()
+        user = User.objects.filter(username=username).first() or User.objects.filter(email=email).first()
         if not user:
             user = User.objects.create_superuser(
                 username=username,
@@ -27,8 +27,9 @@ class Command(BaseCommand):
             user.save()
             self.stdout.write(self.style.SUCCESS(f"Superadmin '{username}' created successfully!"))
         else:
-            user.set_password(password)
+            user.username = username
             user.email = email
+            user.set_password(password)
             user.mobile = "superadmin"
             user.is_superuser = True
             user.is_staff = True
