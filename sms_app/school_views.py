@@ -21,9 +21,13 @@ User = get_user_model()
 class FeatureView(ModelViewSet):
     queryset = Feature.objects.all()
     serializer_class = FeatureSerialzer
-    # permission_classes = [IsAuthenticated, Is_super_admin]
-
     http_method_names = ["get", "post", "delete"]
+
+    def list(self, request, *args, **kwargs):
+        if not Feature.objects.exists():
+            from sms_app.signals import seed_features_and_school_features
+            seed_features_and_school_features()
+        return super().list(request, *args, **kwargs)
 
     def create(self, request, *args, **kwargs):
         response = super().create(request, *args, **kwargs)
