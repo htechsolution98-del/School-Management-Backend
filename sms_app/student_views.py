@@ -15,6 +15,7 @@ from .utils import *
 import datetime
 from django.core.cache import cache
 from django.db import transaction
+from django.db.models import Q
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.decorators import action
 
@@ -77,16 +78,17 @@ class AdmissionFormViewSet(ModelViewSet):
         )
 
 
-# ====this view set for view admission form field====
-
-
-
-
 class FormStatus(ModelViewSet):
     queryset = AdmissionForm.objects.all()
     serializer_class = ChangeFormStatus
-    permission_classes = [IsAuthenticated, IsCLerk]
+    permission_classes = [IsAuthenticated]
     http_method_names = ["patch"]
+
+    def get_queryset(self):
+        user = getattr(self.request, "user", None)
+        if user and getattr(user, "school", None):
+            return AdmissionForm.objects.filter(school=user.school)
+        return AdmissionForm.objects.all()
 
     def partial_update(self, request, *args, **kwargs):
         instance = self.get_object()
@@ -95,11 +97,12 @@ class FormStatus(ModelViewSet):
 
         with transaction.atomic():
             # If setting this form to active
-            if is_active is True or is_active == "true":
-                # Make all other forms inactive
-                AdmissionForm.objects.exclude(id=instance.id).filter(
-                    school=user.school
-                ).update(is_active=False)
+            if is_active is True or is_active == "true" or is_active == 1 or is_active == "1":
+                # Make all other forms inactive for this school
+                if getattr(user, "school", None):
+                    AdmissionForm.objects.exclude(id=instance.id).filter(
+                        school=user.school
+                    ).update(is_active=False)
 
             # Update current instance
             serializer = self.get_serializer(instance, data=request.data, partial=True)
@@ -109,14 +112,11 @@ class FormStatus(ModelViewSet):
 
         return Response(
             {
-                "message": "Form Public successfully",
-                # "data": serializer.data
+                "message": "Form status updated successfully",
+                "data": serializer.data
             },
             status=status.HTTP_200_OK,
         )
-
-
-# for send form link
 
 
 class ManualStudentView(ModelViewSet):
@@ -161,6 +161,86 @@ class FormSubmissionViewSet(ModelViewSet):
 
 
 
+
+from .models import RTEDocument
+from .student_serializers import RTEDocumentSerializer
+
+class RTEDocumentViewSet(ModelViewSet):
+    queryset = RTEDocument.objects.all()
+    serializer_class = RTEDocumentSerializer
+    parser_classes = [MultiPartParser, FormParser]
+    permission_classes = [IsClerkOrTempUser]
+
+    def get_queryset(self):
+        queryset = RTEDocument.objects.select_related("admission", "student")
+        user_school = getattr(self.request.user, "school", None)
+        if user_school:
+            queryset = queryset.filter(
+                Q(admission__school=user_school) | Q(student__school=user_school)
+            )
+        return queryset
+
+    def _student_for_admission(self, admission):
+        try:
+            return admission.student
+        except Student.DoesNotExist:
+            return None
+
+    def create(self, request, *args, **kwargs):
+        admission_id = request.data.get("admission")
+        student_id = request.data.get("student")
+        
+        if not admission_id and not student_id:
+            return Response({"error": "Either admission or student ID is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        admission = None
+        student = None
+        user_school = getattr(request.user, "school", None)
+
+        if admission_id:
+            admission = Admission.objects.filter(id=admission_id).first()
+            if not admission:
+                return Response({"error": "Admission not found"}, status=status.HTTP_404_NOT_FOUND)
+            if user_school and admission.school_id != user_school.id:
+                return Response({"error": "Invalid admission for this school"}, status=status.HTTP_400_BAD_REQUEST)
+            student = self._student_for_admission(admission)
+
+        if student_id:
+            student = Student.objects.filter(id=student_id).first()
+            if not student:
+                return Response({"error": "Student not found"}, status=status.HTTP_404_NOT_FOUND)
+            if user_school and student.school_id != user_school.id:
+                return Response({"error": "Invalid student for this school"}, status=status.HTTP_400_BAD_REQUEST)
+            admission = admission or student.admission
+
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        rte_doc = serializer.save(admission=admission, student=student)
+
+        if admission and not admission.is_rte:
+            admission.is_rte = True
+            admission.fee_amount = 0
+            admission.save(update_fields=["is_rte", "fee_amount"])
+
+        if student and not student.is_rte:
+            student.is_rte = True
+            student.save(update_fields=["is_rte"])
+
+        if student:
+            student.student_fees.all().update(
+                amount=0,
+                discount_amount=0,
+                fine_amount=0,
+                paid_amount=0,
+                late_fee_enabled=False,
+                late_fee_amount=0,
+                max_late_fee=0,
+                status="paid",
+                payment_mode=None,
+                transaction_id=None,
+            )
+
+        return Response(self.get_serializer(rte_doc).data, status=status.HTTP_201_CREATED)
 
 class DocumentSubmissionView(ModelViewSet):
     queryset = AdmissionDocument.objects.all()
@@ -261,45 +341,57 @@ class DocumentSubmissionView(ModelViewSet):
                     status=status.HTTP_404_NOT_FOUND,
                 )
 
-            if admission.form.fee_type == "general":
+            if admission.is_rte:
+                fee_amount = 0.0
+
+            elif admission.form.fee_type == "general":
 
                 fee_amount = float(admission.form.fees)
 
             else:
-
                 value_obj = AdmissionFieldValue.objects.filter(
                     admission=admission,
                     field__section__form=admission.form,
                     field__map_to_student_field="school_class",
                 ).first()
 
-                if not value_obj:
-                    return Response(
-                        {"error": "School class not found in admission form"},
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
+                fee_structure = None
+                val = str(value_obj.value).strip() if value_obj and value_obj.value else ""
 
-                try:
-                    class_id = int(value_obj.value)
+                if val.isdigit():
+                    fee_structure = AdmissionFeeStructure.objects.filter(
+                        admission_form=admission.form,
+                        class_name_id=int(val),
+                    ).first()
 
-                except (TypeError, ValueError):
-                    return Response(
-                        {"error": "Invalid class id"},
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
+                if not fee_structure and val:
+                    fee_structure = AdmissionFeeStructure.objects.filter(
+                        admission_form=admission.form,
+                        class_name__school_class__iexact=val,
+                    ).first()
 
-                fee_structure = AdmissionFeeStructure.objects.filter(
-                    admission_form=admission.form,
-                    class_name_id=class_id,
-                ).first()
+                if not fee_structure and val and getattr(admission, "school", None):
+                    matched_class = SchoolClass.objects.filter(
+                        school=admission.school,
+                        school_class__iexact=val,
+                    ).first()
+                    if matched_class:
+                        fee_structure = AdmissionFeeStructure.objects.filter(
+                            admission_form=admission.form,
+                            class_name=matched_class,
+                        ).first()
 
                 if not fee_structure:
-                    return Response(
-                        {"error": "Fee structure not found"},
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
+                    fee_structure = AdmissionFeeStructure.objects.filter(
+                        admission_form=admission.form,
+                    ).first()
 
-                fee_amount = float(fee_structure.fee_amount)
+                if fee_structure and fee_structure.fee_amount is not None:
+                    fee_amount = float(fee_structure.fee_amount)
+                elif admission.form and admission.form.fees:
+                    fee_amount = float(admission.form.fees)
+                else:
+                    fee_amount = 0.0
 
         return Response(
             {
@@ -426,7 +518,11 @@ class AdmissionReadOnlyViewSet(ReadOnlyModelViewSet):
         user = self.request.user
         return (
             Admission.objects.filter(school=user.school)
-            .prefetch_related("field_values", "documents")
+            .prefetch_related(
+                "field_values__field",
+                "documents__document_field",
+                "rte_documents",
+            )
         )
 
 
@@ -712,18 +808,129 @@ class ClerkVerifyView(ModelViewSet):
 class GetStudentView(ModelViewSet):
     queryset = Student.objects.all()
     serializer_class = GetStudentSerializer
-    permission_classes = [IsAuthenticated, IsCLerk]
+    permission_classes = [IsAuthenticated, IsCLerk | Isteacher | Isprincipal | IsLibrarian]
 
     def get_queryset(self):
         school = self.request.user.school
         queryset = Student.objects.filter(school = school)
 
         school_class = self.request.query_params.get("school_class")
+        division = self.request.query_params.get("division")
 
         if school_class:
             queryset = queryset.filter(school_class=school_class)
+        if division:
+            queryset = queryset.filter(division=division)
 
         return queryset
+
+
+class AssignRollNumberAPIView(APIView):
+    permission_classes = [IsAuthenticated, IsCLerk]
+
+    def post(self, request, *args, **kwargs):
+        school = request.user.school
+        assignments = request.data.get("assignments", [])
+
+        if not isinstance(assignments, list):
+            return Response({"error": "assignments must be a list"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Step 1: Pre-fetch students to know their class and division
+        student_map = {}
+        for item in assignments:
+            student_id = item.get("student_id")
+            adm_no = item.get("admission_number")
+            st = None
+            if student_id:
+                st = Student.objects.filter(id=student_id, school=school).first()
+            elif adm_no:
+                st = Student.objects.filter(admission__admission_number=adm_no, school=school).first()
+            if st:
+                student_map[st.id] = st
+
+        # Step 2: Check duplicate roll numbers within the request payload per (school_class, division)
+        seen_rolls = {}  # key: (school_class_id, division, roll_no)
+        for item in assignments:
+            student_id = item.get("student_id")
+            adm_no = item.get("admission_number")
+            roll_no = item.get("roll_no")
+            if roll_no is not None and str(roll_no).strip() != "":
+                val = str(roll_no).strip()
+                st = None
+                if student_id and student_id in student_map:
+                    st = student_map[student_id]
+                else:
+                    for s in student_map.values():
+                        if adm_no and getattr(s, "admission", None) and s.admission.admission_number == adm_no:
+                            st = s
+                            break
+                if st:
+                    div_val = (st.division or "").strip().upper()
+                    key = (st.school_class_id, div_val, val)
+                    if key in seen_rolls:
+                        div_name = st.division or "Unassigned Division"
+                        return Response(
+                            {
+                                "error": f"Duplicate Roll Number '{val}' assigned in Division '{div_name}'. Multiple students in the same division cannot have the same Roll Number."
+                            },
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
+                    seen_rolls[key] = st.id
+
+        # Step 3: Validate against database and update atomically
+        updated_count = 0
+        with transaction.atomic():
+            for item in assignments:
+                student_id = item.get("student_id")
+                adm_no = item.get("admission_number")
+                roll_no = item.get("roll_no")
+                val = str(roll_no).strip() if roll_no is not None and str(roll_no).strip() != "" else None
+
+                student = None
+                if student_id and student_id in student_map:
+                    student = student_map[student_id]
+                elif adm_no:
+                    student = Student.objects.filter(admission__admission_number=adm_no, school=school).first()
+
+                if student:
+                    if val is not None:
+                        # Check if another student in the same school_class and SAME division already has this roll_no
+                        existing_other = (
+                            Student.objects.filter(
+                                school=school,
+                                school_class=student.school_class,
+                                division=student.division,
+                                roll_no=val,
+                            )
+                            .exclude(id=student.id)
+                            .first()
+                        )
+
+                        if existing_other and existing_other.id not in student_map:
+                            student_name = (
+                                f"{existing_other.surname or ''} {existing_other.name or ''}".strip()
+                                or f"Student #{existing_other.id}"
+                            )
+                            div_label = f"Division {student.division}" if student.division else "Unassigned Division"
+                            return Response(
+                                {
+                                    "error": f"Roll Number '{val}' is already assigned to student '{student_name}' in {div_label}."
+                                },
+                                status=status.HTTP_400_BAD_REQUEST,
+                            )
+
+                    student.roll_no = val
+                    student.save(update_fields=["roll_no"])
+                    updated_count += 1
+
+        return Response(
+            {
+                "message": f"Successfully assigned roll numbers to {updated_count} student(s).",
+                "updated_count": updated_count,
+            },
+            status=status.HTTP_200_OK,
+        )
+
 
 
 

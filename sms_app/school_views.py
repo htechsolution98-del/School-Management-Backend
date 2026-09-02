@@ -3,6 +3,8 @@ from rest_framework.viewsets import ModelViewSet
 from rest_framework import generics
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.decorators import action
+from django.db.models import Q, Count
 from django.contrib.auth import authenticate
 from django.utils import timezone
 from .models import *
@@ -41,6 +43,22 @@ class SchoolFeatureView(ModelViewSet):
     serializer_class = SchoolFeatureSerializer
     permission_classes = [IsAuthenticated, Is_super_admin]
 
+    def perform_create(self, serializer):
+        with transaction.atomic():
+            instance = serializer.save()
+            is_enabled = instance.is_enabled
+            school = instance.school
+            feature = instance.feature
+
+            if school and feature:
+                feature_name = feature.name.strip()
+                staff_qs = Staff.objects.filter(school=school, category__iexact=feature_name)
+                staff_qs.update(is_active=is_enabled)
+                
+                user_ids = list(staff_qs.values_list('user_id', flat=True))
+                if user_ids:
+                    User.objects.filter(id__in=user_ids).update(is_active=is_enabled)
+
 
 
 
@@ -52,18 +70,23 @@ class GetFeatureView(ModelViewSet):
     http_method_names = ["get"]
 
     def get_queryset(self):
-        school = getattr(self.request.user, "school", None)
+        user = self.request.user
+        school = getattr(user, "school", None)
+        if not school:
+            school = getattr(user, "managed_school", None)
+        if not school:
+            school = School.objects.filter(login_id=user.id).first()
         if not school:
             return SchoolFeature.objects.none()
 
-        qs = SchoolFeature.objects.filter(school=school, is_enabled=True)
-        if not qs.exists():
+        # If no school features recorded yet at all, initialize them
+        if not SchoolFeature.objects.filter(school=school).exists():
             features = Feature.objects.all()
             if features.exists():
                 sfs = [SchoolFeature(school=school, feature=f, is_enabled=True) for f in features]
                 SchoolFeature.objects.bulk_create(sfs, ignore_conflicts=True)
-                qs = SchoolFeature.objects.filter(school=school, is_enabled=True)
-        return qs
+
+        return SchoolFeature.objects.filter(school=school, is_enabled=True)
 
 
 
@@ -74,6 +97,39 @@ class ChangeFeatureStatusVIew(ModelViewSet):
     permission_classes = [IsAuthenticated, Is_super_admin]
     http_method_names = ["patch"]
     lookup_field = "id"
+
+    def perform_update(self, serializer):
+        with transaction.atomic():
+            instance = serializer.save()
+            is_enabled = instance.is_enabled
+            school = instance.school
+            feature = instance.feature
+
+            if school and feature:
+                feature_name = feature.name.strip()
+                staff_qs = Staff.objects.filter(school=school, category__iexact=feature_name)
+                staff_qs.update(is_active=is_enabled)
+                
+                user_ids = list(staff_qs.values_list('user_id', flat=True))
+                if user_ids:
+                    User.objects.filter(id__in=user_ids).update(is_active=is_enabled)
+
+                # 🔹 Real-time WebSocket broadcast to all connected dashboards of this school
+                try:
+                    from channels.layers import get_channel_layer
+                    from asgiref.sync import async_to_sync
+                    channel_layer = get_channel_layer()
+                    if channel_layer:
+                        async_to_sync(channel_layer.group_send)(
+                            f"school_{school.id}_choice_all",
+                            {
+                                "type": "feature_status_changed",
+                                "feature_name": feature_name,
+                                "is_enabled": is_enabled,
+                            },
+                        )
+                except Exception as e:
+                    print("Failed to broadcast feature status event:", e)
 
 
 from rest_framework.viewsets import ModelViewSet
@@ -149,19 +205,35 @@ class SchoolView(ModelViewSet):
             school = serializer.save()
             
             if features is not None:
-                existing_feature_ids = set(SchoolFeature.objects.filter(school=school).values_list('feature_id', flat=True))
                 new_feature_ids = set(f.id for f in features)
-                
-                # Delete removed features
-                to_delete = existing_feature_ids - new_feature_ids
-                if to_delete:
-                    SchoolFeature.objects.filter(school=school, feature_id__in=to_delete).delete()
-                
-                # Add new features
-                to_add = new_feature_ids - existing_feature_ids
+                all_school_features = SchoolFeature.objects.filter(school=school)
+                for sf in all_school_features:
+                    should_be_enabled = sf.feature_id in new_feature_ids
+                    if sf.is_enabled != should_be_enabled:
+                        sf.is_enabled = should_be_enabled
+                        sf.save()
+                        
+                        feat_name = sf.feature.name.strip()
+                        staff_qs = Staff.objects.filter(school=school, category__iexact=feat_name)
+                        staff_qs.update(is_active=should_be_enabled)
+                        user_ids = list(staff_qs.values_list('user_id', flat=True))
+                        if user_ids:
+                            User.objects.filter(id__in=user_ids).update(is_active=should_be_enabled)
+
+                existing_fids = set(all_school_features.values_list('feature_id', flat=True))
+                to_add = new_feature_ids - existing_fids
                 if to_add:
                     new_sfs = [SchoolFeature(school=school, feature_id=fid, is_enabled=True) for fid in to_add]
                     SchoolFeature.objects.bulk_create(new_sfs, ignore_conflicts=True)
+                    for fid in to_add:
+                        f_obj = Feature.objects.filter(id=fid).first()
+                        if f_obj:
+                            feat_name = f_obj.name.strip()
+                            staff_qs = Staff.objects.filter(school=school, category__iexact=feat_name)
+                            staff_qs.update(is_active=True)
+                            user_ids = list(staff_qs.values_list('user_id', flat=True))
+                            if user_ids:
+                                User.objects.filter(id__in=user_ids).update(is_active=True)
 
 
         cache.delete("school_list")
@@ -191,6 +263,214 @@ class SchoolView(ModelViewSet):
     def create(self, request, *args, **kwargs):
         super().create(request, *args, **kwargs)
         return Response({"message": "School created Successfully"}, status=201)
+
+    # 🔹 Global multi-tenant analytics for Super Admin
+    @action(detail=False, methods=["get"], url_path="analytics")
+    def analytics(self, request):
+        schools_qs = School.objects.all().order_by("-created_at")
+        total_schools = schools_qs.count()
+        active_schools = schools_qs.filter(is_active=True).count()
+        inactive_schools = schools_qs.filter(Q(is_active=False) | Q(is_active__isnull=True)).count()
+
+        # All students
+        all_students = Student.objects.all()
+        total_students = all_students.count()
+
+        # Boy / Girl student identification
+        try:
+            boy_student_ids = set(
+                StudentFieldValue.objects.filter(
+                    Q(field__label__icontains="gender") | Q(field__map_to_student_field__icontains="gender"),
+                    Q(value__iexact="Male") | Q(value__iexact="Boy") | Q(value__iexact="Boys") | Q(value__iexact="M")
+                ).values_list("student_id", flat=True)
+            )
+            girl_student_ids = set(
+                StudentFieldValue.objects.filter(
+                    Q(field__label__icontains="gender") | Q(field__map_to_student_field__icontains="gender"),
+                    Q(value__iexact="Female") | Q(value__iexact="Girl") | Q(value__iexact="Girls") | Q(value__iexact="F")
+                ).values_list("student_id", flat=True)
+            )
+        except Exception as e:
+            print("Error querying student gender:", e)
+            boy_student_ids = set()
+            girl_student_ids = set()
+
+        total_boys = len(boy_student_ids)
+        total_girls = len(girl_student_ids)
+        other_gender = max(total_students - total_boys - total_girls, 0)
+
+        # All staff
+        all_staff = Staff.objects.all()
+        total_staff = all_staff.count()
+        active_staff = all_staff.filter(is_active=True).count()
+        teachers_count = all_staff.filter(category__iexact="TEACHER").count()
+        non_teaching_count = max(total_staff - teachers_count, 0)
+
+        # Total system modules/features
+        total_features = Feature.objects.count()
+
+        # Per school statistics
+        school_list = []
+        for school in schools_qs:
+            sch_students = all_students.filter(school=school)
+            sch_student_count = sch_students.count()
+            sch_student_ids = set(sch_students.values_list("id", flat=True))
+
+            sch_boys = len(sch_student_ids.intersection(boy_student_ids))
+            sch_girls = len(sch_student_ids.intersection(girl_student_ids))
+            sch_staff = all_staff.filter(school=school).count()
+            sch_active_staff = all_staff.filter(school=school, is_active=True).count()
+            sch_features = SchoolFeature.objects.filter(school=school, is_enabled=True).count()
+
+            school_list.append({
+                "id": school.id,
+                "name": school.name or "Unnamed School",
+                "code": school.code or "—",
+                "email": school.email or "—",
+                "phone": school.phone or "—",
+                "city": school.city or "—",
+                "state": school.state or "—",
+                "country": school.country or "India",
+                "pincode": school.pincode or "—",
+                "is_active": school.is_active is not False,
+                "created_at": school.created_at,
+                "total_students": sch_student_count,
+                "total_boys": sch_boys,
+                "total_girls": sch_girls,
+                "total_staff": sch_staff,
+                "active_staff": sch_active_staff,
+                "enabled_features": sch_features,
+            })
+
+        return Response({
+            "summary": {
+                "total_schools": total_schools,
+                "active_schools": active_schools,
+                "inactive_schools": inactive_schools,
+                "total_students": total_students,
+                "total_boys": total_boys,
+                "total_girls": total_girls,
+                "other_gender": other_gender,
+                "total_staff": total_staff,
+                "active_staff": active_staff,
+                "teachers_count": teachers_count,
+                "non_teaching_count": non_teaching_count,
+                "total_features": total_features,
+            },
+            "schools": school_list,
+        })
+
+    # 🔹 School specific telemetry & demographics detail
+    @action(detail=True, methods=["get"], url_path="details")
+    def details(self, request, pk=None):
+        school = self.get_object()
+
+        # Students in this school
+        sch_students = Student.objects.filter(school=school)
+        total_students = sch_students.count()
+        rte_students = sch_students.filter(is_rte=True).count()
+        student_ids = set(sch_students.values_list("id", flat=True))
+
+        try:
+            boy_ids = set(
+                StudentFieldValue.objects.filter(
+                    student_id__in=student_ids,
+                    field__label__icontains="gender",
+                ).filter(
+                    Q(value__iexact="Male") | Q(value__iexact="Boy") | Q(value__iexact="Boys") | Q(value__iexact="M")
+                ).values_list("student_id", flat=True)
+            )
+            girl_ids = set(
+                StudentFieldValue.objects.filter(
+                    student_id__in=student_ids,
+                    field__label__icontains="gender",
+                ).filter(
+                    Q(value__iexact="Female") | Q(value__iexact="Girl") | Q(value__iexact="Girls") | Q(value__iexact="F")
+                ).values_list("student_id", flat=True)
+            )
+        except Exception:
+            boy_ids = set()
+            girl_ids = set()
+
+        total_boys = len(boy_ids)
+        total_girls = len(girl_ids)
+        other_gender = max(total_students - total_boys - total_girls, 0)
+
+        # Staff in this school
+        sch_staff = Staff.objects.filter(school=school)
+        total_staff = sch_staff.count()
+        active_staff = sch_staff.filter(is_active=True).count()
+        teachers_count = sch_staff.filter(category__iexact="TEACHER").count()
+        non_teaching_count = max(total_staff - teachers_count, 0)
+
+        staff_list = []
+        for st in sch_staff.order_by("-id")[:15]:
+            staff_list.append({
+                "id": st.id,
+                "name": st.name or "Staff Member",
+                "email": st.email or "—",
+                "mobile": st.mobile or "—",
+                "category": st.category or "OTHER",
+                "is_active": st.is_active,
+            })
+
+        # Classes breakdown
+        classes = SchoolClass.objects.filter(school=school)
+        class_stats = []
+        for c in classes:
+            c_studs = sch_students.filter(school_class=c)
+            c_stud_ids = set(c_studs.values_list("id", flat=True))
+            class_stats.append({
+                "id": c.id,
+                "name": c.school_class,
+                "total_students": c_studs.count(),
+                "boys": len(c_stud_ids.intersection(boy_ids)),
+                "girls": len(c_stud_ids.intersection(girl_ids)),
+            })
+
+        # Features
+        features = []
+        for sf in SchoolFeature.objects.filter(school=school).select_related('feature'):
+            features.append({
+                "id": sf.id,
+                "feature_id": sf.feature.id,
+                "name": sf.feature.name,
+                "is_enabled": sf.is_enabled,
+            })
+
+        return Response({
+            "school": {
+                "id": school.id,
+                "name": school.name,
+                "code": school.code,
+                "index_no": school.index_no,
+                "email": school.email,
+                "phone": school.phone,
+                "address": school.address,
+                "city": school.city,
+                "state": school.state,
+                "country": school.country,
+                "pincode": school.pincode,
+                "logo": school.logo.url if school.logo else None,
+                "is_active": school.is_active is not False,
+                "created_at": school.created_at,
+            },
+            "metrics": {
+                "total_students": total_students,
+                "total_boys": total_boys,
+                "total_girls": total_girls,
+                "other_gender": other_gender,
+                "rte_students": rte_students,
+                "total_staff": total_staff,
+                "active_staff": active_staff,
+                "teachers_count": teachers_count,
+                "non_teaching_count": non_teaching_count,
+                "total_classes": classes.count(),
+            },
+            "classes": class_stats,
+            "staff": staff_list,
+            "features": features,
+        })
 
 
 

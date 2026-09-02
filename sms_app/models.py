@@ -10,6 +10,7 @@ from django.conf import settings
 from django.db.models import Sum
 from django.utils import timezone
 from datetime import timedelta
+from decimal import Decimal
 
 class OTP(models.Model):
     email = models.EmailField(null=True, blank=True)
@@ -299,6 +300,7 @@ class SchoolClass(models.Model):
     )
 
     school_class = models.CharField(max_length=70)
+    is_rte_applicable = models.BooleanField(default=False)
 
     def __str__(self):
         return self.school_class
@@ -388,6 +390,7 @@ class Admission(models.Model):
     admission_number = models.CharField(
         max_length=50, unique=True, null=True, blank=True
     )
+    is_rte = models.BooleanField(default=False)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
 
     submitted_at = models.DateTimeField(auto_now_add=True)
@@ -586,6 +589,8 @@ class Student(models.Model):
     )
 
     division = models.CharField(max_length=20, blank=True, null=True)
+    roll_no = models.CharField(max_length=50, blank=True, null=True)
+    is_rte = models.BooleanField(default=False)
 
     admission_date = models.DateField(blank=True, null=True)
     gr_no = models.CharField(max_length=100, blank=True, null=True)
@@ -1374,16 +1379,23 @@ class StudentFee(models.Model):
 
     @property
     def payable_amount(self):
+        if getattr(self.student, "is_rte", False):
+            return Decimal("0.00")
         base_amount = self.amount or 0
         return base_amount + self.fine_amount - self.discount_amount
 
     @property
     def balance_amount(self):
+        if getattr(self.student, "is_rte", False):
+            return Decimal("0.00")
         return self.payable_amount - self.paid_amount
 
     def calculate_late_fee(self, today=None):
         from datetime import timedelta
         from django.utils import timezone
+
+        if getattr(self.student, "is_rte", False):
+            return Decimal("0.00")
 
         if (
             not self.late_fee_enabled
@@ -1423,6 +1435,35 @@ class StudentFee(models.Model):
         from django.db.models import Q
         from django.db.models import Sum
         from django.utils import timezone
+
+        if getattr(self.student, "is_rte", False):
+            self.amount = Decimal("0.00")
+            self.discount_amount = Decimal("0.00")
+            self.fine_amount = Decimal("0.00")
+            self.paid_amount = Decimal("0.00")
+            self.late_fee_enabled = False
+            self.late_fee_amount = Decimal("0.00")
+            self.max_late_fee = Decimal("0.00")
+            self.status = "paid"
+            self.paid_at = timezone.now()
+            self.payment_mode = None
+            self.transaction_id = None
+            self.save(
+                update_fields=[
+                    "amount",
+                    "discount_amount",
+                    "fine_amount",
+                    "paid_amount",
+                    "late_fee_enabled",
+                    "late_fee_amount",
+                    "max_late_fee",
+                    "status",
+                    "paid_at",
+                    "payment_mode",
+                    "transaction_id",
+                ]
+            )
+            return
 
         total_paid = (
             self.payments.filter(is_bounced=False)
@@ -1481,6 +1522,16 @@ class StudentFee(models.Model):
 
         if self.student and not self.school:
             self.school = self.student.school
+
+        if getattr(self.student, "is_rte", False):
+            self.amount = Decimal("0.00")
+            self.discount_amount = Decimal("0.00")
+            self.fine_amount = Decimal("0.00")
+            self.paid_amount = Decimal("0.00")
+            self.late_fee_enabled = False
+            self.late_fee_amount = Decimal("0.00")
+            self.max_late_fee = Decimal("0.00")
+            self.status = "paid"
 
         super().save(*args, **kwargs)
 
@@ -2419,21 +2470,96 @@ class StudentNotification(models.Model):
         return f"{self.student.name} - {self.title}"
     
 
+class ResultWeightageConfig(models.Model):
+    STATUS_CHOICES = (
+        ('DRAFT', 'Draft'),
+        ('ACTIVE', 'Active'),
+        ('LOCKED', 'Locked'),
+    )
+    school = models.ForeignKey(School, on_delete=models.CASCADE)
+    academic_year = models.ForeignKey(AcademicYear, on_delete=models.CASCADE, related_name='weightage_configs')
+    title = models.CharField(max_length=255, default='Academic Year Weightage Configuration')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='DRAFT')
+    is_active = models.BooleanField(default=False)
+    is_locked = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'result_weightage_config'
+        unique_together = ('school', 'academic_year')
+
+class ResultWeightageComponent(models.Model):
+    COMPONENT_CHOICES = (
+        ('EXAM', 'Examination'),
+        ('ATTENDANCE', 'Attendance Percentage'),
+        ('TEACHER_ASSESSMENT', 'Teacher Assessment'),
+        ('CUSTOM', 'Custom Assessment / Project'),
+    )
+    config = models.ForeignKey(ResultWeightageConfig, on_delete=models.CASCADE, related_name='components')
+    name = models.CharField(max_length=100)
+    component_type = models.CharField(max_length=30, choices=COMPONENT_CHOICES, default='EXAM')
+    weightage_percentage = models.DecimalField(max_digits=5, decimal_places=2)
+    sequence = models.PositiveSmallIntegerField(default=1)
+
+    class Meta:
+        db_table = 'result_weightage_component'
+        ordering = ['sequence', 'id']
+
+class ExamRoom(models.Model):
+    school = models.ForeignKey(School, on_delete=models.CASCADE)
+    room_number = models.CharField(max_length=50)
+    building_block = models.CharField(max_length=100, blank=True, null=True)
+    capacity = models.PositiveIntegerField(default=30)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        db_table = 'exam_room'
+        unique_together = ('school', 'room_number')
+
+class ExamTerm(models.Model):
+    school = models.ForeignKey(School, on_delete=models.CASCADE)
+    academic_year = models.ForeignKey(AcademicYear, on_delete=models.CASCADE)
+    weightage_component = models.ForeignKey(ResultWeightageComponent, on_delete=models.SET_NULL, null=True, blank=True, related_name='exam_terms')
+    name = models.CharField(max_length=100)
+    code = models.CharField(max_length=50, blank=True, null=True)
+    max_marks = models.DecimalField(max_digits=6, decimal_places=2, default=100.0)
+    passing_marks = models.DecimalField(max_digits=6, decimal_places=2, default=33.0)
+    instructions = models.TextField(blank=True, null=True)
+
+    class Meta:
+        db_table = 'exam_term'
+
 # Exam or Event Notification
 class Exam(models.Model):
+    STATUS_CHOICES = (
+        ('DRAFT', 'Draft'),
+        ('SCHEDULED', 'Scheduled'),
+        ('PUBLISHED', 'Published'),
+        ('COMPLETED', 'Completed'),
+        ('VERIFIED', 'Verified'),
+    )
     school = models.ForeignKey(School, on_delete=models.CASCADE)
     created_by = models.ForeignKey(Staff, on_delete=models.CASCADE)  # principal
-
+    academic_year = models.ForeignKey('AcademicYear', on_delete=models.CASCADE, null=True, blank=True)
+    exam_term = models.ForeignKey('ExamTerm', on_delete=models.SET_NULL, null=True, blank=True, related_name='exams')
 
     title = models.CharField(max_length=255)
-    description = models.TextField()
+    description = models.TextField(blank=True, null=True)
 
     subject = models.ForeignKey(Subject, on_delete=models.CASCADE, null=True)
     exam_date = models.DateField()
     start_time = models.TimeField()
     end_time = models.TimeField()
-
+    duration_minutes = models.PositiveIntegerField(default=180)
+    
     class_group = models.ForeignKey(SchoolClass, on_delete=models.CASCADE)
+    division = models.CharField(max_length=20, blank=True, null=True)
+    
+    max_marks = models.DecimalField(max_digits=6, decimal_places=2, default=100.0)
+    passing_marks = models.DecimalField(max_digits=6, decimal_places=2, default=33.0)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='DRAFT')
+    room = models.ForeignKey('ExamRoom', on_delete=models.SET_NULL, null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     
@@ -2457,6 +2583,14 @@ class Result(models.Model):
     marks_obtained = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     max_marks = models.DecimalField(max_digits=5, decimal_places=2)
     is_absent = models.BooleanField(default=False)
+    
+    STATUS_CHOICES = (
+        ('DRAFT', 'Draft'),
+        ('SUBMITTED', 'Submitted'),
+        ('VERIFIED', 'Verified'),
+        ('SENT_BACK', 'Sent Back'),
+    )
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='DRAFT')
 
     grade = models.CharField(max_length=5, blank=True)
     remarks = models.CharField(max_length=255, blank=True)
@@ -2473,10 +2607,15 @@ class Result(models.Model):
 
 
 class HomeworkSubmissions(models.Model):
-    homework=models.ForeignKey(Homework,on_delete=models.CASCADE,related_name='submissions')
-    student=models.ForeignKey(Student,on_delete=models.CASCADE,related_name='submission')
-    file = models.FileField(upload_to='homework_submissions/')
+    homework = models.ForeignKey(Homework, on_delete=models.CASCADE, related_name='submissions')
+    student = models.ForeignKey(Student, on_delete=models.CASCADE, related_name='submission')
+    file = models.FileField(upload_to='homework_submissions/', null=True, blank=True)
     submitted_at = models.DateTimeField(auto_now_add=True)
+    marks = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    teacher_remark = models.TextField(null=True, blank=True)
+    status = models.CharField(max_length=20, default='submitted')
+    checked_by = models.ForeignKey(Staff, on_delete=models.SET_NULL, null=True, blank=True)
+    checked_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         unique_together = ('homework', 'student')
@@ -2716,71 +2855,259 @@ class BudgetExpense(models.Model):
         db_table='budget_expense'
     
 
+class LibrarySetting(models.Model):
+    school = models.OneToOneField(School, on_delete=models.CASCADE, related_name='library_settings')
+    max_books_per_student = models.PositiveIntegerField(default=3)
+    issue_duration_days = models.PositiveIntegerField(default=14)
+    max_renewal_count = models.PositiveIntegerField(default=2)
+    fine_per_day = models.DecimalField(max_digits=6, decimal_places=2, default=2.00)
+    grace_period_days = models.PositiveIntegerField(default=0)
+    lost_penalty = models.DecimalField(max_digits=8, decimal_places=2, default=100.00)
+    damage_penalty = models.DecimalField(max_digits=8, decimal_places=2, default=50.00)
+    allow_renewal_with_fine = models.BooleanField(default=False)
+    allow_issue_with_fine = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Library Settings - {self.school.name}"
+
+    class Meta:
+        db_table = "library_settings"
+
+
+class BookCategory(models.Model):
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='book_categories')
+    name = models.CharField(max_length=100)
+    code = models.CharField(max_length=50, blank=True, null=True)
+    description = models.TextField(blank=True, null=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return self.name
+
+    class Meta:
+        db_table = "book_category"
+        unique_together = ('school', 'name')
+
+
+class Author(models.Model):
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='book_authors')
+    name = models.CharField(max_length=255)
+    code = models.CharField(max_length=50, blank=True, null=True)
+    biography = models.TextField(blank=True, null=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return self.name
+
+    class Meta:
+        db_table = "book_author"
+        unique_together = ('school', 'name')
+
+
+class Publisher(models.Model):
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='book_publishers')
+    name = models.CharField(max_length=255)
+    code = models.CharField(max_length=50, blank=True, null=True)
+    contact_person = models.CharField(max_length=100, blank=True, null=True)
+    contact_no = models.CharField(max_length=20, blank=True, null=True)
+    email = models.EmailField(blank=True, null=True)
+    address = models.TextField(blank=True, null=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return self.name
+
+    class Meta:
+        db_table = "book_publisher"
+        unique_together = ('school', 'name')
+
+
+class Rack(models.Model):
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='library_racks')
+    rack_code = models.CharField(max_length=50)  # e.g., "A-01"
+    rack_name = models.CharField(max_length=100)
+    description = models.TextField(blank=True, null=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.rack_code} - {self.rack_name}"
+
+    class Meta:
+        db_table = "library_rack"
+        unique_together = ('school', 'rack_code')
+
+
+class Shelf(models.Model):
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='library_shelves')
+    rack = models.ForeignKey(Rack, on_delete=models.CASCADE, related_name='shelves')
+    shelf_code = models.CharField(max_length=50)  # e.g., "S-01"
+    shelf_name = models.CharField(max_length=100)
+    description = models.TextField(blank=True, null=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.rack.rack_code} / {self.shelf_code}"
+
+    class Meta:
+        db_table = "library_shelf"
+        unique_together = ('rack', 'shelf_code')
+
+
 class Book(models.Model):
     school = models.ForeignKey(School, on_delete=models.CASCADE)
     title = models.CharField(max_length=255)
+    subtitle = models.CharField(max_length=255, blank=True, null=True)
+    isbn = models.CharField(max_length=50, blank=True, null=True)
     author = models.CharField(max_length=255)
     category = models.CharField(max_length=100)
+    
+    category_ref = models.ForeignKey(BookCategory, on_delete=models.SET_NULL, null=True, blank=True, related_name='books')
+    author_ref = models.ForeignKey(Author, on_delete=models.SET_NULL, null=True, blank=True, related_name='books')
+    publisher_ref = models.ForeignKey(Publisher, on_delete=models.SET_NULL, null=True, blank=True, related_name='books')
+    rack = models.ForeignKey(Rack, on_delete=models.SET_NULL, null=True, blank=True, related_name='books')
+    shelf = models.ForeignKey(Shelf, on_delete=models.SET_NULL, null=True, blank=True, related_name='books')
+
+    edition = models.CharField(max_length=50, blank=True, null=True)
+    publication_year = models.PositiveIntegerField(null=True, blank=True)
+    language = models.CharField(max_length=50, default='English')
+    pages = models.PositiveIntegerField(null=True, blank=True)
+    price = models.DecimalField(max_digits=8, decimal_places=2, default=0.00)
+    description = models.TextField(blank=True, null=True)
 
     total_copies = models.PositiveIntegerField(default=1)
     available_copies = models.PositiveIntegerField(default=1)
-
-    status = models.BooleanField(default=True)  
-    # True = Available, False = Not Available
+    status = models.BooleanField(default=True)  # True = Available, False = Not Available
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
         return self.title
-    
-    
+
     def save(self, *args, **kwargs):
         if self.available_copies > 0:
             self.status = True
         else:
             self.status = False
         super().save(*args, **kwargs)
-        
+
     class Meta:
         db_table = "book"
-        
+
+
+class BookCopy(models.Model):
+    COPY_STATUS_CHOICES = [
+        ('AVAILABLE', 'Available'),
+        ('ISSUED', 'Issued'),
+        ('RESERVED', 'Reserved'),
+        ('LOST', 'Lost'),
+        ('DAMAGED', 'Damaged'),
+        ('UNDER_REPAIR', 'Under Repair'),
+        ('DISPOSED', 'Disposed'),
+    ]
+    CONDITION_CHOICES = [
+        ('GOOD', 'Good'),
+        ('MINOR_DAMAGE', 'Minor Damage'),
+        ('MAJOR_DAMAGE', 'Major Damage'),
+    ]
+
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='book_copies')
+    book = models.ForeignKey(Book, on_delete=models.CASCADE, related_name='copies')
+    accession_no = models.CharField(max_length=100)  # e.g., "BC-1001"
+    barcode = models.CharField(max_length=100, blank=True, null=True)
+    rack = models.ForeignKey(Rack, on_delete=models.SET_NULL, null=True, blank=True, related_name='copies')
+    shelf = models.ForeignKey(Shelf, on_delete=models.SET_NULL, null=True, blank=True, related_name='copies')
+    status = models.CharField(max_length=20, choices=COPY_STATUS_CHOICES, default='AVAILABLE')
+    condition = models.CharField(max_length=20, choices=CONDITION_CHOICES, default='GOOD')
+    purchase_price = models.DecimalField(max_digits=8, decimal_places=2, default=0.00)
+    purchase_date = models.DateField(null=True, blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.book.title} ({self.accession_no})"
+
+    class Meta:
+        db_table = "book_copy"
+        unique_together = ('school', 'accession_no')
 
 
 class LateBookFees(models.Model):
     school = models.ForeignKey(School, on_delete=models.CASCADE)
-    fees = models.IntegerField() # perday penalty
-    
+    fees = models.IntegerField()  # per-day penalty
     grace_period_days = models.PositiveIntegerField(default=7)
- 
+
     def __str__(self):
         return f"{self.school.name} - per-day fee: {self.fees}, grace: {self.grace_period_days}d"
- 
+
     class Meta:
         db_table = "late_book_return_fees"
-        
 
 
 class BookIssued(models.Model):
+    STATUS_CHOICES = [
+        ("ISSUED", "Issued"),
+        ("RETURNED", "Returned"),
+        ("LOST", "Lost"),
+        ("DAMAGED", "Damaged"),
+    ]
+
     school = models.ForeignKey(School, on_delete=models.CASCADE)
     book = models.ForeignKey(Book, on_delete=models.CASCADE)
+    book_copy = models.ForeignKey(BookCopy, on_delete=models.SET_NULL, null=True, blank=True, related_name='issues')
     student = models.ForeignKey(Student, on_delete=models.CASCADE)
     book_issued_date = models.DateTimeField()
     due_date = models.DateTimeField()
-    actual_return_date = models.DateTimeField(null=True,blank=True)
-    late_fees = models.DecimalField(max_digits=10,decimal_places=2, default=0)
+    actual_return_date = models.DateTimeField(null=True, blank=True)
+    renewal_count = models.PositiveIntegerField(default=0)
+    late_fees = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    damage_fees = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    lost_fees = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    total_fine = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     is_late = models.BooleanField(default=False)
-    STATUS_CHOICES=[
-        ("ISSUED","Issued"),
-        ("RETURNED", "RETURNED"),
-    ]
-    status = models.CharField(max_length=10,choices=STATUS_CHOICES, default="ISSUED")
-    
+    condition_on_return = models.CharField(max_length=20, null=True, blank=True)
+    remarks = models.TextField(null=True, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="ISSUED")
+
     def __str__(self):
-        return f"{self.student.name}-{self.book.title}"
-    
+        return f"{self.student.name} - {self.book.title}"
+
     class Meta:
         db_table = "book_issued"
+
+
+class BookReservation(models.Model):
+    RESERVATION_STATUS = [
+        ('WAITING', 'Waiting'),
+        ('AVAILABLE', 'Available'),
+        ('ISSUED', 'Issued'),
+        ('EXPIRED', 'Expired'),
+        ('CANCELLED', 'Cancelled'),
+    ]
+
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='book_reservations')
+    book = models.ForeignKey(Book, on_delete=models.CASCADE, related_name='reservations')
+    student = models.ForeignKey(Student, on_delete=models.CASCADE, related_name='book_reservations')
+    reservation_date = models.DateTimeField(auto_now_add=True)
+    queue_number = models.PositiveIntegerField(default=1)
+    available_date = models.DateTimeField(null=True, blank=True)
+    expiry_date = models.DateTimeField(null=True, blank=True)
+    status = models.CharField(max_length=20, choices=RESERVATION_STATUS, default='WAITING')
+    notified = models.BooleanField(default=False)
+    remarks = models.TextField(null=True, blank=True)
+
+    def __str__(self):
+        return f"{self.student.name} reserved {self.book.title} (Queue: #{self.queue_number})"
+
+    class Meta:
+        db_table = "book_reservation"
 
 
 
@@ -2807,3 +3134,307 @@ class Announcement(models.Model):
     
     class Meta:
          db_table = "announcement"
+
+class RTEDocument(models.Model):
+    student = models.ForeignKey(Student, on_delete=models.CASCADE, related_name="rte_documents", null=True, blank=True)
+    admission = models.ForeignKey(Admission, on_delete=models.CASCADE, related_name="rte_documents", null=True, blank=True)
+    document_name = models.CharField(max_length=255)
+    document_file = models.FileField(upload_to="rte_documents/")
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+    is_verified = models.BooleanField(default=False)
+    expiry_date = models.DateField(null=True, blank=True)
+
+    def __str__(self):
+        owner = self.student or self.admission
+        return f"{self.document_name} - {owner}"
+
+    class Meta:
+        db_table = "rte_document"
+
+class ClassTeacherMarksVerification(models.Model):
+    STATUS_CHOICES = (
+        ('PENDING', 'Pending'),
+        ('VERIFIED', 'Verified'),
+        ('SENT_BACK', 'Sent Back'),
+    )
+    school = models.ForeignKey(School, on_delete=models.CASCADE)
+    academic_year = models.ForeignKey(AcademicYear, on_delete=models.CASCADE)
+    exam_term = models.ForeignKey(ExamTerm, on_delete=models.CASCADE, null=True, blank=True)
+    school_class = models.ForeignKey(SchoolClass, on_delete=models.CASCADE)
+    division = models.CharField(max_length=20, blank=True, null=True)
+    class_teacher = models.ForeignKey(Staff, on_delete=models.CASCADE)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='PENDING')
+    remarks = models.TextField(blank=True, null=True)
+    verified_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = 'class_teacher_marks_verification'
+
+class ResultAuditLog(models.Model):
+    school = models.ForeignKey(School, on_delete=models.CASCADE)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True)
+    action = models.CharField(max_length=100)
+    details = models.JSONField(default=dict)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'result_audit_log'
+
+class TeacherAssessmentScore(models.Model):
+    school = models.ForeignKey(School, on_delete=models.CASCADE)
+    academic_year = models.ForeignKey(AcademicYear, on_delete=models.CASCADE)
+    student = models.ForeignKey(Student, on_delete=models.CASCADE, related_name='teacher_assessments')
+    teacher = models.ForeignKey(Staff, on_delete=models.CASCADE)
+    subject = models.ForeignKey(Subject, on_delete=models.SET_NULL, null=True, blank=True)
+    is_class_teacher = models.BooleanField(default=False)
+    score = models.DecimalField(max_digits=5, decimal_places=2)
+    max_score = models.DecimalField(max_digits=5, decimal_places=2, default=10.0)
+    remarks = models.CharField(max_length=255, blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'teacher_assessment_score'
+
+class FinalStudentResult(models.Model):
+    STATUS_CHOICES = (
+        ('NOT_READY', 'Not Ready'),
+        ('PROCESSING', 'Processing'),
+        ('READY_FOR_REVIEW', 'Ready for Review'),
+        ('SENT_BACK', 'Sent Back'),
+        ('APPROVED', 'Approved'),
+        ('PUBLISHED', 'Published'),
+    )
+    school = models.ForeignKey(School, on_delete=models.CASCADE)
+    academic_year = models.ForeignKey(AcademicYear, on_delete=models.CASCADE)
+    student = models.ForeignKey(Student, on_delete=models.CASCADE, related_name='final_results')
+    school_class = models.ForeignKey(SchoolClass, on_delete=models.CASCADE)
+    division = models.CharField(max_length=20, blank=True, null=True)
+    component_breakdown = models.JSONField(default=dict)
+    total_percentage = models.DecimalField(max_digits=5, decimal_places=2, default=0.0)
+    grade = models.CharField(max_length=10, blank=True, null=True)
+    remarks = models.TextField(blank=True, null=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='NOT_READY')
+    is_published = models.BooleanField(default=False)
+    published_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'final_student_result'
+        unique_together = ('academic_year', 'student')
+
+class SeatingAllocation(models.Model):
+    exam = models.ForeignKey('Exam', on_delete=models.CASCADE, related_name='seating_allocations')
+    student = models.ForeignKey(Student, on_delete=models.CASCADE, related_name='seating_allocations')
+    room = models.ForeignKey(ExamRoom, on_delete=models.CASCADE)
+    seat_number = models.CharField(max_length=50)
+    is_published = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'seating_allocation'
+        unique_together = ('exam', 'student')
+
+
+class PostTracking(models.Model):
+    POST_TYPES = [
+        ("INWARD", "Inward"),
+        ("OUTWARD", "Outward"),
+    ]
+    school = models.ForeignKey(School, on_delete=models.CASCADE)
+    post_type = models.CharField(max_length=20, choices=POST_TYPES, default="INWARD")
+    post_name = models.CharField(max_length=255)
+    for_post = models.CharField(max_length=255)
+    to_post = models.CharField(max_length=255)
+    tracking_number = models.CharField(max_length=100, blank=True, null=True)
+    post_image = models.ImageField(upload_to="post_tracking/", blank=True, null=True)
+    remarks = models.TextField(blank=True, null=True)
+    post_date = models.DateField(default=timezone.now)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.post_type} - {self.post_name}"
+
+    class Meta:
+        db_table = "post_tracking"
+
+
+class BoardMeeting(models.Model):
+    STATUS_CHOICES = [
+        ("SCHEDULED", "Scheduled"),
+        ("COMPLETED", "Completed"),
+        ("CANCELLED", "Cancelled"),
+    ]
+    school = models.ForeignKey(School, on_delete=models.CASCADE)
+    title = models.CharField(max_length=255)
+    agenda = models.TextField()
+    meeting_date = models.DateField()
+    meeting_time = models.CharField(max_length=50, blank=True, null=True)
+    location = models.CharField(max_length=255, default="Board Room / Online")
+    attendees = models.TextField(blank=True, null=True)
+    minutes = models.TextField(blank=True, null=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="SCHEDULED")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.title} - {self.meeting_date}"
+
+    class Meta:
+        db_table = "board_meeting"
+
+
+from .inventory_models import (
+    InventoryCategory,
+    InventorySubCategory,
+    InventoryUnit,
+    InventoryItem,
+    InventoryItemVariant,
+    InventoryWarehouse,
+    InventorySupplier,
+    InventoryPurchase,
+    InventoryPurchaseItem,
+    PurchaseRequest,
+    PurchaseRequestItem,
+    InventoryOpeningStock,
+    InventoryTransaction,
+    InventoryStockBalance,
+    StudentInventoryIssue,
+    StudentInventoryIssueItem,
+    StudentIDCard,
+    InventoryBundle,
+    InventoryBundleItem,
+    InventoryReturn,
+    InventoryReturnItem,
+    InventoryStockAdjustment,
+    InventoryStockAdjustmentItem,
+    InventoryBudget,
+)
+
+
+# ========================================================
+# SCHOOL SUBSCRIPTION & MULTI-TENANT LICENSING MODELS
+# ========================================================
+
+class SchoolSubscription(models.Model):
+    PLAN_TYPE_CHOICES = [
+        ('TRIAL', 'Free Trial'),
+        ('PAID', 'Paid Subscription'),
+    ]
+
+    BILLING_MODEL_CHOICES = [
+        ('FLAT', 'Flat Fixed Rate'),
+        ('PER_STUDENT', 'Per-Student Dynamic Billing'),
+    ]
+
+    BILLING_CYCLE_CHOICES = [
+        ('MONTHLY', 'Monthly'),
+        ('QUARTERLY', 'Quarterly'),
+        ('YEARLY', 'Yearly'),
+        ('CUSTOM', 'Custom'),
+    ]
+
+    STATUS_CHOICES = [
+        ('TRIAL', 'Active Trial'),
+        ('ACTIVE', 'Active Subscription'),
+        ('EXPIRED', 'Expired / Overdue'),
+        ('SUSPENDED', 'Locked / Suspended'),
+    ]
+
+    school = models.OneToOneField(School, on_delete=models.CASCADE, related_name='subscription')
+    plan_type = models.CharField(max_length=20, choices=PLAN_TYPE_CHOICES, default='TRIAL')
+    billing_model = models.CharField(max_length=20, choices=BILLING_MODEL_CHOICES, default='FLAT')
+    billing_cycle = models.CharField(max_length=20, choices=BILLING_CYCLE_CHOICES, default='MONTHLY')
+
+    flat_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
+    per_student_rate = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
+
+    start_date = models.DateField(default=timezone.now)
+    due_date = models.DateField()
+    grace_period_days = models.PositiveIntegerField(default=0)
+
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='TRIAL')
+    auto_lock_on_due = models.BooleanField(default=True)
+    notes = models.TextField(blank=True, null=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'school_subscriptions'
+
+    def __str__(self):
+        return f"{self.school.name} - {self.plan_type} ({self.status})"
+
+    def is_valid_now(self):
+        """Returns True if the subscription/trial is currently active and within due date/grace period."""
+        if self.status == 'SUSPENDED':
+            return False
+        today = timezone.now().date()
+        effective_due = self.due_date + timedelta(days=self.grace_period_days)
+        return today <= effective_due
+
+    def get_live_student_count(self):
+        return Student.objects.filter(school=self.school).count()
+
+    def calculate_current_amount(self):
+        if self.billing_model == 'FLAT':
+            return float(self.flat_amount)
+        students = self.get_live_student_count()
+        return round(float(students * float(self.per_student_rate)), 2)
+
+    def days_remaining(self):
+        today = timezone.now().date()
+        return (self.due_date - today).days
+
+
+class SchoolInvoice(models.Model):
+    STATUS_CHOICES = [
+        ('PENDING', 'Pending Payment'),
+        ('PAID', 'Paid'),
+        ('OVERDUE', 'Overdue'),
+        ('CANCELLED', 'Cancelled'),
+    ]
+
+    PAYMENT_METHOD_CHOICES = [
+        ('ONLINE', 'Online / Razorpay / UPI'),
+        ('BANK_TRANSFER', 'Bank Transfer / NEFT / RTGS'),
+        ('CHEQUE', 'Cheque'),
+        ('CASH', 'Cash'),
+        ('OTHER', 'Other'),
+    ]
+
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='invoices')
+    subscription = models.ForeignKey(SchoolSubscription, on_delete=models.SET_NULL, null=True, blank=True, related_name='invoices')
+    invoice_number = models.CharField(max_length=50, unique=True)
+    billing_model = models.CharField(max_length=20, default='FLAT')
+    student_count = models.PositiveIntegerField(default=0)
+    unit_rate = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
+    subtotal = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
+    tax_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
+    total_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
+
+    billing_period_start = models.DateField()
+    billing_period_end = models.DateField()
+    due_date = models.DateField()
+
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='PENDING')
+    paid_at = models.DateTimeField(null=True, blank=True)
+    payment_method = models.CharField(max_length=30, choices=PAYMENT_METHOD_CHOICES, default='ONLINE')
+    payment_reference = models.CharField(max_length=150, blank=True, null=True)
+    notes = models.TextField(blank=True, null=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'school_invoices'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.invoice_number} - {self.school.name} (₹{self.total_amount})"
+
+
+

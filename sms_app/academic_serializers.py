@@ -11,7 +11,7 @@ class SchoolClassSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = SchoolClass
-        fields = ["id", "school_class", "category"]
+        fields = ["id", "school_class", "category", "is_rte_applicable"]
 
     def validate(self, data):
         request = self.context.get("request")
@@ -160,6 +160,9 @@ class AssignClassSerializer(serializers.ModelSerializer):
         source="division.SchoolClass.school_class", read_only=True
     )
     division_name = serializers.CharField(source="division.division", read_only=True)
+    class_id = serializers.IntegerField(
+        source="division.SchoolClass.id", read_only=True
+    )
 
     class Meta:
         model = AssignClass
@@ -172,10 +175,11 @@ class AssignClassSerializer(serializers.ModelSerializer):
             "division",
             "division_name",
             "class_name",
+            "class_id",
             "is_class_teacher",
         ]
 
-        read_only_fields = ["teacher_name", "subject_name", "division_name", "class_name"]
+        read_only_fields = ["teacher_name", "subject_name", "division_name", "class_name", "class_id"]
 
     def validate(self, data):
         request = self.context.get("request")
@@ -1859,19 +1863,38 @@ class ExamNotificationSerializer(serializers.ModelSerializer):
 
 
 class HomeworkSubmissionSerializer(serializers.ModelSerializer):
+    attachment = serializers.FileField(source="file", required=False)
+    file = serializers.FileField(required=False)
+    student_name = serializers.SerializerMethodField()
+    homework_title = serializers.CharField(source="homework.title", read_only=True, default=None)
+
     class Meta():
-        model=HomeworkSubmissions
-        fields=["id","homework","file","submitted_at"]
-        read_only_fields=["student","submitted_at"]
+        model = HomeworkSubmissions
+        fields = [
+            "id", "homework", "homework_title", "student", "student_name",
+            "file", "attachment", "submitted_at", "status", "marks",
+            "teacher_remark", "checked_by", "checked_at"
+        ]
+        read_only_fields = ["student", "submitted_at", "checked_by", "checked_at"]
+
+    def get_student_name(self, obj):
+        if obj.student:
+            parts = [p for p in [obj.student.surname, obj.student.name, obj.student.father_name] if p]
+            return " ".join(parts) if parts else str(obj.student)
+        return "Student"
 
     def validate(self, attrs):
+        if "file" not in attrs and "attachment" in attrs:
+            attrs["file"] = attrs["attachment"]
+
+        if self.instance is None and not attrs.get("file"):
+            raise serializers.ValidationError({"file": "Please select a file to submit."})
+
         homework = attrs.get("homework")
-
         if homework and homework.due_date:
-            submission_date = now().date() 
+            submission_date = now().date()
             due_date = homework.due_date
-
-            if submission_date > due_date:
+            if submission_date > due_date and self.instance is None:
                 raise serializers.ValidationError(
                     "You cannot submit homework after the due date."
                 )

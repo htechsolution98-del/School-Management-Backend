@@ -160,7 +160,7 @@ REST_FRAMEWORK = {
         "rest_framework.renderers.JSONRenderer",
     ),
     "DATE_FORMAT": "%d-%m-%Y",
-    "DATE_INPUT_FORMATS": ["%d-%m-%Y"],
+    "DATE_INPUT_FORMATS": ["%d-%m-%Y", "%Y-%m-%d", "iso-8601"],
 }
 
 RAZOR_PAY_KEY_ID = 'rzp_test_SFctsjgfvcrQ6h'
