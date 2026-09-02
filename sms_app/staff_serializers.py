@@ -35,6 +35,15 @@ class StaffSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({"message": "Mobile number is already exists."})
         return value
 
+    def validate_date_of_birth(self, value):
+        if value:
+            import datetime
+            today = datetime.date.today()
+            age = today.year - value.year - ((today.month, today.day) < (value.month, value.day))
+            if age < 18:
+                raise serializers.ValidationError("Staff member must be at least 18 years old.")
+        return value
+
 
 
 

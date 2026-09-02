@@ -762,6 +762,16 @@ class StudentFeeSerializer(serializers.ModelSerializer):
         if attrs.get("amount") is None:
             attrs["amount"] = fee_wise_class.amount
 
+        if getattr(student, "is_rte", False):
+            attrs["amount"] = Decimal("0.00")
+            attrs["discount_amount"] = Decimal("0.00")
+            attrs["fine_amount"] = Decimal("0.00")
+            attrs["paid_amount"] = Decimal("0.00")
+            attrs["late_fee_enabled"] = False
+            attrs["late_fee_amount"] = Decimal("0.00")
+            attrs["max_late_fee"] = Decimal("0.00")
+            attrs["status"] = "paid"
+
         if feetype and feetype.billing_cycle == "monthly":
             if not billing_period:
                 raise serializers.ValidationError(

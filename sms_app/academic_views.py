@@ -242,7 +242,7 @@ import string
 class SetDivisionView(ModelViewSet):
     queryset = Division.objects.all()
     serializer_class = SetDivisionSerializer
-    permission_classes = [IsAuthenticated, IsCLerk]
+    permission_classes = [IsAuthenticated, IsClerkOrPrincipal | Isteacher]
 
     # ✅ GET (LIST with safe cache)
     def list(self, request, *args, **kwargs):
@@ -399,7 +399,19 @@ class SetSubjectView(ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return Subject.objects.filter(school=self.request.user.school)
+        qs = Subject.objects.filter(school=self.request.user.school)
+        
+        user_groups = list(self.request.user.groups.values_list('name', flat=True)) if self.request.user else []
+        is_admin_or_clerk = any(role in user_groups for role in ["PRINCIPAL", "CLERK", "admin(trustee)"])
+        
+        if not is_admin_or_clerk:
+            staff = getattr(self.request.user, "staff", None)
+            if staff:
+                from .models import AssignClass
+                assigned_subjects = AssignClass.objects.filter(teacher=staff).values_list('subject_id', flat=True)
+                qs = qs.filter(id__in=assigned_subjects)
+                
+        return qs
 
     def _clear_cache(self):
         try:
@@ -869,7 +881,7 @@ class AcademicYearMainView(ModelViewSet):
 class AcademicYearViewSet(ModelViewSet):
     queryset = AcademicYear.objects.all()
     serializer_class = AcademicYearSerializer
-    permission_classes = [IsAuthenticated, IsClerkOrPrincipal]
+    permission_classes = [IsAuthenticated]
     http_method_names = ["get"]
 
     def get_queryset(self):
@@ -964,15 +976,38 @@ from .models import Time_Table_tb
 class TimeTableViewSet(ModelViewSet):
 
     serializer_class = TimeTableSerializer
-    permission_classes = [IsAuthenticated, IsCLerk]
+    permission_classes = [IsAuthenticated]
 
     queryset = Time_Table_tb.objects.all()
 
-    def get_queryset(self):
+    def get_permissions(self):
+        if self.action in ["list", "retrieve"]:
+            return [IsAuthenticated()]
+        return [IsAuthenticated(), IsCLerk()]
 
-        return self.queryset.filter(school=self.request.user.school).select_related(
+    def get_queryset(self):
+        user = self.request.user
+        school = getattr(user, "school", None)
+        if not school:
+            student = Student.objects.filter(user=user).first()
+            if student:
+                school = student.school
+
+        qs = self.queryset.filter(school=school).select_related(
             "class_division", "class_division__SchoolClass"
         )
+
+        student = Student.objects.filter(user=user).first()
+        if student and student.school_class:
+            div_name = student.division
+            if div_name:
+                qs = qs.filter(
+                    class_division__SchoolClass=student.school_class,
+                    class_division__division__iexact=div_name
+                )
+            else:
+                qs = qs.filter(class_division__SchoolClass=student.school_class)
+        return qs
 
     def perform_create(self, serializer):
 
@@ -1386,15 +1421,27 @@ class AttendanceStudentAPIView(APIView):
         div = assign_class.division
 
         # GET STUDENTS FOR THIS DIVISION ROBUSTLY
-        students = Student.objects.filter(
+        student_qs = Student.objects.filter(
             Q(school=school) & (
                 Q(division=div) |
                 Q(division=str(div.id)) |
                 (Q(school_class=div.SchoolClass) & Q(division__iexact=div.division))
             )
-        ).order_by("gr_no")
+        )
 
-        serializer = StudentSerializer(students, many=True)
+        students_list = list(student_qs)
+        def roll_sort_key(s):
+            r = getattr(s, "roll_no", None)
+            if r and str(r).strip().isdigit():
+                return (0, int(str(r).strip()), s.gr_no or "")
+            elif r and str(r).strip():
+                return (1, str(r).strip(), s.gr_no or "")
+            else:
+                return (2, 999999, s.gr_no or "")
+
+        students_list.sort(key=roll_sort_key)
+
+        serializer = StudentSerializer(students_list, many=True)
 
         assigned_divisions_data = [
             {
@@ -1409,7 +1456,7 @@ class AttendanceStudentAPIView(APIView):
                 "success": True,
                 "division_id": div.id,
                 "division_name": str(div),
-                "total_students": students.count(),
+                "total_students": len(students_list),
                 "students": serializer.data,
                 "assigned_divisions": assigned_divisions_data,
             }
@@ -1667,48 +1714,47 @@ class HomeworkViewSet(ModelViewSet):
         #         queryset = queryset.none()
                 
         if self.is_student():
-            
-            try:
-                student = self.request.user.student
-            except Student.DoesNotExist:
+            student = Student.objects.filter(user=self.request.user).first()
+            if not student or not student.school_class:
                 return queryset.none()
-            print("Student class:", student.school_class_id)
-            print("Student division:", student.division_id)
 
-            if not student.school_class_id or not student.division_id:
-                return queryset.none()
-            print(
-                    list(
-                        queryset.values(
-                            "id",
-                            "title",
-                            "division_id",
-                            "division__SchoolClass_id",
-                            "is_active",
-                        )
-                    )
-                )
-            queryset = queryset.filter(
-                division__SchoolClass_id=student.school_class_id,
-                division_id=student.division_id,
-                is_active=True,
-            )
+            div_name = student.division
+            if div_name:
+                div_obj = Division.objects.filter(
+                    SchoolClass=student.school_class,
+                    division__iexact=div_name,
+                    school=school
+                ).first()
+                if div_obj:
+                    queryset = queryset.filter(division=div_obj, is_active=True)
+                else:
+                    queryset = queryset.filter(division__SchoolClass=student.school_class, is_active=True)
+            else:
+                queryset = queryset.filter(division__SchoolClass=student.school_class, is_active=True)
 
         return queryset.order_by("-assigned_date")
 
     def is_student(self):
         """Check if logged-in user is a student"""
-        try:
-            return hasattr(self.request.user, "student")
-        except:
+        user = getattr(self.request, "user", None)
+        if not user or not user.is_authenticated:
             return False
+        return (
+            user.groups.filter(name__iexact="STUDENT").exists()
+            or getattr(user, "role", "").lower() == "student"
+            or Student.objects.filter(user=user).exists()
+        )
 
     def is_teacher(self):
         """Check if logged-in user is a teacher (has staff profile)"""
-        try:
-            return hasattr(self.request.user, "staff")
-        except:
+        user = getattr(self.request, "user", None)
+        if not user or not user.is_authenticated:
             return False
+        return (
+            user.groups.filter(name__iexact="TEACHER").exists()
+            or getattr(user, "role", "").lower() == "teacher"
+            or Staff.objects.filter(user=user).exists()
+        )
 
     def create(self, request, *args, **kwargs):
         """Only teachers can create homework"""
@@ -1717,8 +1763,16 @@ class HomeworkViewSet(ModelViewSet):
                 {"error": "Only teachers can create homework."},
                 status=status.HTTP_403_FORBIDDEN,
             )
-
         return super().create(request, *args, **kwargs)
+
+    def perform_create(self, serializer):
+        teacher = Staff.objects.filter(user=self.request.user).first()
+        school = getattr(self.request.user, "school", None) or (teacher.school if teacher else None)
+        serializer.save(
+            school=school,
+            teacher=teacher,
+            is_active=True
+        )
 
     def update(self, request, *args, **kwargs):
         """Only the teacher who created can update homework"""
@@ -2092,13 +2146,26 @@ class HomeworkViewSet(ModelViewSet):
 
 
 class StudentGetView(ModelViewSet):
-
     queryset = Student.objects.all()
-
     serializer_class = StudentGetSerializer
+    permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return Student.objects.filter(school=self.request.user.school)
+        user = self.request.user
+        school = getattr(user, "school", None)
+        if not school:
+            student = Student.objects.filter(user=user).first()
+            if student:
+                school = student.school
+        return Student.objects.filter(school=school)
+
+    @action(detail=False, methods=["get"], url_path="me")
+    def my_profile(self, request):
+        student = Student.objects.filter(user=request.user).first()
+        if not student:
+            return Response({"error": "Student profile not found"}, status=404)
+        serializer = self.get_serializer(student)
+        return Response(serializer.data)
 
 
 
@@ -2464,44 +2531,79 @@ class ExamView(APIView):
 class HomeworkSubmissionViewSet(ModelViewSet):
     serializer_class = HomeworkSubmissionSerializer
     queryset = HomeworkSubmissions.objects.all()
-    permission_classes = []
-
-
 
     def get_permissions(self):
         if self.action in ["list", "retrieve"]:
             user = self.request.user
-
-            if hasattr(user, "staff"):
+            if hasattr(user, "staff") or Staff.objects.filter(user=user).exists():
                 return [Isteacher()]
-
-            if hasattr(user, "student"):
-                return [Isstudent()]
-
             return [IsAuthenticated()]
-
+        elif self.action in ["update", "partial_update"]:
+            user = self.request.user
+            if hasattr(user, "staff") or Staff.objects.filter(user=user).exists():
+                return [Isteacher()]
+            return [Isstudent()]
         return [Isstudent()]
 
     def get_queryset(self):
-    # Student: only their own submissions
-        if hasattr(self.request.user, "student"):
-            return HomeworkSubmissions.objects.filter(
-                student=self.request.user.student
-            )
+        user = self.request.user
+        student = Student.objects.filter(user=user).first()
+        if student:
+            return HomeworkSubmissions.objects.filter(student=student)
 
-        # Teacher: all submissions for homework created by them
-        elif hasattr(self.request.user, "staff"):
+        staff = Staff.objects.filter(user=user).first()
+        if staff:
             return HomeworkSubmissions.objects.filter(
-                homework__teacher=self.request.user.staff,
-                homework__school=self.request.user.school
+                homework__teacher=staff,
+                homework__school=staff.school
             )
 
         return HomeworkSubmissions.objects.none()
 
+    def create(self, request, *args, **kwargs):
+        student = Student.objects.filter(user=request.user).first()
+        if not student:
+            return Response(
+                {"error": "Student profile not found"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        homework = serializer.validated_data.get("homework")
+        uploaded_file = serializer.validated_data.get("file")
+
+        # Handle Re-submission (Upsert)
+        existing = HomeworkSubmissions.objects.filter(student=student, homework=homework).first()
+        if existing:
+            if uploaded_file:
+                existing.file = uploaded_file
+            existing.submitted_at = timezone.now()
+            existing.status = "submitted"
+            existing.save()
+            out_serializer = self.get_serializer(existing)
+            return Response(out_serializer.data, status=status.HTTP_200_OK)
+
+        instance = serializer.save(student=student)
+        out_serializer = self.get_serializer(instance)
+        return Response(out_serializer.data, status=status.HTTP_201_CREATED)
+
     def perform_create(self, serializer):
-        serializer.save(
-            student=self.request.user.student
-        )
+        student = Student.objects.filter(user=self.request.user).first()
+        serializer.save(student=student)
+
+    def perform_update(self, serializer):
+        user = self.request.user
+        staff = Staff.objects.filter(user=user).first()
+        if staff:
+            serializer.save(
+                checked_by=staff,
+                checked_at=timezone.now(),
+                status="checked"
+            )
+        else:
+            serializer.save()
     
 
 
@@ -2801,6 +2903,164 @@ class StudyMaterialView(APIView):
             {"message": "Study material deleted successfully."},
             status=204
         )
+
+
+class ParentChildrenView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        parent_records = Perents.objects.filter(user=user).select_related("perents_of", "perents_of__school_class", "perents_of__school")
+        
+        if not parent_records.exists():
+            student = Student.objects.filter(user=user).first()
+            if student:
+                students_to_process = [student]
+            else:
+                return Response([])
+        else:
+            students_to_process = [p.perents_of for p in parent_records if p.perents_of]
+
+        results = []
+        for s in students_to_process:
+            total_att = StudentAttendance.objects.filter(student=s).count()
+            present_att = StudentAttendance.objects.filter(student=s, is_present=True).count()
+            att_pct = round((present_att / total_att * 100), 1) if total_att > 0 else 100.0
+
+            fees = StudentFee.objects.filter(student=s)
+            total_fee_amt = sum(float(f.amount) for f in fees)
+            paid_fee_amt = sum(float(f.paid_amount) for f in fees)
+            due_fee_amt = max(total_fee_amt - paid_fee_amt, 0.0)
+
+            notices = Announcement.objects.filter(
+                school=s.school
+            ).filter(
+                Q(is_everyone=True) | Q(announcement_for__in=["PARENT", "STUDENT"])
+            ).order_by("-created_at")[:5].values("id", "title", "description", "created_at")
+
+            results.append({
+                "id": s.id,
+                "name": s.name or "",
+                "surname": s.surname or "",
+                "gr_no": s.gr_no or "",
+                "roll_no": s.roll_no or "",
+                "school_class_id": s.school_class_id,
+                "school_class_name": s.school_class.school_class if s.school_class else "",
+                "division": s.division or "",
+                "date_of_birth": str(s.date_of_birth) if s.date_of_birth else "",
+                "is_rte": s.is_rte,
+                "school_name": s.school.name if s.school else "",
+                "attendance_percentage": att_pct,
+                "total_working_days": total_att,
+                "present_days": present_att,
+                "total_fees": total_fee_amt,
+                "paid_fees": paid_fee_amt,
+                "pending_fees": due_fee_amt,
+                "fee_status": "Paid" if due_fee_amt == 0 and total_fee_amt > 0 else ("Pending" if due_fee_amt > 0 else "No Dues"),
+                "notices": list(notices),
+            })
+
+        return Response(results)
+
+
+class BoardMeetingSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = BoardMeeting
+        fields = "__all__"
+        read_only_fields = ["school"]
+
+
+class BoardMeetingViewSet(ModelViewSet):
+    permission_classes = [IsAuthenticated]
+    serializer_class = BoardMeetingSerializer
+    queryset = BoardMeeting.objects.all()
+
+    def get_queryset(self):
+        user = self.request.user
+        school = getattr(user, "school", None)
+        if school:
+            return BoardMeeting.objects.filter(school=school).order_by("-meeting_date", "-id")
+        return BoardMeeting.objects.none()
+
+    def perform_create(self, serializer):
+        serializer.save(school=self.request.user.school)
+
+
+class TrusteeAnalyticsView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        school = getattr(user, "school", None)
+        if not school:
+            return Response({"error": "No school associated with this account."}, status=400)
+
+        # 1. Total fee revenues
+        student_fees = StudentFee.objects.filter(student__school=school)
+        total_billed = sum(float(f.amount) for f in student_fees)
+        total_collected = sum(float(f.paid_amount) for f in student_fees)
+        pending_collections = max(total_billed - total_collected, 0.0)
+
+        # 2. Staff Payroll expense
+        salary_payments = StaffSalaryPayment.objects.filter(school=school)
+        total_payroll = sum(float(sp.paid_amount) for sp in salary_payments)
+
+        # 3. Assets and Valuation
+        assets = Asset.objects.filter(school=school)
+        total_assets_count = sum(a.quantity for a in assets)
+        total_assets_valuation = sum(float(a.quantity) * float(a.unit_price or 0) for a in assets)
+
+        # 4. Student & RTE statistics
+        all_students = Student.objects.filter(school=school)
+        total_students = all_students.count()
+        rte_students = all_students.filter(is_rte=True).count()
+        rte_percentage = round((rte_students / total_students * 100), 1) if total_students > 0 else 0.0
+
+        # 5. Staff statistics
+        all_staff = Staff.objects.filter(school=school)
+        total_staff = all_staff.count()
+        active_staff = all_staff.filter(is_active=True).count()
+
+        # Category breakdown
+        staff_by_cat = {}
+        for st in all_staff:
+            cat = st.category or "OTHER"
+            staff_by_cat[cat] = staff_by_cat.get(cat, 0) + 1
+
+        # 6. Upcoming meetings
+        upcoming_meetings = BoardMeeting.objects.filter(
+            school=school
+        ).order_by("-meeting_date")[:5].values("id", "title", "meeting_date", "meeting_time", "location", "status")
+
+        return Response({
+            "school_name": school.name,
+            "financials": {
+                "total_fee_billed": total_billed,
+                "total_fee_collected": total_collected,
+                "pending_collections": pending_collections,
+                "total_payroll_expenditure": total_payroll,
+                "total_assets_valuation": total_assets_valuation,
+            },
+            "rte_stats": {
+                "total_students": total_students,
+                "rte_students": rte_students,
+                "rte_percentage": rte_percentage,
+                "statutory_target_percentage": 25.0,
+                "is_compliant": rte_percentage >= 25.0,
+            },
+            "staff_stats": {
+                "total_staff": total_staff,
+                "active_staff": active_staff,
+                "category_breakdown": staff_by_cat,
+            },
+            "asset_stats": {
+                "total_items": total_assets_count,
+                "valuation": total_assets_valuation,
+            },
+            "meetings": list(upcoming_meetings),
+        })
+
+
 
     
 

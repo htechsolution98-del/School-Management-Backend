@@ -562,6 +562,7 @@ class AdmissionSubmissionSerializer(serializers.ModelSerializer):
             "fee_type",
             "fee_amount",
             "payment_status",
+            "is_rte",
         ]
         read_only_fields = [
             "id",
@@ -638,6 +639,7 @@ class AdmissionSubmissionSerializer(serializers.ModelSerializer):
             validated_data.pop("resolved_school_class", None) or school_class
         )
 
+        is_rte = validated_data.pop("is_rte", False)
         existing_admission = validated_data.pop("existing_admission", None)
 
         form = validated_data["form"]
@@ -655,6 +657,7 @@ class AdmissionSubmissionSerializer(serializers.ModelSerializer):
             admission.school = school
             admission.temp_user = user
             admission.status = "pending"
+            admission.is_rte = is_rte
             admission.save()
 
             # delete old field values
@@ -669,6 +672,7 @@ class AdmissionSubmissionSerializer(serializers.ModelSerializer):
                 school=school,
                 temp_user=user,
                 status="pending",
+                is_rte=is_rte,
             )
             school = School.objects.filter(id=school.id).first()
 
@@ -1221,6 +1225,7 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
                 academic_year = instance.form.academic_year,
                 admission=instance,
                 gr_no=gr_no,
+                is_rte=instance.is_rte,
                 # details_done=True,
             )
             
@@ -1312,6 +1317,12 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
                     for doc in instance.documents.all()
                 ]
             )
+
+            # Map RTEDocument to Student
+            if instance.is_rte:
+                for rte_doc in getattr(instance, 'rte_documents', []).all():
+                    rte_doc.student = student
+                    rte_doc.save()
 
             # =========================
             # 6. CREATE USER (STUDENT)
@@ -1411,6 +1422,7 @@ class GetAdmissionDataSerializer(serializers.ModelSerializer):
     documents = AdmissionDocumentReadSerializer(many=True, read_only=True)
     gr_no = serializers.SerializerMethodField()
     division = serializers.SerializerMethodField()
+    rte_documents = serializers.SerializerMethodField()
 
     def get_gr_no(self, obj):
         sv = StudentVerify.objects.filter(admission_number=obj.admission_number).first()
@@ -1429,6 +1441,21 @@ class GetAdmissionDataSerializer(serializers.ModelSerializer):
                 return fv.value
         return None
 
+    def get_rte_documents(self, obj):
+        request = self.context.get('request')
+        docs = []
+        for doc in obj.rte_documents.all():
+            file_url = doc.document_file.url if doc.document_file else None
+            if request and file_url:
+                file_url = request.build_absolute_uri(file_url)
+            docs.append({
+                "id": doc.id,
+                "document_name": doc.document_name,
+                "document_file": file_url,
+                "is_verified": doc.is_verified,
+            })
+        return docs
+
     class Meta:
         model = Admission
         fields = [
@@ -1437,8 +1464,10 @@ class GetAdmissionDataSerializer(serializers.ModelSerializer):
             "status",
             "gr_no",
             "division",
+            "is_rte",
             "field_values",
             "documents",
+            "rte_documents",
         ]
 
 
@@ -1465,6 +1494,10 @@ class GetStudentSerializer(serializers.ModelSerializer):
     extradata = GetStudentExtraDataSerializer(read_only = True)
     class_name = serializers.CharField(source = "school_class.school_class", default="", read_only=True)
     email = serializers.SerializerMethodField()
+    name = serializers.SerializerMethodField()
+    father_name = serializers.SerializerMethodField()
+    mother_name = serializers.SerializerMethodField()
+    full_name = serializers.SerializerMethodField()
 
     def get_email(self, obj):
         if obj.user and obj.user.email:
@@ -1476,6 +1509,51 @@ class GetStudentSerializer(serializers.ModelSerializer):
             if fv and fv.value:
                 return fv.value
         return None
+
+    def get_name(self, obj):
+        if obj.name:
+            return obj.name
+        if hasattr(obj, "admission") and obj.admission:
+            fv = obj.admission.field_values.filter(
+                Q(field__map_to_student_field="name") |
+                Q(field__label__icontains="student name") |
+                Q(field__label__icontains="first name")
+            ).first()
+            if fv and fv.value:
+                return fv.value
+        return obj.user.first_name if (obj.user and obj.user.first_name) else None
+
+    def get_father_name(self, obj):
+        if obj.father_name:
+            return obj.father_name
+        if hasattr(obj, "admission") and obj.admission:
+            fv = obj.admission.field_values.filter(
+                Q(field__map_to_student_field="father_name") |
+                Q(field__label__icontains="father")
+            ).first()
+            if fv and fv.value:
+                return fv.value
+        return None
+
+    def get_mother_name(self, obj):
+        if obj.mother_name:
+            return obj.mother_name
+        if hasattr(obj, "admission") and obj.admission:
+            fv = obj.admission.field_values.filter(
+                Q(field__map_to_student_field="mother_name") |
+                Q(field__label__icontains="mother")
+            ).first()
+            if fv and fv.value:
+                return fv.value
+        return None
+
+    def get_full_name(self, obj):
+        surname = obj.surname or (obj.user.last_name if obj.user else "")
+        name = self.get_name(obj)
+        father = self.get_father_name(obj)
+        parts = [surname, name, father]
+        res = " ".join([str(p).strip() for p in parts if p and str(p).strip()])
+        return res or (f"Student #{obj.id}")
     
     class Meta:
         model = Student
@@ -1484,12 +1562,16 @@ class GetStudentSerializer(serializers.ModelSerializer):
             "user",
             "name",
             "surname",
+            "father_name",
+            "mother_name",
+            "full_name",
             "email",
             "mobile",
             "school",
             "school_class",
             "class_name",
             "division",
+            "roll_no",
             "is_active",
             "created_at",
             "gr_no",
@@ -1506,7 +1588,7 @@ class StudentSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Student
-        fields = ["id", "surname", "name", "gr_no"]
+        fields = ["id", "surname", "name", "gr_no", "roll_no", "is_rte"]
 
 
 # serializers.py
@@ -1522,7 +1604,7 @@ class StudentGetSerializer(serializers.ModelSerializer):
     class_name = serializers.CharField(source = "school_class.school_class",read_only = True)
     class Meta:
         model = Student
-        fields = ["id", "gr_no", "surname", "name", "father_name", "mother_name", "school_class", "class_name"]
+        fields = ["id", "gr_no", "surname", "name", "father_name", "mother_name", "school_class", "class_name", "is_rte"]
 
 
 
@@ -1538,6 +1620,8 @@ class StudentNotificationSerializer(serializers.ModelSerializer):
         model=StudentNotification
         fields=["notification_type","title","message"]
 
-
-
+class RTEDocumentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = RTEDocument
+        fields = '__all__'
 

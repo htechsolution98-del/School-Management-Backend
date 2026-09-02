@@ -32,10 +32,9 @@ from django.conf.urls.static import static
 from sms_app.views import *
 from sms_app.auth_views import InitDatabaseView
 from sms_app.finance_ledger_views import *
-
-
-
-from sms_app.harsh_views import *
+from sms_app.inventory_views import *
+from sms_app.library_leave_views import *
+from sms_app.subscription_views import SchoolSubscriptionViewSet, SchoolInvoiceViewSet
 
 schema_view = get_schema_view(
     openapi.Info(
@@ -50,6 +49,8 @@ schema_view = get_schema_view(
 
 router = DefaultRouter()
 router.register(r'feature',FeatureView,basename='feature')
+router.register(r'school-subscriptions', SchoolSubscriptionViewSet, basename='school-subscriptions')
+router.register(r'school-invoices', SchoolInvoiceViewSet, basename='school-invoices')
 router.register(r'schoolfeature',SchoolFeatureView, basename='schoolfeature')
 router.register(r'getfeature',GetFeatureView, basename='getfeature')
 router.register(r'changefeaturestatus',ChangeFeatureStatusVIew, basename='changefeaturestatus')
@@ -88,6 +89,11 @@ router.register(r'manualstudent',ManualStudentView,basename='manualstudent')
 # ADMISSION FORM FILL FIELDS SFapi-01
 router.register(r'submissions', FormSubmissionViewSet, basename='submissions')
 # ADMISSION FORM FILL DOCUMENT FIELDS Fapi-02
+from sms_app.student_views import (
+    RTEDocumentViewSet,
+)
+
+router.register(r'rtedocument', RTEDocumentViewSet, basename='rtedocument')
 router.register(r'documentsubmission', DocumentSubmissionView, basename='documentsubmission')
 
 # TEMP USER GET ADMISSION DATA TUapi-01
@@ -171,6 +177,28 @@ router.register("inventory-stock-request",InventoryStockRequestViewSet,basename=
 router.register(r'loss-prevention',LossPreventionViewset,basename='loss-prevention')
 router.register(r'budget',BudgetViewset,basename='budget')
 router.register(r'budget-expense',BudgetExpenseViewset,basename='budget-expense')
+router.register(r'post-tracking', PostTrackingViewSet, basename='post-tracking')
+
+# Comprehensive Inventory Management Endpoints
+router.register(r'inv-categories', InventoryCategoryViewSet, basename='inv-categories')
+router.register(r'inv-subcategories', InventorySubCategoryViewSet, basename='inv-subcategories')
+router.register(r'inv-units', InventoryUnitViewSet, basename='inv-units')
+router.register(r'inv-warehouses', InventoryWarehouseViewSet, basename='inv-warehouses')
+router.register(r'inv-suppliers', InventorySupplierViewSet, basename='inv-suppliers')
+router.register(r'inv-items', InventoryItemViewSet, basename='inv-items')
+router.register(r'inv-item-variants', InventoryItemVariantViewSet, basename='inv-item-variants')
+router.register(r'inv-balances', InventoryStockBalanceViewSet, basename='inv-balances')
+router.register(r'inv-transactions', InventoryTransactionViewSet, basename='inv-transactions')
+router.register(r'inv-opening-stock', InventoryOpeningStockViewSet, basename='inv-opening-stock')
+router.register(r'inv-purchases', InventoryPurchaseViewSet, basename='inv-purchases')
+router.register(r'inv-purchase-requests', PurchaseRequestViewSet, basename='inv-purchase-requests')
+router.register(r'inv-student-issues', StudentInventoryIssueViewSet, basename='inv-student-issues')
+router.register(r'inv-id-cards', StudentIDCardViewSet, basename='inv-id-cards')
+router.register(r'inv-bundles', InventoryBundleViewSet, basename='inv-bundles')
+router.register(r'inv-returns', InventoryReturnViewSet, basename='inv-returns')
+router.register(r'inv-adjustments', InventoryStockAdjustmentViewSet, basename='inv-adjustments')
+
+router.register(r'board-meetings', BoardMeetingViewSet, basename='board-meetings')
 router.register(r'homework', HomeworkViewSet, basename='homework')
 router.register(r'homework-submission', HomeworkSubmissionViewSet, basename='homework-submission')
 router.register(r'studentget', StudentGetView, basename='studentget')
@@ -227,27 +255,50 @@ router.register(r'change-leave-status', ChangeLeaveView, basename='change-leave-
 
 
 router.register(r"books/manage", BookManageView, basename="book-manage") # for add remove update or manage book by librarian
+router.register(r"library-settings", LibrarySettingViewSet, basename="library-settings")
+router.register(r"book-categories", BookCategoryViewSet, basename="book-categories")
+router.register(r"book-authors", AuthorViewSet, basename="book-authors")
+router.register(r"book-publishers", PublisherViewSet, basename="book-publishers")
+router.register(r"library-racks", RackViewSet, basename="library-racks")
+router.register(r"library-shelves", ShelfViewSet, basename="library-shelves")
+router.register(r"book-copies", BookCopyViewSet, basename="book-copies")
+router.register(r"book-reservations", BookReservationViewSet, basename="book-reservations")
 
 # Late fee policy: staff-side, one per school.
 router.register(r"late-fees", LateBookFeesViews, basename="late-fees")
 
 # Staff-side issuing + returning (counter operations).
-# DRF auto-generates /book-issued/<id>/return/ from the @action below.
-router.register(r"book-issued", BookIssuedView, basename="book-issued") #librarian see all book issued and status also issue book to someone and mark return
+router.register(r"book-issued", BookIssuedView, basename="book-issued")
 
 # Student-side read-only catalogue browsing.
 router.register(r"books", BookViewStudent, basename="book-student") 
 
 # Student-side issuing + own loan history.
-# DRF auto-generates /my-books/<id>/return/ from the @action below.
+router.register(r"my-books", BookIssueStudent, basename="my-books")
+from sms_app.exam_views import (
+    ResultWeightageViewSet,
+    ExamRoomViewSet,
+    ExamTermViewSet,
+    ExamFullViewSet,
+    SeatingAllocationViewSet,
+    SubjectMarksEntryViewSet,
+    TeacherAssessmentViewSet,
+    ClassTeacherVerificationViewSet,
+    ResultProcessingViewSet,
+    ResultPublishView,
+)
+
 router.register(r"my-books", BookIssueStudent, basename="book-issue-student")
-
-
 router.register(r"reports", ReportsView, basename="report")
 
-
-
-
+router.register(r"result-weightage", ResultWeightageViewSet, basename="result-weightage")
+router.register(r"exam-rooms", ExamRoomViewSet, basename="exam-room")
+router.register(r"exam-terms", ExamTermViewSet, basename="exam-term")
+router.register(r"exam-full", ExamFullViewSet, basename="exam-full")
+router.register(r"seating-allocation", SeatingAllocationViewSet, basename="seating-allocation")
+router.register(r"subject-marks", SubjectMarksEntryViewSet, basename="subject-marks")
+router.register(r"teacher-assessment", TeacherAssessmentViewSet, basename="teacher-assessment")
+router.register(r"class-verification", ClassTeacherVerificationViewSet, basename="class-verification")
 
 
 urlpatterns = [
@@ -257,6 +308,8 @@ urlpatterns = [
     path('api/',include(router.urls)),
 
     path('api/dashboard-count/', DashboardCountAPIView.as_view(), name='dashboard-count'),
+    path('api/inv-transfer/', InventoryWarehouseTransferAPIView.as_view(), name='inv-transfer'),
+    path('api/inv-dashboard-summary/', InventoryDashboardSummaryAPIView.as_view(), name='inv-dashboard-summary'),
     path('api/access/',CustomLoginView.as_view()),  
     
     path('api/refresh/', CookieTokenRefreshView.as_view(), name='token_refresh'),
@@ -316,6 +369,9 @@ urlpatterns = [
     path('api/offline/payment/',OffilinePaymentView.as_view()),
     path('api/get_receipt/<int:student_id>/<int:form_id>/',get_receipt),
     path('api/schoollist/',SchoolListView.as_view()),
+    path('api/assign-roll-numbers/',AssignRollNumberAPIView.as_view()),
+    path('api/result-process/', ResultProcessingViewSet.as_view()),
+    path('api/result-publish/', ResultPublishView.as_view()),
     path('api/face-enroll/',StaffFaceEnrollView.as_view()),
     path('api/face-verify/',StaffFaceVerifyView.as_view()),
     path('perstaff-leave/',GetRemainingLeavePerStaffView.as_view()),
@@ -328,6 +384,9 @@ urlpatterns = [
     path('api/attendance-notification/',StudentNotificationView.as_view()),
     path('api/monthly-report/',MonthlyProgressReportView.as_view()),
     path("api/monthly-report/<int:id>/",MonthlyProgressReportView.as_view()),
+    path('api/parent/children/', ParentChildrenView.as_view()),
+    path('api/trustee/analytics/', TrusteeAnalyticsView.as_view()),
+    path('api/rte/summary/', RTESummaryView.as_view()),
     path('api/duefeesview/',DueFeesView.as_view()),
     path('api/payment-history/',PaymentHistoryView.as_view()),
     path('api/fee-payment/',FeesPaymentView.as_view()),

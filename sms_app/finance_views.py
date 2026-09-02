@@ -1,8 +1,7 @@
 import hmac
 import hashlib
 from django.conf import settings
-import razorpay
-from sms_app.razorpay_client import client
+from sms_app.razorpay_client import client, get_school_razorpay
 from rest_framework.views import APIView
 from rest_framework.viewsets import ModelViewSet
 from rest_framework import generics
@@ -82,7 +81,9 @@ class RazorpayOrderView(APIView):
         try:
             with transaction.atomic():
                 # print(admission.form.fee_type)
-                if admission.form.fee_type == "general":
+                if admission.is_rte:
+                    fee_amount = 0.0
+                elif admission.form.fee_type == "general":
                     fee_amount = admission.form.fees
                     fee_amount = float(fee_amount)
 
@@ -94,35 +95,43 @@ class RazorpayOrderView(APIView):
                         field__map_to_student_field="school_class",
                     ).first()
 
-                    if not value_obj:
-                        return Response(
-                            {"error": "School class not found in admission form"},
-                            status=status.HTTP_400_BAD_REQUEST,
-                        )
+                    fee_structure = None
+                    val = str(value_obj.value).strip() if value_obj and value_obj.value else ""
 
-                    # Convert class id
-                    try:
-                        class_id = int(value_obj.value)
-                    except (TypeError, ValueError):
-                        return Response(
-                            {"error": "Invalid class id"},
-                            status=status.HTTP_400_BAD_REQUEST,
-                        )
+                    if val.isdigit():
+                        fee_structure = AdmissionFeeStructure.objects.filter(
+                            admission_form=admission.form,
+                            class_name_id=int(val),
+                        ).first()
 
-                    # Get fee structure
-                    fee_structure = AdmissionFeeStructure.objects.filter(
-                        admission_form=admission.form,
-                        class_name_id=class_id,
-                    ).first()
+                    if not fee_structure and val:
+                        fee_structure = AdmissionFeeStructure.objects.filter(
+                            admission_form=admission.form,
+                            class_name__school_class__iexact=val,
+                        ).first()
+
+                    if not fee_structure and val and getattr(admission, "school", None):
+                        matched_class = SchoolClass.objects.filter(
+                            school=admission.school,
+                            school_class__iexact=val,
+                        ).first()
+                        if matched_class:
+                            fee_structure = AdmissionFeeStructure.objects.filter(
+                                admission_form=admission.form,
+                                class_name=matched_class,
+                            ).first()
 
                     if not fee_structure:
-                        return Response(
-                            {"error": "Fee structure not found"},
-                            status=status.HTTP_400_BAD_REQUEST,
-                        )
+                        fee_structure = AdmissionFeeStructure.objects.filter(
+                            admission_form=admission.form,
+                        ).first()
 
-                    # Actual fee amount
-                    fee_amount = float(fee_structure.fee_amount)
+                    if fee_structure and fee_structure.fee_amount is not None:
+                        fee_amount = float(fee_structure.fee_amount)
+                    elif admission.form and admission.form.fees:
+                        fee_amount = float(admission.form.fees)
+                    else:
+                        fee_amount = 0.0
 
                 # Convert to paise for Razorpay
                 razorpay_amount = int(fee_amount * 100)
@@ -147,17 +156,8 @@ class RazorpayOrderView(APIView):
                     admission_fee.save()
 
                 #   ============FOR INDIVIDUAL SCHOOL =============
-                client_to_use = client
                 school = getattr(self.request.user, "school", None) or getattr(admission, "school", None)
-                if school:
-                    razorpay_data = RazorPayData.objects.filter(school_id=school.id).first()
-                    if razorpay_data and razorpay_data.razorpay_key_id and razorpay_data.razorpay_secret_key:
-                        client_to_use = razorpay.Client(
-                            auth=(
-                                razorpay_data.razorpay_key_id,
-                                razorpay_data.razorpay_secret_key,
-                            )
-                        )
+                client_to_use, key_id_to_use, _ = get_school_razorpay(school)
 
                 # Create Razorpay Order
                 razor_order = client_to_use.order.create(
@@ -174,7 +174,7 @@ class RazorpayOrderView(APIView):
                 return Response(
                     {
                         "id": razor_order["id"],
-                        "key": settings.RAZOR_PAY_KEY_ID,
+                        "key": key_id_to_use,
                         "amount": razor_order["amount"],
                         "currency": "INR",
                         "admission_number": admission_number,
@@ -218,20 +218,28 @@ class VerifyPaymentView(APIView):
         if not all([order_id, payment_id, signature]):
             return Response({"error": "Missing payment parameters"}, status=400)
 
-        secret = settings.RAZOR_PAY_SECRET_KEY
-        message = f"{order_id}|{payment_id}"
+        try:
+            payment = AdmissionFee.objects.get(razorpay_order_id=order_id)
+        except AdmissionFee.DoesNotExist:
+            return Response({"error": "Order not found"}, status=404)
 
+        adm_num = admission_number or getattr(payment, "admission_number", None)
+        admission = None
+        if adm_num:
+            admission = Admission.objects.filter(
+                admission_number=adm_num
+            ).first()
+
+        school = getattr(request.user, "school", None) or (admission.school if admission else getattr(payment, "school", None))
+        _, _, secret = get_school_razorpay(school)
+
+        message = f"{order_id}|{payment_id}"
         generated_signature = hmac.new(
             secret.encode(), message.encode(), hashlib.sha256
         ).hexdigest()
 
         if not hmac.compare_digest(generated_signature, signature):
-            return Response({"status": "failed"}, status=400)
-
-        try:
-            payment = AdmissionFee.objects.get(razorpay_order_id=order_id)
-        except AdmissionFee.DoesNotExist:
-            return Response({"error": "Order not found"}, status=404)
+            return Response({"status": "failed", "error": "Invalid signature"}, status=400)
 
         # form_data = AdmissionForm.objects.filter(id=form_id).first()
         # if not form_data:
@@ -753,8 +761,9 @@ class StudentFeeRazorpayOrderView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        client_to_use, key_id_to_use, _ = get_school_razorpay(payment_school)
         amount_in_paise = int(amount * 100)
-        razor_order = client.order.create(
+        razor_order = client_to_use.order.create(
             {
                 "amount": amount_in_paise,
                 "currency": "INR",
@@ -779,7 +788,7 @@ class StudentFeeRazorpayOrderView(APIView):
 
         return Response(
             {
-                "key": settings.RAZOR_PAY_KEY_ID,
+                "key": key_id_to_use,
                 "order_id": razor_order["id"],
                 "amount": razor_order["amount"],
                 "currency": razor_order["currency"],
@@ -807,9 +816,26 @@ class StudentFeeRazorpayVerifyView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        try:
+            payment = get_student_fee_payment_for_online_verify(
+                request.user,
+                order_id,
+            )
+        except Exception:
+            payment = StudentFeePayment.objects.filter(razorpay_order_id=order_id).first()
+
+        if not payment:
+            return Response(
+                {"error": "Payment order record not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        school = getattr(payment, "school", None) or getattr(request.user, "school", None)
+        _, _, secret_to_use = get_school_razorpay(school)
+
         message = f"{order_id}|{payment_id}"
         generated_signature = hmac.new(
-            settings.RAZOR_PAY_SECRET_KEY.encode(),
+            secret_to_use.encode(),
             message.encode(),
             hashlib.sha256,
         ).hexdigest()
@@ -818,16 +844,6 @@ class StudentFeeRazorpayVerifyView(APIView):
             return Response(
                 {"status": "failed", "error": "Invalid payment signature"},
                 status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        try:
-            payment = get_student_fee_payment_for_online_verify(
-                request.user,
-                order_id,
-            )
-        except StudentFeePayment.DoesNotExist:
-            return Response(
-                {"error": "Payment order not found"}, status=status.HTTP_404_NOT_FOUND
             )
 
         if payment.is_verified:
@@ -902,17 +918,14 @@ class DueFeesView(APIView):
 
 
 class PaymentHistoryView(APIView):
-
-    permission_classes = [IsAuthenticated, Isparent]
+    permission_classes = [IsAuthenticated]
     
     def get(self, request):
-
-        student_ids = Perents.objects.filter(
-            user=request.user
-        ).values_list(
-            "perents_of_id",
-            flat=True
-        )
+        student = Student.objects.filter(user=request.user).first()
+        if student:
+            student_ids = [student.id]
+        else:
+            student_ids = list(Perents.objects.filter(user=request.user).values_list("perents_of_id", flat=True))
 
         payment_history = StudentFeePayment.objects.filter(
             student_fee__student_id__in=student_ids
@@ -928,15 +941,14 @@ class PaymentHistoryView(APIView):
 
 
 class FeesPaymentView(APIView):
-    permission_classes = [Isparent]
+    permission_classes = [IsAuthenticated]
     
     def get(self, request):
-        student_ids = Perents.objects.filter(
-            user=request.user
-        ).values_list(
-            "perents_of_id",
-            flat=True
-        )
+        student = Student.objects.filter(user=request.user).first()
+        if student:
+            student_ids = [student.id]
+        else:
+            student_ids = list(Perents.objects.filter(user=request.user).values_list("perents_of_id", flat=True))
 
         fees = StudentFee.objects.filter(
             student_id__in=student_ids
@@ -944,23 +956,21 @@ class FeesPaymentView(APIView):
 
         serializer = StudentFeeSerializer(fees, many=True)
         return Response(serializer.data)
-    def post(self, request):
 
+    def post(self, request):
         fee_id = request.data.get("fee_id")
 
-        student_ids = Perents.objects.filter(
-            user=request.user
-        ).values_list(
-            "perents_of_id",
-            flat=True
-        )
-        print(student_ids)
+        student = Student.objects.filter(user=request.user).first()
+        if student:
+            student_ids = [student.id]
+        else:
+            student_ids = list(Perents.objects.filter(user=request.user).values_list("perents_of_id", flat=True))
+
         try:
             fee = StudentFee.objects.get(
                 id=fee_id,
                 student_id__in=student_ids
             )
-
         except StudentFee.DoesNotExist:
             return Response(
                 {"error": "Fee record not found"},
@@ -996,28 +1006,25 @@ class FeesPaymentView(APIView):
 
 
 class VerifypaymentView(APIView):
-    permission_classes = [IsAuthenticated, Isparent,Isstudent]
+    permission_classes = [IsAuthenticated]
 
     def post(self, request):
-
         fee_id = request.data.get("fee_id")
         razorpay_order_id = request.data.get("razorpay_order_id")
         razorpay_payment_id = request.data.get("razorpay_payment_id")
         razorpay_signature = request.data.get("razorpay_signature")
 
-        student_ids = Perents.objects.filter(
-            user=request.user
-        ).values_list(
-            "perents_of_id",
-            flat=True
-        )
+        student = Student.objects.filter(user=request.user).first()
+        if student:
+            student_ids = [student.id]
+        else:
+            student_ids = list(Perents.objects.filter(user=request.user).values_list("perents_of_id", flat=True))
 
         try:
             fee = StudentFee.objects.get(
                 id=fee_id,
                 student_id__in=student_ids
             )
-
         except StudentFee.DoesNotExist:
             return Response(
                 {"error": "Fee record not found"},
@@ -1118,6 +1125,63 @@ class BudgetExpenseViewset(ModelViewSet):
     
     def perform_create(self, serializer):
         serializer.save()
+
+
+class RTESummaryView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        school = getattr(user, "school", None)
+        if not school:
+            return Response({"error": "No school found."}, status=400)
+
+        rte_students = Student.objects.filter(school=school, is_rte=True).select_related("school_class")
+        all_students = Student.objects.filter(school=school)
+        classes = SchoolClass.objects.filter(school=school)
+
+        class_quota = []
+        for c in classes:
+            total_in_class = all_students.filter(school_class=c).count()
+            rte_in_class = rte_students.filter(school_class=c).count()
+            pct = round((rte_in_class / total_in_class * 100), 1) if total_in_class > 0 else 0.0
+            class_quota.append({
+                "class_id": c.id,
+                "class_name": c.school_class,
+                "total_students": total_in_class,
+                "rte_students": rte_in_class,
+                "percentage": pct,
+                "compliant": pct >= 25.0,
+            })
+
+        standard_claim_rate = 28500.0
+        total_estimated_claim = len(rte_students) * standard_claim_rate
+
+        student_list = []
+        for s in rte_students:
+            student_list.append({
+                "id": s.id,
+                "name": f"{s.name or ''} {s.surname or ''}".strip(),
+                "gr_no": s.gr_no or "",
+                "roll_no": s.roll_no or "",
+                "school_class": s.school_class.school_class if s.school_class else "",
+                "division": s.division or "",
+                "admission_date": str(s.admission_date) if s.admission_date else "",
+                "reimbursement_claim_amount": standard_claim_rate,
+                "claim_status": "Eligible for Submission",
+            })
+
+        return Response({
+            "school_name": school.name,
+            "standard_reimbursement_rate": standard_claim_rate,
+            "total_rte_students": len(rte_students),
+            "total_students": all_students.count(),
+            "overall_rte_percentage": round((len(rte_students) / all_students.count() * 100), 1) if all_students.count() > 0 else 0.0,
+            "total_estimated_claim": total_estimated_claim,
+            "class_quota": class_quota,
+            "students": student_list,
+        })
+
 
 
 

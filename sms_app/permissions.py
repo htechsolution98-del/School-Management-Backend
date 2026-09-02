@@ -1,278 +1,158 @@
 from rest_framework.permissions import BasePermission
+from .models import Student
 
 class Is_super_admin(BasePermission):
     def has_permission(self, request, view):
-        return (
-            request.user
-            and request.user.is_authenticated
-            and (request.user.is_superuser or request.user.groups.filter(name='super_admin').exists())
-        )
-
-class Is_admin_trustee(BasePermission):
-    def has_permission(self, request, view):
-        return (
-            request.user
-            and request.user.is_authenticated
-            and request.user.groups.filter(name="admin(trustee)").exists()
-        )
-
-
-
-
-class IsCLerk(BasePermission):
-    def has_permission(self, request, view):
-        return (
-            request.user
-            and request.user.is_authenticated
-            and request.user.groups.filter(name="CLERK").exists()
-        )
-
-
-
-
-class IsFeeManager(BasePermission):
-    def has_permission(self, request, view):
-        return (
-            request.user
-            and request.user.is_authenticated
-            and request.user.groups.filter(name="FEES MANAGEMENT").exists()
-        )
-
-
-
-
-class Isprincipal(BasePermission):
-    def has_permission(self, request, view):
-        return (
-            request.user
-            and request.user.is_authenticated
-            and request.user.groups.filter(name="PRINCIPAL").exists()
-        )
-
-
-
-
-class Isstudent(BasePermission):
-    def has_permission(self, request, view):
-        return (
-            request.user
-            and request.user.is_authenticated
-            and request.user.groups.filter(name="STUDENT").exists()
-        )
-
-
-class Isparent(BasePermission):
-    def has_permission(self, request, view):
-        return (
-            request.user
-            and request.user.is_authenticated
-            and request.user.groups.filter(name="PARENT").exists()
-        )
-
-
-
-class Isteacher(BasePermission):
-    def has_permission(self, request, view):
-        return (
-            request.user
-            and request.user.is_authenticated
-            and request.user.groups.filter(name="TEACHER").exists()
-        )
-
-
-
-class Isinventory(BasePermission):
-    def has_permission(self, request, view):
-        return (
-            request.user
-            and request.user.is_authenticated
-            and request.user.groups.filter(name="INVENTORY").exists()
-        )
-
-
-
-
-class IsTempUser(BasePermission):
-    def has_permission(self, request, view):
-        return (
-            request.user
-            and request.user.is_authenticated
-            and request.user.groups.filter(name="temp_user").exists()
-        )
-
-
-
-
-
-class HasModuleAccess(BasePermission):
-    """
-    Allows access if user is mapped to module
-    """
-
-    def has_permission(self, request, view):
-        user = request.user
-
+        user = getattr(request, "user", None)
         if not user or not user.is_authenticated:
             return False
-
-        if not user.is_active:
-            return False
-
-        if user.is_superuser:
-            return True
-
-        module_code = getattr(view, "module_code", None)
-
-        if not module_code:
-            raise AttributeError("module_code is required in the view")
-
-        return UserModuleAccess.objects.filter(
-            user=user, module__code=module_code, module__is_active=True
-        ).exists()
-
-class IsAdminTrusteeOrPrincipal(BasePermission):
-    def has_permission(self, request, view):
-        return (
-            request.user
-            and request.user.is_authenticated
-            and request.user.groups.filter(name__in=["admin(trustee)", "PRINCIPAL"]).exists()
+        role = getattr(user, "role", "") or ""
+        return bool(
+            user.is_superuser
+            or user.is_staff
+            or role.lower() in ["superadmin", "super_admin", "super admin"]
+            or user.groups.filter(name__in=["super_admin", "superadmin", "Super Admin"]).exists()
         )
 
-class IsClerkOrPrincipal(BasePermission):
+
+class Is_admin_trustee(BasePermission):
     def has_permission(self, request, view):
         user = getattr(request, "user", None)
         if not user or not user.is_authenticated:
             return False
         if getattr(user, "is_superuser", False):
             return True
-    def has_permission(self, request, view):
-        return (
-            request.user
-            and request.user.is_authenticated
-            and request.user.groups.filter(name="admin(trustee)").exists()
-        )
-
-
+        return user.groups.filter(name__in=["admin(trustee)", "trustee", "ADMIN"]).exists()
 
 
 class IsCLerk(BasePermission):
     def has_permission(self, request, view):
-        return (
-            request.user
-            and request.user.is_authenticated
-            and request.user.groups.filter(name="CLERK").exists()
-        )
-
-
+        user = getattr(request, "user", None)
+        if not user or not user.is_authenticated:
+            return False
+        if getattr(user, "is_superuser", False):
+            return True
+        return user.groups.filter(name__iexact="CLERK").exists()
 
 
 class IsFeeManager(BasePermission):
     def has_permission(self, request, view):
-        return (
-            request.user
-            and request.user.is_authenticated
-            and request.user.groups.filter(name="FEES MANAGEMENT").exists()
-        )
-
-
+        user = getattr(request, "user", None)
+        if not user or not user.is_authenticated:
+            return False
+        if getattr(user, "is_superuser", False):
+            return True
+        return user.groups.filter(name__iexact="FEES MANAGEMENT").exists()
 
 
 class Isprincipal(BasePermission):
     def has_permission(self, request, view):
-        return (
-            request.user
-            and request.user.is_authenticated
-            and request.user.groups.filter(name="PRINCIPAL").exists()
-        )
-
-
+        user = getattr(request, "user", None)
+        if not user or not user.is_authenticated:
+            return False
+        if getattr(user, "is_superuser", False):
+            return True
+        return user.groups.filter(name__iexact="PRINCIPAL").exists()
 
 
 class Isstudent(BasePermission):
     def has_permission(self, request, view):
+        user = getattr(request, "user", None)
+        if not user or not user.is_authenticated:
+            return False
+        if getattr(user, "is_superuser", False):
+            return True
         return (
-            request.user
-            and request.user.is_authenticated
-            and request.user.groups.filter(name="STUDENT").exists()
+            user.groups.filter(name__iexact="STUDENT").exists()
+            or getattr(user, "role", "").lower() == "student"
+            or Student.objects.filter(user=user).exists()
         )
 
 
 class Isparent(BasePermission):
     def has_permission(self, request, view):
+        user = getattr(request, "user", None)
+        if not user or not user.is_authenticated:
+            return False
+        if getattr(user, "is_superuser", False):
+            return True
         return (
-            request.user
-            and request.user.is_authenticated
-            and request.user.groups.filter(name="PARENT").exists()
+            user.groups.filter(name__in=["PARENT", "PARENTS", "parent", "parents"]).exists()
+            or getattr(user, "role", "").lower() in ["parent", "parents"]
         )
-
 
 
 class Isteacher(BasePermission):
     def has_permission(self, request, view):
+        user = getattr(request, "user", None)
+        if not user or not user.is_authenticated:
+            return False
+        if getattr(user, "is_superuser", False):
+            return True
         return (
-            request.user
-            and request.user.is_authenticated
-            and request.user.groups.filter(name="TEACHER").exists()
+            user.groups.filter(name__iexact="TEACHER").exists()
+            or getattr(user, "role", "").lower() == "teacher"
+            or hasattr(user, "staff")
         )
-
 
 
 class Isinventory(BasePermission):
     def has_permission(self, request, view):
-        return (
-            request.user
-            and request.user.is_authenticated
-            and request.user.groups.filter(name="INVENTORY").exists()
-        )
-
-
+        user = getattr(request, 'user', None)
+        if not user or not user.is_authenticated:
+            return False
+        if getattr(user, 'is_superuser', False):
+            return True
+        if getattr(user, 'role', '') in ['INVENTORY', 'PRINCIPAL', 'ADMIN', 'SUPERADMIN']:
+            return True
+        if user.groups.filter(name__in=['INVENTORY', 'PRINCIPAL', 'super_admin']).exists():
+            return True
+        staff = getattr(user, 'staff', None)
+        if staff and staff.category in ['INVENTORY', 'PRINCIPAL']:
+            return True
+        return False
 
 
 class IsTempUser(BasePermission):
     def has_permission(self, request, view):
-        return (
-            request.user
-            and request.user.is_authenticated
-            and request.user.groups.filter(name="temp_user").exists()
-        )
-
-
-
+        user = getattr(request, "user", None)
+        if not user or not user.is_authenticated:
+            return False
+        if getattr(user, "is_superuser", False):
+            return True
+        return user.groups.filter(name__iexact="temp_user").exists()
 
 
 class HasModuleAccess(BasePermission):
     """
     Allows access if user is mapped to module
     """
-
     def has_permission(self, request, view):
         user = request.user
-
         if not user or not user.is_authenticated:
             return False
-
         if not user.is_active:
             return False
-
         if user.is_superuser:
             return True
-
         module_code = getattr(view, "module_code", None)
-
         if not module_code:
             raise AttributeError("module_code is required in the view")
-
+        from .models import UserModuleAccess
         return UserModuleAccess.objects.filter(
             user=user, module__code=module_code, module__is_active=True
         ).exists()
 
+
 class IsAdminTrusteeOrPrincipal(BasePermission):
     def has_permission(self, request, view):
-        return (
-            request.user
-            and request.user.is_authenticated
-            and request.user.groups.filter(name__in=["admin(trustee)", "PRINCIPAL"]).exists()
-        )
+        user = getattr(request, "user", None)
+        if not user or not user.is_authenticated:
+            return False
+        if getattr(user, "is_superuser", False):
+            return True
+        return user.groups.filter(name__in=["admin(trustee)", "PRINCIPAL"]).exists()
+
 
 class IsClerkOrPrincipal(BasePermission):
     def has_permission(self, request, view):
@@ -300,6 +180,7 @@ class IsPrincipalOrTrustee(BasePermission):
             return True
         return user.groups.filter(name__in=["CLERK", "PRINCIPAL", "admin(trustee)"]).exists()
 
+
 class IsClerkOrTrustee(BasePermission):
     def has_permission(self, request, view):
         user = getattr(request, 'user', None)
@@ -318,9 +199,23 @@ class IsClerkOrTempUser(BasePermission):
         if getattr(user, 'is_superuser', False):
             return True
         role = getattr(user, 'role', '')
-        if role in ['CLERK', 'PRINCIPAL', 'ADMIN', 'TEMP_USER']:
+        if role in ['CLERK', 'temp_user', 'PRINCIPAL', 'ADMIN']:
             return True
-        return user.groups.filter(name__in=['CLERK', 'PRINCIPAL', 'TEMP_USER']).exists()
+        return user.groups.filter(name__in=['CLERK', 'temp_user', 'PRINCIPAL', 'admin(trustee)']).exists()
 
 
-
+class IsLibrarian(BasePermission):
+    def has_permission(self, request, view):
+        user = getattr(request, 'user', None)
+        if not user or not user.is_authenticated:
+            return False
+        if getattr(user, 'is_superuser', False):
+            return True
+        if getattr(user, 'role', '') in ['LIBRARIAN', 'PRINCIPAL', 'ADMIN', 'SUPERADMIN']:
+            return True
+        if user.groups.filter(name__in=['LIBRARIAN', 'PRINCIPAL', 'super_admin']).exists():
+            return True
+        staff = getattr(user, 'staff', None)
+        if staff and staff.category in ['LIBRARIAN', 'PRINCIPAL']:
+            return True
+        return False
