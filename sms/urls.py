@@ -34,7 +34,14 @@ from sms_app.auth_views import InitDatabaseView
 from sms_app.finance_ledger_views import *
 from sms_app.inventory_views import *
 from sms_app.library_leave_views import *
-from sms_app.subscription_views import SchoolSubscriptionViewSet, SchoolInvoiceViewSet
+from sms_app.subscription_views import (
+    SubscriptionPlanViewSet,
+    SchoolSubscriptionViewSet,
+    SchoolInvoiceViewSet,
+    SubscriptionPaymentViewSet,
+    SubscriptionAuditLogViewSet,
+    SubscriptionSettingViewSet,
+)
 
 schema_view = get_schema_view(
     openapi.Info(
@@ -49,8 +56,13 @@ schema_view = get_schema_view(
 
 router = DefaultRouter()
 router.register(r'feature',FeatureView,basename='feature')
+router.register(r'subscription-plans', SubscriptionPlanViewSet, basename='subscription-plans')
 router.register(r'school-subscriptions', SchoolSubscriptionViewSet, basename='school-subscriptions')
 router.register(r'school-invoices', SchoolInvoiceViewSet, basename='school-invoices')
+router.register(r'subscription-payments', SubscriptionPaymentViewSet, basename='subscription-payments')
+router.register(r'subscription-audit-logs', SubscriptionAuditLogViewSet, basename='subscription-audit-logs')
+router.register(r'subscription-settings', SubscriptionSettingViewSet, basename='subscription-settings')
+
 router.register(r'schoolfeature',SchoolFeatureView, basename='schoolfeature')
 router.register(r'getfeature',GetFeatureView, basename='getfeature')
 router.register(r'changefeaturestatus',ChangeFeatureStatusVIew, basename='changefeaturestatus')
