@@ -3318,6 +3318,60 @@ from .inventory_models import (
 # SCHOOL SUBSCRIPTION & MULTI-TENANT LICENSING MODELS
 # ========================================================
 
+# ========================================================
+# SCHOOL SUBSCRIPTION & MULTI-TENANT LICENSING MODELS
+# ========================================================
+
+class SubscriptionPlan(models.Model):
+    PRICING_MODEL_CHOICES = [
+        ('PER_STUDENT', 'Per-Student Dynamic Billing'),
+        ('FLAT', 'Flat Fixed Rate'),
+    ]
+
+    name = models.CharField(max_length=100, unique=True)
+    description = models.TextField(blank=True, null=True)
+    pricing_model = models.CharField(max_length=20, choices=PRICING_MODEL_CHOICES, default='PER_STUDENT')
+
+    # Flat or Per-Student rate per cycle
+    monthly_price = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
+    quarterly_price = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
+    half_yearly_price = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
+    yearly_price = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
+
+    # Features & Limits
+    trial_available = models.BooleanField(default=True)
+    trial_duration_days = models.PositiveIntegerField(default=14)
+    max_students = models.PositiveIntegerField(default=500, help_text="0 for unlimited")
+    max_teachers = models.PositiveIntegerField(default=50, help_text="0 for unlimited")
+    max_staff = models.PositiveIntegerField(default=50, help_text="0 for unlimited")
+    max_admin_users = models.PositiveIntegerField(default=5, help_text="0 for unlimited")
+    storage_limit_mb = models.PositiveIntegerField(default=5000)
+
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'subscription_plans'
+        ordering = ['name']
+
+    def __str__(self):
+        return f"{self.name} ({self.pricing_model})"
+
+
+class SubscriptionPlanModule(models.Model):
+    plan = models.ForeignKey(SubscriptionPlan, on_delete=models.CASCADE, related_name='plan_modules')
+    module = models.ForeignKey(Module, on_delete=models.CASCADE, related_name='plan_assignments')
+    is_enabled = models.BooleanField(default=True)
+
+    class Meta:
+        db_table = 'subscription_plan_modules'
+        unique_together = ('plan', 'module')
+
+    def __str__(self):
+        return f"{self.plan.name} -> {self.module.code}"
+
+
 class SchoolSubscription(models.Model):
     PLAN_TYPE_CHOICES = [
         ('TRIAL', 'Free Trial'),
@@ -3332,30 +3386,44 @@ class SchoolSubscription(models.Model):
     BILLING_CYCLE_CHOICES = [
         ('MONTHLY', 'Monthly'),
         ('QUARTERLY', 'Quarterly'),
+        ('HALF_YEARLY', '6 Months'),
         ('YEARLY', 'Yearly'),
         ('CUSTOM', 'Custom'),
     ]
 
     STATUS_CHOICES = [
         ('TRIAL', 'Active Trial'),
+        ('TRIAL_EXPIRED', 'Trial Expired'),
+        ('PENDING_PAYMENT', 'Pending Payment'),
         ('ACTIVE', 'Active Subscription'),
+        ('EXPIRING', 'Expiring Soon'),
         ('EXPIRED', 'Expired / Overdue'),
+        ('GRACE_PERIOD', 'Grace Period'),
         ('SUSPENDED', 'Locked / Suspended'),
+        ('CANCELLED', 'Cancelled'),
     ]
 
     school = models.OneToOneField(School, on_delete=models.CASCADE, related_name='subscription')
+    plan = models.ForeignKey(SubscriptionPlan, on_delete=models.SET_NULL, null=True, blank=True, related_name='school_subscriptions')
     plan_type = models.CharField(max_length=20, choices=PLAN_TYPE_CHOICES, default='TRIAL')
     billing_model = models.CharField(max_length=20, choices=BILLING_MODEL_CHOICES, default='FLAT')
     billing_cycle = models.CharField(max_length=20, choices=BILLING_CYCLE_CHOICES, default='MONTHLY')
 
     flat_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
     per_student_rate = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
+    student_count_at_purchase = models.PositiveIntegerField(default=0)
+    price_snapshot = models.JSONField(default=dict, blank=True)
+
+    trial_start_date = models.DateField(null=True, blank=True)
+    trial_end_date = models.DateField(null=True, blank=True)
+    subscription_start_date = models.DateField(null=True, blank=True)
+    subscription_end_date = models.DateField(null=True, blank=True)
 
     start_date = models.DateField(default=timezone.now)
     due_date = models.DateField()
     grace_period_days = models.PositiveIntegerField(default=0)
 
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='TRIAL')
+    status = models.CharField(max_length=25, choices=STATUS_CHOICES, default='TRIAL')
     auto_lock_on_due = models.BooleanField(default=True)
     notes = models.TextField(blank=True, null=True)
 
@@ -3370,14 +3438,15 @@ class SchoolSubscription(models.Model):
 
     def is_valid_now(self):
         """Returns True if the subscription/trial is currently active and within due date/grace period."""
-        if self.status == 'SUSPENDED':
+        if self.status in ['SUSPENDED', 'CANCELLED', 'TRIAL_EXPIRED', 'EXPIRED']:
             return False
         today = timezone.now().date()
         effective_due = self.due_date + timedelta(days=self.grace_period_days)
         return today <= effective_due
 
     def get_live_student_count(self):
-        return Student.objects.filter(school=self.school).count()
+        """Returns count of active non-deleted students for this school."""
+        return Student.objects.filter(school=self.school, is_active=True).count()
 
     def calculate_current_amount(self):
         if self.billing_model == 'FLAT':
@@ -3410,10 +3479,13 @@ class SchoolInvoice(models.Model):
     subscription = models.ForeignKey(SchoolSubscription, on_delete=models.SET_NULL, null=True, blank=True, related_name='invoices')
     invoice_number = models.CharField(max_length=50, unique=True)
     billing_model = models.CharField(max_length=20, default='FLAT')
+    billing_cycle = models.CharField(max_length=20, default='MONTHLY')
     student_count = models.PositiveIntegerField(default=0)
     unit_rate = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
     subtotal = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
+    tax_percentage = models.DecimalField(max_digits=5, decimal_places=2, default=0.00)
     tax_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
+    discount_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
     total_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
 
     billing_period_start = models.DateField()
@@ -3435,6 +3507,71 @@ class SchoolInvoice(models.Model):
 
     def __str__(self):
         return f"{self.invoice_number} - {self.school.name} (₹{self.total_amount})"
+
+
+class SubscriptionPayment(models.Model):
+    STATUS_CHOICES = [
+        ('INITIATED', 'Initiated'),
+        ('SUCCESS', 'Success'),
+        ('FAILED', 'Failed'),
+        ('REFUNDED', 'Refunded'),
+        ('CANCELLED', 'Cancelled'),
+    ]
+
+    payment_id = models.CharField(max_length=100, unique=True)
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='subscription_payments')
+    subscription = models.ForeignKey(SchoolSubscription, on_delete=models.SET_NULL, null=True, blank=True, related_name='payments')
+    invoice = models.ForeignKey(SchoolInvoice, on_delete=models.SET_NULL, null=True, blank=True, related_name='payments')
+    transaction_id = models.CharField(max_length=150, blank=True, null=True)
+    gateway = models.CharField(max_length=50, default='RAZORPAY')
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    currency = models.CharField(max_length=10, default='INR')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='INITIATED')
+    payment_method = models.CharField(max_length=50, default='ONLINE')
+    paid_at = models.DateTimeField(null=True, blank=True)
+    failure_reason = models.TextField(blank=True, null=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'subscription_payments'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.payment_id} - {self.school.name} - ₹{self.amount} ({self.status})"
+
+
+class SubscriptionAuditLog(models.Model):
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='subscription_audit_logs', null=True, blank=True)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
+    action = models.CharField(max_length=100)
+    old_values = models.JSONField(default=dict, blank=True)
+    new_values = models.JSONField(default=dict, blank=True)
+    notes = models.TextField(blank=True, null=True)
+    timestamp = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'subscription_audit_logs'
+        ordering = ['-timestamp']
+
+    def __str__(self):
+        return f"{self.action} - {self.school.name if self.school else 'System'} @ {self.timestamp}"
+
+
+class SubscriptionSetting(models.Model):
+    key = models.CharField(max_length=100, unique=True)
+    value = models.CharField(max_length=255)
+    description = models.TextField(blank=True, null=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'subscription_settings'
+
+    def __str__(self):
+        return f"{self.key} = {self.value}"
+
 
 
 

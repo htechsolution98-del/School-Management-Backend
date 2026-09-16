@@ -43,10 +43,13 @@ class CookieJWTAuthentication(JWTAuthentication):
         # =====================================
         # Block Users Of Deactivated Schools
         # =====================================
-        school = getattr(user, "school", None)
-        if school and school.is_active is False and not user.is_superuser:
-            raise AuthenticationFailed(
-                {"message": "School is deactivated. Contact administrator."}
-            )
+        is_super = user.is_superuser or user.is_staff or getattr(user, "role", "").lower() in ["superadmin", "super_admin"]
+        if not is_super:
+            school = getattr(user, "school", None)
+            if school and school.is_active is False:
+                raise AuthenticationFailed(
+                    {"message": "School is deactivated. Contact administrator."}
+                )
+
 
         return user, validated_token

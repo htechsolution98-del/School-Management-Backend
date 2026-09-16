@@ -160,11 +160,14 @@ class LoginSerializer(serializers.Serializer):
         if not user.is_active:
             raise serializers.ValidationError({"message": "Account disabled"})
 
-        school = getattr(user, "school", None)
-        if school and school.is_active is False:
-            raise serializers.ValidationError(
-                {"message": "School is deactivated. Contact administrator."}
-            )
+        is_super = user.is_superuser or user.is_staff or getattr(user, "role", "").lower() in ["superadmin", "super_admin"]
+        if not is_super:
+            school = getattr(user, "school", None)
+            if school and school.is_active is False:
+                raise serializers.ValidationError(
+                    {"message": "School is deactivated. Contact administrator."}
+                )
+
 
         data["user"] = user
         return data
