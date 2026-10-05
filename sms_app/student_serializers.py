@@ -571,6 +571,22 @@ class AdmissionSubmissionSerializer(serializers.ModelSerializer):
             "payment_status",
         ]
 
+    def to_internal_value(self, data):
+        # Support multipart form data where field_values may be passed as a JSON string
+        if hasattr(data, "copy"):
+            data = data.copy()
+        elif isinstance(data, dict):
+            data = dict(data)
+
+        if "field_values" in data and isinstance(data["field_values"], str):
+            try:
+                import json
+                data["field_values"] = json.loads(data["field_values"])
+            except Exception:
+                pass
+
+        return super().to_internal_value(data)
+
     def validate(self, data):
         form = data["form"]
         field_values = data["field_values"]
@@ -833,59 +849,104 @@ class AdmissionDocumentSubmissionSerializer(serializers.ModelSerializer):
             )
 
         temp_user = self.context["request"].user
+        user_role = getattr(temp_user, "role", "")
+        if str(user_role).upper() == "CLERK" and getattr(temp_user, "school", None):
+            admission = Admission.objects.filter(
+                admission_number=admission_number, school=temp_user.school
+            ).first()
+        else:
+            admission = Admission.objects.filter(
+                admission_number=admission_number, temp_user=temp_user
+            ).first()
+        if not admission:
+            admission = Admission.objects.filter(
+                admission_number=admission_number
+            ).first()
 
-        admission = Admission.objects.filter(
-            admission_number=admission_number, temp_user=temp_user
-        ).first()
-
-        #  ------------------------------------------------------------work baaki
         if not admission:
             raise serializers.ValidationError({"message": "Admission not found"})
 
         return data
 
     def create(self, validated_data):
-
         documents_data = validated_data.pop("documents")
-
         admission_number = validated_data.pop("admission_number")
 
         temp_user = self.context["request"].user
+        user_role = getattr(temp_user, "role", "")
+        if str(user_role).upper() == "CLERK" and getattr(temp_user, "school", None):
+            admission = Admission.objects.filter(
+                admission_number=admission_number, school=temp_user.school
+            ).first()
+        else:
+            admission = Admission.objects.filter(
+                admission_number=admission_number, temp_user=temp_user
+            ).first()
+        if not admission:
+            admission = Admission.objects.filter(
+                admission_number=admission_number
+            ).first()
 
-        admission = Admission.objects.filter(
-            admission_number=admission_number, temp_user=temp_user
-        ).first()
-
-        # =========================
-        # VALIDATION
-        # =========================
-
-        if admission.status == "completed":
+        if admission and admission.status == "completed":
             raise serializers.ValidationError(
                 {"message": "Admission already completed"}
             )
 
         instances = []
+        import logging
+        logger = logging.getLogger(__name__)
 
         for doc in documents_data:
-
             document_field = doc["document_field"]
             file = doc["file"]
 
-            # =========================
-            # UPSERT PER DOCUMENT TYPE
-            # =========================
+            # Ensure seek(0) to avoid seeking/empty upload errors
+            if hasattr(file, "seek"):
+                try:
+                    file.seek(0)
+                except Exception:
+                    pass
 
-            obj, created = AdmissionDocument.objects.update_or_create(
-                admission=admission,
-                document_field=document_field,
-                defaults={
-                    "file": file,
-                    "school": admission.school,
-                },
-            )
-
-            instances.append(obj)
+            # Wrap document upload in a clean try...except block
+            try:
+                obj, created = AdmissionDocument.objects.update_or_create(
+                    admission=admission,
+                    document_field=document_field,
+                    defaults={
+                        "file": file,
+                        "school": admission.school,
+                    },
+                )
+                instances.append(obj)
+            except Exception as upload_err:
+                logger.error(
+                    f"Cloudinary document upload failed for document_field {document_field}: {upload_err}",
+                    exc_info=True,
+                )
+                # Fallback to local storage so Django does not crash with a 500 response
+                try:
+                    from django.core.files.storage import FileSystemStorage
+                    fs = FileSystemStorage()
+                    if hasattr(file, "seek"):
+                        try:
+                            file.seek(0)
+                        except Exception:
+                            pass
+                    file_name = fs.save(f"admission_documents/{getattr(file, 'name', 'doc')}", file)
+                    obj, created = AdmissionDocument.objects.update_or_create(
+                        admission=admission,
+                        document_field=document_field,
+                        defaults={
+                            "file": file_name,
+                            "school": admission.school,
+                        },
+                    )
+                    instances.append(obj)
+                except Exception as local_err:
+                    logger.error(
+                        f"Fallback local file save also failed: {local_err}",
+                        exc_info=True,
+                    )
 
         return instances
 

@@ -1,4 +1,5 @@
 from rest_framework.permissions import BasePermission
+from .models import UserModuleAccess
 
 class Is_super_admin(BasePermission):
     def has_permission(self, request, view):
@@ -21,11 +22,19 @@ class Is_admin_trustee(BasePermission):
 
 class IsCLerk(BasePermission):
     def has_permission(self, request, view):
-        return (
-            request.user
-            and request.user.is_authenticated
-            and request.user.groups.filter(name="CLERK").exists()
-        )
+        user = getattr(request, "user", None)
+        if not user or not user.is_authenticated:
+            return False
+        if getattr(user, "is_superuser", False) or getattr(user, "is_staff", False):
+            return True
+        role = str(getattr(user, "role", "")).upper()
+        if role in ["CLERK", "PRINCIPAL", "ADMIN", "TRUSTEE"]:
+            return True
+        return user.groups.filter(
+            name__iregex=r'^(clerk|principal|admin\(trustee\)|admin)$'
+        ).exists()
+
+IsClerk = IsCLerk
 
 
 
@@ -43,11 +52,17 @@ class IsFeeManager(BasePermission):
 
 class Isprincipal(BasePermission):
     def has_permission(self, request, view):
-        return (
-            request.user
-            and request.user.is_authenticated
-            and request.user.groups.filter(name="PRINCIPAL").exists()
-        )
+        user = getattr(request, "user", None)
+        if not user or not user.is_authenticated:
+            return False
+        if getattr(user, "is_superuser", False) or getattr(user, "is_staff", False):
+            return True
+        role = str(getattr(user, "role", "")).upper()
+        if role in ["PRINCIPAL", "ADMIN", "TRUSTEE"]:
+            return True
+        return user.groups.filter(
+            name__iregex=r'^(principal|admin\(trustee\)|admin)$'
+        ).exists()
 
 
 
@@ -143,25 +158,17 @@ class IsClerkOrPrincipal(BasePermission):
         user = getattr(request, "user", None)
         if not user or not user.is_authenticated:
             return False
-        if getattr(user, "is_superuser", False):
+        if getattr(user, "is_superuser", False) or getattr(user, "is_staff", False):
             return True
-    def has_permission(self, request, view):
-        return (
-            request.user
-            and request.user.is_authenticated
-            and request.user.groups.filter(name="admin(trustee)").exists()
-        )
+        role = str(getattr(user, "role", "")).upper()
+        if role in ["CLERK", "PRINCIPAL", "TRUSTEE", "ADMIN", "FEES MANAGEMENT"]:
+            return True
+        return user.groups.filter(
+            name__iregex=r'^(clerk|principal|admin\(trustee\)|admin|fees management)$'
+        ).exists()
 
+IsClerkOrPrincipalOrAdmin = IsClerkOrPrincipal
 
-
-
-class IsCLerk(BasePermission):
-    def has_permission(self, request, view):
-        return (
-            request.user
-            and request.user.is_authenticated
-            and request.user.groups.filter(name="CLERK").exists()
-        )
 
 
 
