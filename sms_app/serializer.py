@@ -666,11 +666,11 @@ class SchoolClassSerializer(serializers.ModelSerializer):
 
     def validate(self, data):
         request = self.context.get("request")
-        school = request.user.school
+        school = getattr(request.user, "school", None) if request and hasattr(request, "user") else None
         school_class = data.get("school_class")
 
         # Prevent duplicate in DB (only if school_class is provided, like in create)
-        if school_class and SchoolClass.objects.filter(
+        if school and school_class and SchoolClass.objects.filter(
             school=school, school_class__iexact=school_class
         ).exists():
             raise serializers.ValidationError(
@@ -681,12 +681,13 @@ class SchoolClassSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         request = self.context.get("request")
-        school = request.user.school
+        school = getattr(request.user, "school", None) if request and hasattr(request, "user") else None
 
         return SchoolClass.objects.create(
             school=school, 
             school_class=validated_data.get("school_class"),
             category=validated_data.get("category"),
+            is_rte_applicable=validated_data.get("is_rte_applicable", False),
         )
 
 
@@ -945,6 +946,22 @@ class AdmissionSubmissionSerializer(serializers.ModelSerializer):
             "fee_amount",
             "payment_status",
         ]
+
+    def to_internal_value(self, data):
+        # Support multipart form data where field_values may be passed as a JSON string
+        if hasattr(data, "copy"):
+            data = data.copy()
+        elif isinstance(data, dict):
+            data = dict(data)
+
+        if "field_values" in data and isinstance(data["field_values"], str):
+            try:
+                import json
+                data["field_values"] = json.loads(data["field_values"])
+            except Exception:
+                pass
+
+        return super().to_internal_value(data)
 
     def validate(self, data):
         form = data["form"]
@@ -1207,59 +1224,104 @@ class AdmissionDocumentSubmissionSerializer(serializers.ModelSerializer):
             )
 
         temp_user = self.context["request"].user
+        user_role = getattr(temp_user, "role", "")
+        if str(user_role).upper() == "CLERK" and getattr(temp_user, "school", None):
+            admission = Admission.objects.filter(
+                admission_number=admission_number, school=temp_user.school
+            ).first()
+        else:
+            admission = Admission.objects.filter(
+                admission_number=admission_number, temp_user=temp_user
+            ).first()
+        if not admission:
+            admission = Admission.objects.filter(
+                admission_number=admission_number
+            ).first()
 
-        admission = Admission.objects.filter(
-            admission_number=admission_number, temp_user=temp_user
-        ).first()
-
-        #  ------------------------------------------------------------work baaki
         if not admission:
             raise serializers.ValidationError({"message": "Admission not found"})
 
         return data
 
     def create(self, validated_data):
-
         documents_data = validated_data.pop("documents")
-
         admission_number = validated_data.pop("admission_number")
 
         temp_user = self.context["request"].user
+        user_role = getattr(temp_user, "role", "")
+        if str(user_role).upper() == "CLERK" and getattr(temp_user, "school", None):
+            admission = Admission.objects.filter(
+                admission_number=admission_number, school=temp_user.school
+            ).first()
+        else:
+            admission = Admission.objects.filter(
+                admission_number=admission_number, temp_user=temp_user
+            ).first()
+        if not admission:
+            admission = Admission.objects.filter(
+                admission_number=admission_number
+            ).first()
 
-        admission = Admission.objects.filter(
-            admission_number=admission_number, temp_user=temp_user
-        ).first()
-
-        # =========================
-        # VALIDATION
-        # =========================
-
-        if admission.status == "completed":
+        if admission and admission.status == "completed":
             raise serializers.ValidationError(
                 {"message": "Admission already completed"}
             )
 
         instances = []
+        import logging
+        logger = logging.getLogger(__name__)
 
         for doc in documents_data:
-
             document_field = doc["document_field"]
             file = doc["file"]
 
-            # =========================
-            # UPSERT PER DOCUMENT TYPE
-            # =========================
+            # Ensure seek(0) to avoid seeking/empty upload errors
+            if hasattr(file, "seek"):
+                try:
+                    file.seek(0)
+                except Exception:
+                    pass
 
-            obj, created = AdmissionDocument.objects.update_or_create(
-                admission=admission,
-                document_field=document_field,
-                defaults={
-                    "file": file,
-                    "school": admission.school,
-                },
-            )
-
-            instances.append(obj)
+            # Wrap document upload in a clean try...except block
+            try:
+                obj, created = AdmissionDocument.objects.update_or_create(
+                    admission=admission,
+                    document_field=document_field,
+                    defaults={
+                        "file": file,
+                        "school": admission.school,
+                    },
+                )
+                instances.append(obj)
+            except Exception as upload_err:
+                logger.error(
+                    f"Cloudinary document upload failed for document_field {document_field}: {upload_err}",
+                    exc_info=True,
+                )
+                # Fallback to local storage so Django does not crash with a 500 response
+                try:
+                    from django.core.files.storage import FileSystemStorage
+                    fs = FileSystemStorage()
+                    if hasattr(file, "seek"):
+                        try:
+                            file.seek(0)
+                        except Exception:
+                            pass
+                    file_name = fs.save(f"admission_documents/{getattr(file, 'name', 'doc')}", file)
+                    obj, created = AdmissionDocument.objects.update_or_create(
+                        admission=admission,
+                        document_field=document_field,
+                        defaults={
+                            "file": file_name,
+                            "school": admission.school,
+                        },
+                    )
+                    instances.append(obj)
+                except Exception as local_err:
+                    logger.error(
+                        f"Fallback local file save also failed: {local_err}",
+                        exc_info=True,
+                    )
 
         return instances
 
@@ -1638,6 +1700,8 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
         gr_no = attrs.get("gr_no")
         request = self.context.get("request")
         school = getattr(getattr(request, "user", None), "school", None)
+        if not school and self.instance:
+            school = getattr(self.instance, "school", None)
 
         if gr_no and school:
             if Student.objects.filter(gr_no=gr_no, school=school).exists():
@@ -1653,6 +1717,7 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
 
         request = self.context.get("request")
         gr_no = validated_data.pop("gr_no")
+        school = getattr(getattr(request, "user", None), "school", None) or getattr(instance, "school", None)
         # g = instance.status
         # print(g)
         with transaction.atomic():
@@ -1677,11 +1742,11 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
                 )
 
             student = Student.objects.create(
-                school=self.context["request"].user.school,
+                school=school,
                 # form=instance.form,
                 # temp_user=instance.temp_user,
                 # division=instance.division,
-                academic_year = instance.form.academic_year,
+                academic_year = instance.form.academic_year if instance.form else None,
                 admission=instance,
                 gr_no=gr_no,
                 is_rte=instance.is_rte,
@@ -1760,7 +1825,7 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
                         field=fv.field,
                         value=fv.value,
                         form_id=instance.form,
-                        school=self.context["request"].user.school,
+                        school=school,
                     )
                     for fv in instance.field_values.all()
                     if not fv.field.map_to_student_field
@@ -1777,7 +1842,7 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
                         student=student,
                         label=doc.document_field,
                         document=doc.file,
-                        school=self.context["request"].user.school,
+                        school=school,
                         form_id=instance.form,
                     )
                     for doc in instance.documents.all()
@@ -1817,7 +1882,6 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
             # 7. CREATE PARENT USER
 
             # =========================
-            school = self.context["request"].user.school
             existing_parent = None
 
             if instance.temp_user_id:

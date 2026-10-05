@@ -410,6 +410,7 @@ class Admission(models.Model):
     pay_process = models.BooleanField(default=False)
 
     fee_verified = models.BooleanField(default=False)
+    is_rte = models.BooleanField(default=False)
 
     fee_verified_at = models.DateTimeField(null=True, blank=True)
 
@@ -619,6 +620,8 @@ class Student(models.Model):
     )
 
     aadhar_number = models.CharField(max_length=50, null=True, blank=True)
+    roll_no = models.CharField(max_length=50, blank=True, null=True)
+    is_rte = models.BooleanField(default=False)
 
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -3339,34 +3342,6 @@ class BoardMeeting(models.Model):
 
     class Meta:
         db_table = "board_meeting"
-
-
-from .inventory_models import (
-    InventoryCategory,
-    InventorySubCategory,
-    InventoryUnit,
-    InventoryItem,
-    InventoryItemVariant,
-    InventoryWarehouse,
-    InventorySupplier,
-    InventoryPurchase,
-    InventoryPurchaseItem,
-    PurchaseRequest,
-    PurchaseRequestItem,
-    InventoryOpeningStock,
-    InventoryTransaction,
-    InventoryStockBalance,
-    StudentInventoryIssue,
-    StudentInventoryIssueItem,
-    StudentIDCard,
-    InventoryBundle,
-    InventoryBundleItem,
-    InventoryReturn,
-    InventoryReturnItem,
-    InventoryStockAdjustment,
-    InventoryStockAdjustmentItem,
-    InventoryBudget,
-)
 
 
 # ========================================================

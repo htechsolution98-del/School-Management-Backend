@@ -9,7 +9,7 @@ from django.utils import timezone
 from django.shortcuts import get_object_or_404
 from .models import *
 from .serializer import *
-from .academic_serializers import AssignClassSerializer, ClassCategorySerializer
+from .academic_serializers import AssignClassSerializer, ClassCategorySerializer, HomeworkSubmissionDetailSerializer
 from .permissions import *
 from .utils import *
 import datetime
@@ -106,17 +106,22 @@ class SchoolClassView(ModelViewSet):
     permission_classes = [IsAuthenticated, IsClerkOrPrincipal]
 
     def get_queryset(self):
-        #  only show classes of logged-in user's school
-        return SchoolClass.objects.filter(school=self.request.user.school)
+        school = getattr(self.request.user, "school", None)
+        if not school:
+            return SchoolClass.objects.none()
+        return SchoolClass.objects.filter(school=school)
 
     def create(self, request, *args, **kwargs):
-        #  accept multiple objects
-        serializer = self.get_serializer(data=request.data, many=True)
+        school = getattr(request.user, "school", None)
+        if not school and not getattr(request.user, "is_superuser", False):
+            return Response(
+                {"detail": "User does not have an active school assigned."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        is_many = isinstance(request.data, list)
+        serializer = self.get_serializer(data=request.data, many=is_many)
         serializer.is_valid(raise_exception=True)
-
-        # save with school
         serializer.save()
-
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
@@ -1849,7 +1854,7 @@ class HomeworkViewSet(ModelViewSet):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        submissions = homework.homeworksubmission_set.select_related("student", "checked_by")
+        submissions = homework.submissions.select_related("student")
         serializer = HomeworkSubmissionDetailSerializer(submissions, many=True)
         return Response(serializer.data)
 
@@ -1869,10 +1874,7 @@ class HomeworkViewSet(ModelViewSet):
                     division=division.division,
                     school=request.user.school,
                 ).count(),
-                "submitted_count": homework.homeworksubmission_set.filter(
-                    status__in=["submitted", "checked"]
-                )
-                .values("student")
+                "submitted_count": homework.submissions.values("student")
                 .distinct()
                 .count(),
             }

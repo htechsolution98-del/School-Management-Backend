@@ -20,7 +20,7 @@ class Is_admin_trustee(BasePermission):
         user = getattr(request, "user", None)
         if not user or not user.is_authenticated:
             return False
-        if getattr(user, "is_superuser", False):
+        if getattr(user, "is_superuser", False) or getattr(user, "is_staff", False):
             return True
         return user.groups.filter(name__in=["admin(trustee)", "trustee", "ADMIN"]).exists()
 
@@ -165,6 +165,8 @@ class IsClerkOrPrincipal(BasePermission):
         if role in ["CLERK", "PRINCIPAL", "TRUSTEE", "ADMIN", "FEES MANAGEMENT"]:
             return True
         return user.groups.filter(name__in=["CLERK", "PRINCIPAL", "admin(trustee)", "FEES MANAGEMENT"]).exists()
+        
+IsClerkOrPrincipalOrAdmin = IsClerkOrPrincipal
 
 
 class IsPrincipalOrTrustee(BasePermission):
