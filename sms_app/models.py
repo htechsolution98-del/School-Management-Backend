@@ -3286,34 +3286,6 @@ class BoardMeeting(models.Model):
         db_table = "board_meeting"
 
 
-from .inventory_models import (
-    InventoryCategory,
-    InventorySubCategory,
-    InventoryUnit,
-    InventoryItem,
-    InventoryItemVariant,
-    InventoryWarehouse,
-    InventorySupplier,
-    InventoryPurchase,
-    InventoryPurchaseItem,
-    PurchaseRequest,
-    PurchaseRequestItem,
-    InventoryOpeningStock,
-    InventoryTransaction,
-    InventoryStockBalance,
-    StudentInventoryIssue,
-    StudentInventoryIssueItem,
-    StudentIDCard,
-    InventoryBundle,
-    InventoryBundleItem,
-    InventoryReturn,
-    InventoryReturnItem,
-    InventoryStockAdjustment,
-    InventoryStockAdjustmentItem,
-    InventoryBudget,
-)
-
-
 # ========================================================
 # SCHOOL SUBSCRIPTION & MULTI-TENANT LICENSING MODELS
 # ========================================================

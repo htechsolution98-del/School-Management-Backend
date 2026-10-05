@@ -1,4 +1,3 @@
-from .inventory_views import *
 from .academic_views import *
 from .finance_views import *
 from .staff_views import *

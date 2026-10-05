@@ -32,7 +32,6 @@ from django.conf.urls.static import static
 from sms_app.views import *
 from sms_app.auth_views import InitDatabaseView
 from sms_app.finance_ledger_views import *
-from sms_app.inventory_views import *
 from sms_app.library_leave_views import *
 from sms_app.subscription_views import (
     SubscriptionPlanViewSet,
@@ -179,36 +178,8 @@ router.register(r'staff-salary-payment', StaffSalaryPaymentViewSet, basename='st
 
 router.register(r'student-fee', StudentFeeViewSet, basename='student-fee')
 router.register(r'student-fee-payment', StudentFeePaymentViewSet, basename='student-fee-payment')
-router.register(r'asset',AssetViewSet,basename='asset')
-router.register(r'asset-maintenance',AssetMaintenanceViewSet,basename='asset-maintenance')
-router.register(r'procurement',ProcurementViewSet,basename='procurement')
-router.register(r'procurement-item',ProcurementItemViewSet,basename='procurement-item')
-router.register(r'stock-items',StockItemsViewset,basename='stock-items')
-router.register(r'stock-request',StockRequestViewset,basename='stock-request')
-router.register("inventory-stock-request",InventoryStockRequestViewSet,basename="inventory-stock-request")
-router.register(r'loss-prevention',LossPreventionViewset,basename='loss-prevention')
-router.register(r'budget',BudgetViewset,basename='budget')
-router.register(r'budget-expense',BudgetExpenseViewset,basename='budget-expense')
-router.register(r'post-tracking', PostTrackingViewSet, basename='post-tracking')
 
-# Comprehensive Inventory Management Endpoints
-router.register(r'inv-categories', InventoryCategoryViewSet, basename='inv-categories')
-router.register(r'inv-subcategories', InventorySubCategoryViewSet, basename='inv-subcategories')
-router.register(r'inv-units', InventoryUnitViewSet, basename='inv-units')
-router.register(r'inv-warehouses', InventoryWarehouseViewSet, basename='inv-warehouses')
-router.register(r'inv-suppliers', InventorySupplierViewSet, basename='inv-suppliers')
-router.register(r'inv-items', InventoryItemViewSet, basename='inv-items')
-router.register(r'inv-item-variants', InventoryItemVariantViewSet, basename='inv-item-variants')
-router.register(r'inv-balances', InventoryStockBalanceViewSet, basename='inv-balances')
-router.register(r'inv-transactions', InventoryTransactionViewSet, basename='inv-transactions')
-router.register(r'inv-opening-stock', InventoryOpeningStockViewSet, basename='inv-opening-stock')
-router.register(r'inv-purchases', InventoryPurchaseViewSet, basename='inv-purchases')
-router.register(r'inv-purchase-requests', PurchaseRequestViewSet, basename='inv-purchase-requests')
-router.register(r'inv-student-issues', StudentInventoryIssueViewSet, basename='inv-student-issues')
-router.register(r'inv-id-cards', StudentIDCardViewSet, basename='inv-id-cards')
-router.register(r'inv-bundles', InventoryBundleViewSet, basename='inv-bundles')
-router.register(r'inv-returns', InventoryReturnViewSet, basename='inv-returns')
-router.register(r'inv-adjustments', InventoryStockAdjustmentViewSet, basename='inv-adjustments')
+# Inventory Management Endpoints (Cleared - ready for fresh rebuild from scratch)
 
 router.register(r'board-meetings', BoardMeetingViewSet, basename='board-meetings')
 router.register(r'homework', HomeworkViewSet, basename='homework')
@@ -320,8 +291,6 @@ urlpatterns = [
     path('api/',include(router.urls)),
 
     path('api/dashboard-count/', DashboardCountAPIView.as_view(), name='dashboard-count'),
-    path('api/inv-transfer/', InventoryWarehouseTransferAPIView.as_view(), name='inv-transfer'),
-    path('api/inv-dashboard-summary/', InventoryDashboardSummaryAPIView.as_view(), name='inv-dashboard-summary'),
     path('api/access/',CustomLoginView.as_view()),  
     
     path('api/refresh/', CookieTokenRefreshView.as_view(), name='token_refresh'),
