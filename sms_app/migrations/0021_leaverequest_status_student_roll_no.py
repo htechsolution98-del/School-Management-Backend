@@ -3,6 +3,17 @@
 from django.db import migrations, models
 
 
+def add_status_if_missing(apps, schema_editor):
+    leave_request = apps.get_model('sms_app', 'LeaveRequest')
+    with schema_editor.connection.cursor() as cursor:
+        columns = schema_editor.connection.introspection.get_table_description(cursor, leave_request._meta.db_table)
+    if any(column.name == 'status' for column in columns):
+        return
+    field = models.CharField(blank=True, default='PENDING', max_length=20, null=True)
+    field.set_attributes_from_name('status')
+    schema_editor.add_field(leave_request, field)
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -10,10 +21,15 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.AddField(
-            model_name='leaverequest',
-            name='status',
-            field=models.CharField(blank=True, default='PENDING', max_length=20, null=True),
+        migrations.SeparateDatabaseAndState(
+            database_operations=[migrations.RunPython(add_status_if_missing)],
+            state_operations=[
+                migrations.AddField(
+                    model_name='leaverequest',
+                    name='status',
+                    field=models.CharField(blank=True, default='PENDING', max_length=20, null=True),
+                ),
+            ],
         ),
         migrations.AddField(
             model_name='student',
