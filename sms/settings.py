@@ -63,6 +63,7 @@ MIDDLEWARE = [
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "sms_app.school_middleware.SchoolStatusMiddleware",
+    "sms_app.query_normalization_middleware.NormalizedQueryMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
@@ -131,6 +132,11 @@ CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:3000",
     "http://localhost:3000",
     "https://api.vidyapranali.in",
+    "https://vidyapranali.in"
+]
+
+CSRF_TRUSTED_ORIGINS = [
+    "https://api.vidyapranali.in",
     "https://vidyapranali.in",
 ]
 
@@ -164,7 +170,7 @@ REST_FRAMEWORK = {
         "rest_framework.renderers.JSONRenderer",
     ),
     "DATE_FORMAT": "%d-%m-%Y",
-    "DATE_INPUT_FORMATS": ["%d-%m-%Y"],
+    "DATE_INPUT_FORMATS": ["%d-%m-%Y", "%Y-%m-%d", "iso-8601"],
 }
 
 RAZOR_PAY_KEY_ID = 'rzp_test_SFctsjgfvcrQ6h'

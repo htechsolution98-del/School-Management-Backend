@@ -32,6 +32,7 @@
               docker exec ${{ secrets.BACKEND_CONT_NAME }} pip install --no-cache-dir -r requirements.txt
 
               echo "=== Run Migrations ==="
+              docker exec ${{ secrets.BACKEND_CONT_NAME }} python manage.py archive_legacy_migration
               docker exec ${{ secrets.BACKEND_CONT_NAME }} python manage.py migrate --noinput
 
               echo "=== Collect Static Files ==="

@@ -10,14 +10,28 @@ class RazarDataSerializer(serializers.ModelSerializer):
     class Meta:
         model = RazorPayData
         fields = "__all__"
-        # read_only_fields = ['school/']
+        extra_kwargs = {
+            field: {"required": True, "allow_blank": False, "allow_null": False,
+                    "error_messages": {"required": f"{label} is required.", "blank": f"{label} is required."}}
+            for field, label in [("razorpay_key_id", "Razorpay Key ID"), ("razorpay_secret_key", "Razorpay Secret Key")]
+        }
+
+    def validate_razorpay_key_id(self, value):
+        if not re.fullmatch(r"rzp_(test|live)_[A-Za-z0-9]+", value.strip()):
+            raise serializers.ValidationError("Enter a valid Key ID starting with rzp_test_ or rzp_live_.")
+        return value.strip()
+
+    def validate_razorpay_secret_key(self, value):
+        if re.search(r"\s", value.strip()):
+            raise serializers.ValidationError("Secret key cannot contain spaces.")
+        return value.strip()
 
     def validate(self, attrs):
-        school = attrs.get("school")
+        school = attrs.get("school", getattr(self.instance, "school", None))
 
-        if RazorPayData.objects.filter(school=school).exists():
+        if RazorPayData.objects.filter(school=school).exclude(pk=getattr(self.instance, "pk", None)).exists():
             raise serializers.ValidationError(
-                {"meassage": "This School Razor Pay Data Already Added"}
+                {"school": "This school already has Razorpay credentials. Edit the existing record instead."}
             )
         return attrs
 
@@ -93,6 +107,7 @@ class FeeWiseClassSerializer(serializers.ModelSerializer):
             "late_fee_type",
             "late_fee_amount",
             "max_late_fee",
+            "created_at"
         ]
         read_only_fields = ["school", "feetype_name", "billing_cycle", "school_class_name"]
 
@@ -179,8 +194,9 @@ class SalaryComponentSerializer(serializers.ModelSerializer):
             "name",
             "component_type",
             "is_active",
+            "created_at",
         ]
-        read_only_fields = ["school"]
+        read_only_fields = ["school", "created_at"]
 
     def validate_name(self, value):
         value = value.strip()
@@ -235,7 +251,9 @@ class StaffSalaryComponentSerializer(serializers.ModelSerializer):
             "calculation_type",
             "value",
             "is_active",
+            "created_at",
         ]
+        read_only_fields = ["created_at"]
 
     def validate(self, attrs):
         request = self.context.get("request")
@@ -462,6 +480,7 @@ class GenerateStaffSalaryPaymentSerializer(serializers.ModelSerializer):
             "payment_status",
             "payment_date",
             "note",
+            "created_at"
         ]
 
     def validate_salary_month(self, value):
@@ -761,6 +780,16 @@ class StudentFeeSerializer(serializers.ModelSerializer):
         attrs["fee_wise_class"] = fee_wise_class
         if attrs.get("amount") is None:
             attrs["amount"] = fee_wise_class.amount
+
+        if getattr(student, "is_rte", False):
+            attrs["amount"] = Decimal("0.00")
+            attrs["discount_amount"] = Decimal("0.00")
+            attrs["fine_amount"] = Decimal("0.00")
+            attrs["paid_amount"] = Decimal("0.00")
+            attrs["late_fee_enabled"] = False
+            attrs["late_fee_amount"] = Decimal("0.00")
+            attrs["max_late_fee"] = Decimal("0.00")
+            attrs["status"] = "paid"
 
         if feetype and feetype.billing_cycle == "monthly":
             if not billing_period:
@@ -1138,7 +1167,9 @@ class StudentFeePaymentSerializer(serializers.ModelSerializer):
 class BudgetSerializer(serializers.ModelSerializer):
     class Meta:
         model=Budget
-        fields=["id","name","allocated_amount","financial_year","spent_amount","amount_left"]
+        fields=["id","name","allocated_amount","financial_year","spent_amount","amount_left",
+            "created_at"
+        ]
         read_only_fields=["spent_amount","amount_left"]
 
 
@@ -1146,7 +1177,9 @@ class BudgetSerializer(serializers.ModelSerializer):
 class BudgetExpenseSerializer(serializers.ModelSerializer):
     class Meta:
         model=BudgetExpense
-        fields=["id","budget","expense_type","amount","description"]
+        fields=["id","budget","expense_type","amount","description",
+            "created_at"
+        ]
 
 
 

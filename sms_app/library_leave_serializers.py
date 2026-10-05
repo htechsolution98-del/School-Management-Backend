@@ -5,7 +5,7 @@ class LeaveTypeSerializer(serializers.ModelSerializer):
     class Meta:
         model = LeaveType
         fields = '__all__'
-        read_only_fields = ['school']
+        read_only_fields = ["created_at", 'school']
         
         
 # class LeaveTypeGenericSerializer(serializers.Serializer):
@@ -151,7 +151,7 @@ class StaffRemainingLeaveSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = StaffRemainingLeave
-        fields = ["id", "staff", "staff_name", "leave_type", "leave_type_name", "leave_template", "leave_template_timeline", "total_levaes", "remaining_leaves"]
+        fields = ["created_at", "id", "staff", "staff_name", "leave_type", "leave_type_name", "leave_template", "leave_template_timeline", "total_levaes", "remaining_leaves"]
         read_only_fields = ["id", "month", "year"]
 
 
@@ -159,7 +159,7 @@ class StaffRemainingLeaveSerializer(serializers.ModelSerializer):
 class GetLeavePerDaySerializer(serializers.ModelSerializer):
     class Meta:
         model = LeavePerDay
-        fields = ["id", "date", "school", "leave", "status", "approved_at"]
+        fields = ["created_at", "id", "date", "school", "leave", "status", "approved_at"]
         read_only_fields = ["id", "date", "school", "leave"]
 
 
@@ -243,7 +243,7 @@ from django.db.models import F
 class ChangeLeavePerDaySerializer(serializers.ModelSerializer):
     class Meta:
         model = LeavePerDay
-        fields = ["status"]
+        fields = ["created_at", "status"]
 
     def validate_status(self, value):
         valid_statuses = ["PENDING", "APPROVED", "REJECTED", "CANCELLED"]
@@ -359,7 +359,7 @@ class ChangeLeavePerDaySerializer(serializers.ModelSerializer):
 class GetRemainingLeaveSerializer(serializers.ModelSerializer):
     class Meta:
         model = StaffRemainingLeave
-        fields = ["leave_template"]
+        fields = ["created_at", "leave_template"]
 
 
 
@@ -372,8 +372,7 @@ class AttendanceLocationViewSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = AttendanceLocation
-        fields = [
-            "id",
+        fields = ["created_at", "id",
             "latitude",
             "longitude",
             "radius",
@@ -479,7 +478,7 @@ class CerificateTypeSerializer(serializers.ModelSerializer):
     class Meta:
         model = CertificateType
         fields = '__all__'
-        read_only_fields = ['school']    
+        read_only_fields = ["created_at", 'school']    
         
         
 class CertificateTemplateAdminSerializer(serializers.ModelSerializer):
@@ -508,8 +507,7 @@ class CertificateTemplateFieldAdminSerializer(serializers.ModelSerializer):
     class Meta:
         model = CertificateTemplateField
 
-        fields = [
-            "id",
+        fields = ["created_at", "id",
             "template",
             "field_name",
             "label",
@@ -597,8 +595,7 @@ class CertificateTemplateFieldSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = CertificateTemplateField
-        fields = [
-            "field_name",
+        fields = ["created_at", "field_name",
             "label",
             "field_type",
             "editable",
@@ -630,8 +627,7 @@ class CertificateTemplateSerializer(serializers.ModelSerializer):
     class Meta:
         model = CertificateRequest
 
-        fields = [
-            "id",
+        fields = ["created_at", "id",
             "certificate_type",
             "status",
             "student",
@@ -779,7 +775,7 @@ class NewLeaveTemplateSerializer(serializers.ModelSerializer):
     class Meta:
         model = LeaveTemplate
         # Removed "name" — template is identified by time_line + school, name is redundant
-        fields = ["id", "time_line", "school", "leave_types"]
+        fields = ["created_at", "id", "time_line", "school", "leave_types"]
         read_only_fields = ["id", "school"]
  
     def validate(self, attrs):
@@ -857,11 +853,46 @@ class SchoolClassSerializer(serializers.ModelSerializer):
         
         
 class ExamViewSerializer(serializers.ModelSerializer):
-    class_group_name = serializers.CharField(source = "class_group.school_class", read_only=True)
+    class_group_name = serializers.CharField(source="class_group.school_class", read_only=True)
+    subject_name = serializers.CharField(source="subject.name", read_only=True)
+    room_number = serializers.SerializerMethodField()
+    seat_number = serializers.SerializerMethodField()
+    building_block = serializers.SerializerMethodField()
+
     class Meta:
-        model=Exam
-        fields=["id","title","description", "subject","exam_date","start_time","end_time","class_group", "class_group_name"]
-        read_only_fields = ["id","class_group_name"]
+        model = Exam
+        fields = ['id', 'title', 'description', 'subject', 'subject_name', 'exam_date', 'start_time', 'end_time', 'class_group', 'class_group_name', 'room_number', 'seat_number', 'building_block', 'created_at']
+        read_only_fields = [
+            "id", "class_group_name", "subject_name", "room_number",
+            "seat_number", "building_block"
+        ]
+
+    def _get_allocation(self, obj):
+        request = self.context.get("request")
+        if not request or not request.user.is_authenticated:
+            return None
+        student = getattr(request.user, "student", None) or Student.objects.filter(user=request.user).first()
+        if not student:
+            return None
+        return SeatingAllocation.objects.filter(exam=obj, student=student).select_related("room").first()
+
+    def get_room_number(self, obj):
+        alloc = self._get_allocation(obj)
+        if alloc and alloc.room:
+            return alloc.room.room_number
+        return None
+
+    def get_seat_number(self, obj):
+        alloc = self._get_allocation(obj)
+        if alloc:
+            return alloc.seat_number
+        return None
+
+    def get_building_block(self, obj):
+        alloc = self._get_allocation(obj)
+        if alloc and alloc.room:
+            return alloc.room.building_block
+        return None
         
         
     def __init__(self, *args, **kwargs):
@@ -964,58 +995,174 @@ class ResultViewSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Result
-        fields = ["exam_title", "subject", "marks_obtained", "max_marks", "is_absent", "grade", "remarks"]
+        fields = ["created_at", "exam_title", "subject", "marks_obtained", "max_marks", "is_absent", "grade", "remarks"]
     
 
+class LibrarySettingSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = LibrarySetting
+        fields = '__all__'
+        read_only_fields = ['school']
+
+
+class BookCategorySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = BookCategory
+        fields = '__all__'
+        read_only_fields = ['school']
+
+
+class AuthorSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Author
+        fields = '__all__'
+        read_only_fields = ['school']
+
+
+class PublisherSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Publisher
+        fields = '__all__'
+        read_only_fields = ['school']
+
+
+class RackSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Rack
+        fields = '__all__'
+        read_only_fields = ['school']
+
+
+class ShelfSerializer(serializers.ModelSerializer):
+    rack_code = serializers.CharField(source="rack.rack_code", read_only=True)
+    rack_name = serializers.CharField(source="rack.rack_name", read_only=True)
+
+    class Meta:
+        model = Shelf
+        fields = '__all__'
+        read_only_fields = ['school']
+
+
+class BookCopySerializer(serializers.ModelSerializer):
+    book_title = serializers.CharField(source="book.title", read_only=True)
+    rack_code = serializers.CharField(source="rack.rack_code", read_only=True, default=None)
+    shelf_code = serializers.CharField(source="shelf.shelf_code", read_only=True, default=None)
+
+    class Meta:
+        model = BookCopy
+        fields = '__all__'
+        read_only_fields = ['school']
+
+
 class BookManageSerializer(serializers.ModelSerializer):
+    category_name = serializers.CharField(source="category_ref.name", read_only=True, default=None)
+    author_name = serializers.CharField(source="author_ref.name", read_only=True, default=None)
+    publisher_name = serializers.CharField(source="publisher_ref.name", read_only=True, default=None)
+    rack_code = serializers.CharField(source="rack.rack_code", read_only=True, default=None)
+    shelf_code = serializers.CharField(source="shelf.shelf_code", read_only=True, default=None)
+
     class Meta:
         model = Book
         fields = '__all__'
-        read_only_fields = ['school', 'available_copies', 'status']
-        
-        
+        read_only_fields = ['school', 'available_copies', 'status', 'created_at']
+
+    def to_representation(self, instance):
+        ret = super().to_representation(instance)
+        if not ret.get("category") and instance.category_ref:
+            ret["category"] = instance.category_ref.name
+        if not ret.get("author") and instance.author_ref:
+            ret["author"] = instance.author_ref.name
+        return ret
+
 
 class LateBookFeesSerializer(serializers.ModelSerializer):
     class Meta:
         model = LateBookFees
         fields = '__all__'
-        read_only_fields = ['school']
-        
-        
-
-# class BookIssuedSerializer(serializers.ModelSerializer):
-#     class Meta:
-#         model = BookIssued
-#         fields = '__all__'
-#         read_only_fields = ['school']
+        read_only_fields = ['school', 'created_at']
 
 
- 
 class BookIssuedSerializer(serializers.ModelSerializer):
+    copy_accession_no = serializers.CharField(source="book_copy.accession_no", read_only=True, default=None)
+
     class Meta:
         model = BookIssued
         fields = "__all__"
-        
         read_only_fields = [
             "school",
             "book_issued_date",
             "actual_return_date",
             "late_fees",
+            "damage_fees",
+            "lost_fees",
+            "total_fine",
             "is_late",
+            "renewal_count",
             "status",
         ]
+
+    def to_representation(self, instance):
+        ret = super().to_representation(instance)
+        if instance.book:
+            ret["book_title"] = instance.book.title
+            ret["book_author"] = instance.book.author or (instance.book.author_ref.name if instance.book.author_ref else "")
+            ret["book_category"] = instance.book.category or (instance.book.category_ref.name if instance.book.category_ref else "")
+            ret["rack_code"] = instance.book.rack.rack_code if instance.book.rack else ""
+            ret["shelf_code"] = instance.book.shelf.shelf_code if instance.book.shelf else ""
+        if instance.book_copy:
+            ret["accession_no"] = instance.book_copy.accession_no
+            ret["barcode"] = instance.book_copy.barcode
+        if instance.student:
+            student_display_name = f"{instance.student.name or ''} {instance.student.surname or ''}".strip()
+            ret["student_name"] = student_display_name or instance.student.gr_no or f"Student #{instance.student.id}"
+            ret["student_gr_no"] = instance.student.gr_no or ""
+            ret["student_roll_no"] = instance.student.roll_no or ""
+            ret["student_class"] = str(instance.student.school_class) if instance.student.school_class else ""
+            ret["student_division"] = instance.student.division or ""
+        return ret
+
+
 class BookIssuedForSelfSerializer(serializers.ModelSerializer):
+    copy_accession_no = serializers.CharField(source="book_copy.accession_no", read_only=True, default=None)
+
     class Meta:
         model = BookIssued
         fields = "__all__"
-        
         read_only_fields = [
             "school",
             "book_issued_date",
             "actual_return_date",
             "late_fees",
+            "damage_fees",
+            "lost_fees",
+            "total_fine",
             "is_late",
+            "renewal_count",
             "status",
             "student",
             "due_date"
         ]
+
+    def to_representation(self, instance):
+        ret = super().to_representation(instance)
+        if instance.book:
+            ret["book_title"] = instance.book.title
+            ret["book_author"] = instance.book.author or (instance.book.author_ref.name if instance.book.author_ref else "")
+            ret["book_category"] = instance.book.category or (instance.book.category_ref.name if instance.book.category_ref else "")
+        return ret
+
+
+class BookReservationSerializer(serializers.ModelSerializer):
+    book_title = serializers.CharField(source="book.title", read_only=True)
+    student_name = serializers.SerializerMethodField()
+    student_gr_no = serializers.CharField(source="student.gr_no", read_only=True)
+
+    class Meta:
+        model = BookReservation
+        fields = '__all__'
+        read_only_fields = ['school', 'queue_number', 'reservation_date', 'status']
+
+    def get_student_name(self, obj):
+        if obj.student:
+            return f"{obj.student.name or ''} {obj.student.surname or ''}".strip() or str(obj.student)
+        return "Student"

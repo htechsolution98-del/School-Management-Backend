@@ -3,6 +3,7 @@ from rest_framework import serializers
 from .models import *
 # pyrefly: ignore [missing-import]
 from django.contrib.auth import get_user_model
+from .validators import validate_mobile
 import numpy as np
 import cv2
 
@@ -28,11 +29,23 @@ class StaffSerializer(serializers.ModelSerializer):
         return value
 
     def validate_mobile(self, value):
+        value = validate_mobile(value)
+        if not value:
+            return value
         qs = User.objects.filter(mobile=value)
         if self.instance and self.instance.user:
             qs = qs.exclude(pk=self.instance.user.pk)
         if qs.exists():
             raise serializers.ValidationError({"message": "Mobile number is already exists."})
+        return value
+
+    def validate_date_of_birth(self, value):
+        if value:
+            import datetime
+            today = datetime.date.today()
+            age = today.year - value.year - ((today.month, today.day) < (value.month, value.day))
+            if age < 18:
+                raise serializers.ValidationError("Staff member must be at least 18 years old.")
         return value
 
 
@@ -41,7 +54,9 @@ class StaffSerializer(serializers.ModelSerializer):
 class GetTeacherSerializer(serializers.ModelSerializer):
     class Meta:
         model = Staff
-        fields = ["id", "name"]
+        fields = ["id", "name",
+            "created_at"
+        ]
 
 
 # --------FOR MANUAL STUDENT ENRTY-------
@@ -52,7 +67,9 @@ class GetTeacherSerializer(serializers.ModelSerializer):
 class StaffFaceSerializer(serializers.ModelSerializer):
     class Meta:
         model=StaffFace
-        fields=["id","face_image","is_enrolled"]
+        fields=["id","face_image","is_enrolled",
+            "created_at"
+        ]
         read_only_fields=["is_enrolled"]
       
     def validate_face_image(self, image):
@@ -280,7 +297,9 @@ class StaffRemainingLeaveSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = StaffRemainingLeave
-        fields = ["id", "staff", "leave_type", "total_leaves", "month","year","remaining_leaves"]
+        fields = ["id", "staff", "leave_type", "total_leaves", "month","year","remaining_leaves",
+            "created_at"
+        ]
         read_only_fields = ["id"]
 
 
@@ -289,7 +308,9 @@ class StaffRemainingLeaveSerializer(serializers.ModelSerializer):
 class GetLeavePerDaySerializer(serializers.ModelSerializer):
     class Meta:
         model = LeavePerDay
-        fields = ["id", "date", "school", "leave", "status", "approved_at"]
+        fields = ["id", "date", "school", "leave", "status", "approved_at",
+            "created_at"
+        ]
         read_only_fields = ["id", "date", "school", "leave"]
 
 
@@ -339,7 +360,9 @@ from django.db.models import F
 class ChangeLeavePerDaySerializer(serializers.ModelSerializer):
     class Meta:
         model = LeavePerDay
-        fields = ["status"]
+        fields = ["status",
+            "created_at"
+        ]
 
     def validate_status(self, value):
         valid_statuses = ["PENDING", "APPROVED", "REJECTED", "CANCELLED"]
@@ -438,7 +461,9 @@ class BulkLeaveStatusSerializer(serializers.Serializer):
 class GetRemainingLeaveSerializer(serializers.ModelSerializer):
     class Meta:
         model = StaffRemainingLeave
-        fields = ["leave_template"]
+        fields = ["leave_template",
+            "created_at"
+        ]
 
 
 class StaffListSirializer(serializers.ModelSerializer):
@@ -463,5 +488,6 @@ class StaffListSirializer(serializers.ModelSerializer):
             # "is_active",
             # "created_at",
             # "updated_at",
+            "created_at"
         ]
         read_only_fields = fields
