@@ -10,11 +10,12 @@ from django.utils import timezone
 from rest_framework_simplejwt.tokens import RefreshToken
 from .models import *
 from .serializer import *
+from .serializer import _user_display_name
 from .permissions import *
 from .utils import *
 import datetime
 from django.core.cache import cache
-from sms_app.harsh_views import carry_forward_leave
+from sms_app.library_leave_views import carry_forward_leave
 
 class CustomLoginView(TokenObtainPairView):
     serializer_class = CustomeLoginSerializer
@@ -82,6 +83,18 @@ class CookieTokenRefreshView(TokenRefreshView):
                 httponly=True,
                 secure=is_secure,
                 samesite=samesite,
+                max_age=int(settings.SIMPLE_JWT["ACCESS_TOKEN_LIFETIME"].total_seconds()),
+            )
+
+        rotated_refresh = token_data.get("refresh")
+        if rotated_refresh:
+            response.set_cookie(
+                key="refresh_token",
+                value=rotated_refresh,
+                httponly=True,
+                secure=is_secure,
+                samesite=samesite,
+                max_age=int(settings.SIMPLE_JWT["REFRESH_TOKEN_LIFETIME"].total_seconds()),
             )
 
         return response
@@ -246,6 +259,14 @@ class LoginView(APIView):
             "school_slug": user.school.slug if user.school else None,
             "roles": roles,
             "modules": modules,
+            "user": {
+                "id": user.id,
+                "username": user.username,
+                "name": _user_display_name(user),
+                "email": user.email,
+                "mobile": user.mobile,
+                "roles": roles,
+            },
         }
 
         # =====================================
@@ -268,18 +289,7 @@ class LoginView(APIView):
         is_secure = request.is_secure()
         samesite = "None" if is_secure else "Lax"
 
-        response = Response(
-            {
-                "access": access_token,
-                "refresh": refresh_token,
-                "school_id": response_data["school_id"],
-                "school_name": response_data["school_name"],
-                "school_slug": response_data["school_slug"],
-                "roles": response_data["roles"],
-                "modules": response_data["modules"],
-            },
-            status=status.HTTP_200_OK,
-        )
+        response = Response(response_data, status=status.HTTP_200_OK)
 
         response.set_cookie(
             key="access_token",
@@ -315,6 +325,23 @@ class UserListView(generics.ListAPIView):
         return User.objects.filter(school=school)
 
 
+class CurrentUserProfileView(APIView):
+    """
+    GET /api/me/ — profile of the currently authenticated user.
+
+    The user is resolved from the request token, so this works for every role
+    and can never expose another account's data.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        serializer = CurrentUserProfileSerializer(
+            request.user, context={"request": request}
+        )
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
 
 
 class ModuleView(ModelViewSet):
@@ -327,6 +354,7 @@ class ModuleView(ModelViewSet):
         enabled_feature_ids = SchoolFeature.objects.filter(
             school=school,
             is_enabled=True,
+            feature__is_active=True,
         ).values_list("feature_id", flat=True)
 
         return Module.objects.filter(

@@ -318,6 +318,23 @@ class AnnouncementConsumer(AsyncWebsocketConsumer):
             })
         )
 
+    async def feature_status_changed(self, event):
+        await self.send(
+            text_data=json.dumps({
+                "type": "feature_status_changed",
+                "feature_name": event.get("feature_name"),
+                "is_enabled": event.get("is_enabled"),
+            })
+        )
+
+    async def staff_status_changed(self, event):
+        await self.send(
+            text_data=json.dumps({
+                "type": "staff_status_changed",
+                "action": event.get("action"),
+            })
+        )
+
     @database_sync_to_async
     def get_school(self,user):
         
