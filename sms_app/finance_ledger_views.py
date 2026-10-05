@@ -107,6 +107,20 @@ class StudentLedgerScheduleView(APIView):
         def make_virtual_fee(structure, billing_period, due_date_str):
             penalty = calculate_virtual_penalty(structure, due_date_str)
             payable = structure.amount + penalty
+            is_rte = getattr(student, 'is_rte', False)
+
+            if is_rte:
+                amount_str = "0.00"
+                penalty_str = "0.00"
+                payable_str = "0.00"
+                late_fee_str = "0.00"
+                status_str = "paid"
+            else:
+                amount_str = str(structure.amount)
+                penalty_str = str(penalty)
+                payable_str = str(payable)
+                late_fee_str = str(structure.late_fee_amount) if structure.late_fee_amount else "0.00"
+                status_str = "pending"
 
             return {
                 "id": f"virtual_{structure.feetype_id}_{billing_period}",
@@ -115,15 +129,15 @@ class StudentLedgerScheduleView(APIView):
                 "feetype_name": structure.feetype.name,
                 "fee_wise_class": structure.id,
                 "billing_period": billing_period,
-                "amount": str(structure.amount),
+                "amount": amount_str,
                 "discount_amount": "0.00",
-                "late_fee_amount": str(structure.late_fee_amount) if structure.late_fee_amount else "0.00",
-                "fine_amount": str(penalty),
+                "late_fee_amount": late_fee_str,
+                "fine_amount": penalty_str,
                 "paid_amount": "0.00",
-                "balance_amount": str(payable),
-                "payable_amount": str(payable),
-                "status": "pending",
-                "late_fee_enabled": structure.late_fee_enabled,
+                "balance_amount": payable_str,
+                "payable_amount": payable_str,
+                "status": status_str,
+                "late_fee_enabled": structure.late_fee_enabled if not is_rte else False,
                 "grace_days": structure.grace_days,
                 "late_fee_type": structure.late_fee_type,
                 "due_date": due_date_str,
@@ -131,11 +145,21 @@ class StudentLedgerScheduleView(APIView):
 
         def append_fee_or_virtual(structure, billing_period, due_date_str):
             key = f"{structure.feetype_id}_{billing_period}"
+            is_rte = getattr(student, 'is_rte', False)
             if key in actual_fees_by_key:
                 actual_fee = actual_fees_by_key[key]
                 actual_fee.refresh_payment_status()
                 data = StudentFeeSerializer(actual_fee, context={"request": request}).data
                 data["is_virtual"] = False
+                
+                if is_rte:
+                    data["amount"] = "0.00"
+                    data["fine_amount"] = "0.00"
+                    data["payable_amount"] = "0.00"
+                    data["balance_amount"] = "0.00"
+                    data["late_fee_amount"] = "0.00"
+                    data["status"] = "paid"
+                    
                 projected_ledger.append(data)
             else:
                 projected_ledger.append(

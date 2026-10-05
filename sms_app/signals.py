@@ -25,7 +25,7 @@ def seed_features_and_school_features():
     """Ensure all default features exist and are enabled for all schools."""
     feature_objs = []
     for name in DEFAULT_FEATURES:
-        feat, _ = Feature.objects.get_or_create(name=name)
+        feat, _ = Feature.objects.get_or_create(name=name.strip().lower())
         feature_objs.append(feat)
 
     for school in School.objects.all():
@@ -40,7 +40,7 @@ def seed_features_and_school_features():
 def create_school_features_on_school_create(sender, instance, created, **kwargs):
     """Automatically attach all system features to any newly created school."""
     for name in DEFAULT_FEATURES:
-        feat, _ = Feature.objects.get_or_create(name=name)
+        feat, _ = Feature.objects.get_or_create(name=name.strip().lower())
         SchoolFeature.objects.get_or_create(
             school=instance,
             feature=feat,

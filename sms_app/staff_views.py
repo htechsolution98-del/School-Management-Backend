@@ -92,13 +92,15 @@ class StaffView(ModelViewSet):
         cat = Feature.objects.filter(id=category).first()
 
         creator = self.request.user
-        if creator.groups.filter(name="admin(trustee)").exists():
-            if cat.name != "CLERK":
-                raise PermissionDenied("Trustee can only create Clerk users.")
-        elif creator.groups.filter(name="CLERK").exists():
-            allowed_roles = ["CLERK", "ASSISTANT CLERK", "PRINCIPAL", "VICE PRINCIPAL", "FEES MANAGEMENT", "TEACHER", "INVENTORY", "LIBRARIAN", "TRANSPORTATION"]
-            if cat.name not in allowed_roles:
-                raise PermissionDenied(f"Clerk cannot create {cat.name} users.")
+        school = getattr(creator, 'school', None)
+        if not school:
+            school = getattr(creator, 'managed_school', None)
+        if not school:
+            school = School.objects.filter(login_id=creator.id).first()
+
+        # Enforce that category/feature must be enabled by SuperAdmin for this school
+        if school and not SchoolFeature.objects.filter(school=school, feature=cat, is_enabled=True).exists():
+            raise serializers.ValidationError({"category": f"Feature '{cat.name}' is not enabled by Superadmin for this school."})
 
         group, created = Group.objects.get_or_create(name=cat.name)
 
@@ -125,41 +127,77 @@ class StaffView(ModelViewSet):
             for m in modules:
                 UserModuleAccess.objects.create(user=user, module=m)
 
-            school = getattr(self.request.user, 'school', None)
-            if not school:
-                school = School.objects.filter(login_id=self.request.user).first()
+        school = getattr(self.request.user, 'school', None)
+        if not school:
+            school = School.objects.filter(login_id=self.request.user).first()
 
-        serializer.save(user=user, school=school, category=cat.name)
+        instance = serializer.save(user=user, school=school, category=cat.name)
+
+        # Broadcast staff status event
+        try:
+            from channels.layers import get_channel_layer
+            from asgiref.sync import async_to_sync
+            channel_layer = get_channel_layer()
+            if channel_layer and school:
+                async_to_sync(channel_layer.group_send)(
+                    f"school_{school.id}_choice_all",
+                    {"type": "staff_status_changed", "action": "created"},
+                )
+        except Exception as e:
+            print("Failed to broadcast staff event:", e)
 
     def perform_update(self, serializer):
         category = serializer.validated_data.pop("category", None)
+        instance = serializer.save()
+        user = instance.user
+        if user:
+            if instance.name:
+                user.first_name = instance.name
+            if instance.email:
+                user.email = instance.email
+            if instance.mobile:
+                user.mobile = instance.mobile
+            if instance.is_active is not None:
+                user.is_active = instance.is_active
+            user.save()
+
         if category is not None:
             try:
                 category_id = int(category)
                 cat = Feature.objects.filter(id=category_id).first()
                 if cat:
-                    instance = serializer.save(category=cat.name)
-                    user = instance.user
+                    instance.category = cat.name
+                    instance.save(update_fields=["category"])
                     if user:
                         user.role = cat.name
-                        user.save()
-                        # Update group
+                        user.save(update_fields=["role"])
                         group, _ = Group.objects.get_or_create(name=cat.name)
                         user.groups.clear()
                         user.groups.add(group)
-                        
-                        # Update module access
                         UserModuleAccess.objects.filter(user=user).delete()
                         modules = Module.objects.filter(for_role=category_id)
                         for m in modules:
                             UserModuleAccess.objects.create(user=user, module=m)
                 else:
-                    serializer.save(category=category)
+                    instance.category = str(category)
+                    instance.save(update_fields=["category"])
             except (ValueError, TypeError):
-                serializer.save(category=category)
-        else:
-            serializer.save()
-            
+                instance.category = str(category)
+                instance.save(update_fields=["category"])
+
+        school = instance.school or getattr(self.request.user, 'school', None)
+        try:
+            from channels.layers import get_channel_layer
+            from asgiref.sync import async_to_sync
+            channel_layer = get_channel_layer()
+            if channel_layer and school:
+                async_to_sync(channel_layer.group_send)(
+                    f"school_{school.id}_choice_all",
+                    {"type": "staff_status_changed", "action": "updated"},
+                )
+        except Exception as e:
+            print("Failed to broadcast staff update:", e)
+
         cache.delete(f"staff_list_{self.request.user.id}")
 
     # 🔹 Delete staff + clear cache
