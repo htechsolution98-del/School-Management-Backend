@@ -5,7 +5,7 @@ class LeaveTypeSerializer(serializers.ModelSerializer):
     class Meta:
         model = LeaveType
         fields = '__all__'
-        read_only_fields = ['school']
+        read_only_fields = ["created_at", 'school']
         
         
 # class LeaveTypeGenericSerializer(serializers.Serializer):
@@ -151,7 +151,7 @@ class StaffRemainingLeaveSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = StaffRemainingLeave
-        fields = ["id", "staff", "staff_name", "leave_type", "leave_type_name", "leave_template", "leave_template_timeline", "total_levaes", "remaining_leaves"]
+        fields = ["created_at", "id", "staff", "staff_name", "leave_type", "leave_type_name", "leave_template", "leave_template_timeline", "total_levaes", "remaining_leaves"]
         read_only_fields = ["id", "month", "year"]
 
 
@@ -159,7 +159,7 @@ class StaffRemainingLeaveSerializer(serializers.ModelSerializer):
 class GetLeavePerDaySerializer(serializers.ModelSerializer):
     class Meta:
         model = LeavePerDay
-        fields = ["id", "date", "school", "leave", "status", "approved_at"]
+        fields = ["created_at", "id", "date", "school", "leave", "status", "approved_at"]
         read_only_fields = ["id", "date", "school", "leave"]
 
 
@@ -243,7 +243,7 @@ from django.db.models import F
 class ChangeLeavePerDaySerializer(serializers.ModelSerializer):
     class Meta:
         model = LeavePerDay
-        fields = ["status"]
+        fields = ["created_at", "status"]
 
     def validate_status(self, value):
         valid_statuses = ["PENDING", "APPROVED", "REJECTED", "CANCELLED"]
@@ -359,7 +359,7 @@ class ChangeLeavePerDaySerializer(serializers.ModelSerializer):
 class GetRemainingLeaveSerializer(serializers.ModelSerializer):
     class Meta:
         model = StaffRemainingLeave
-        fields = ["leave_template"]
+        fields = ["created_at", "leave_template"]
 
 
 
@@ -372,8 +372,7 @@ class AttendanceLocationViewSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = AttendanceLocation
-        fields = [
-            "id",
+        fields = ["created_at", "id",
             "latitude",
             "longitude",
             "radius",
@@ -479,7 +478,7 @@ class CerificateTypeSerializer(serializers.ModelSerializer):
     class Meta:
         model = CertificateType
         fields = '__all__'
-        read_only_fields = ['school']    
+        read_only_fields = ["created_at", 'school']    
         
         
 class CertificateTemplateAdminSerializer(serializers.ModelSerializer):
@@ -508,8 +507,7 @@ class CertificateTemplateFieldAdminSerializer(serializers.ModelSerializer):
     class Meta:
         model = CertificateTemplateField
 
-        fields = [
-            "id",
+        fields = ["created_at", "id",
             "template",
             "field_name",
             "label",
@@ -597,8 +595,7 @@ class CertificateTemplateFieldSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = CertificateTemplateField
-        fields = [
-            "field_name",
+        fields = ["created_at", "field_name",
             "label",
             "field_type",
             "editable",
@@ -630,8 +627,7 @@ class CertificateTemplateSerializer(serializers.ModelSerializer):
     class Meta:
         model = CertificateRequest
 
-        fields = [
-            "id",
+        fields = ["created_at", "id",
             "certificate_type",
             "status",
             "student",
@@ -779,7 +775,7 @@ class NewLeaveTemplateSerializer(serializers.ModelSerializer):
     class Meta:
         model = LeaveTemplate
         # Removed "name" — template is identified by time_line + school, name is redundant
-        fields = ["id", "time_line", "school", "leave_types"]
+        fields = ["created_at", "id", "time_line", "school", "leave_types"]
         read_only_fields = ["id", "school"]
  
     def validate(self, attrs):
@@ -860,7 +856,7 @@ class ExamViewSerializer(serializers.ModelSerializer):
     class_group_name = serializers.CharField(source = "class_group.school_class", read_only=True)
     class Meta:
         model=Exam
-        fields=["id","title","description", "subject","exam_date","start_time","end_time","class_group", "class_group_name"]
+        fields = ["created_at", "id","title","description", "subject","exam_date","start_time","end_time","class_group", "class_group_name"]
         read_only_fields = ["id","class_group_name"]
         
         
@@ -964,14 +960,14 @@ class ResultViewSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Result
-        fields = ["exam_title", "subject", "marks_obtained", "max_marks", "is_absent", "grade", "remarks"]
+        fields = ["created_at", "exam_title", "subject", "marks_obtained", "max_marks", "is_absent", "grade", "remarks"]
     
 
 class BookManageSerializer(serializers.ModelSerializer):
     class Meta:
         model = Book
         fields = '__all__'
-        read_only_fields = ['school', 'available_copies', 'status']
+        read_only_fields = ["created_at", 'school', 'available_copies', 'status']
         
         
 
@@ -979,7 +975,7 @@ class LateBookFeesSerializer(serializers.ModelSerializer):
     class Meta:
         model = LateBookFees
         fields = '__all__'
-        read_only_fields = ['school']
+        read_only_fields = ["created_at", 'school']
         
         
 
@@ -987,7 +983,7 @@ class LateBookFeesSerializer(serializers.ModelSerializer):
 #     class Meta:
 #         model = BookIssued
 #         fields = '__all__'
-#         read_only_fields = ['school']
+#         read_only_fields = ["created_at", 'school']
 
 
  

@@ -217,7 +217,9 @@ class TempUserListSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = TempUser
-        fields = ["id", "username", "email", "mobile", "is_active"]
+        fields = ["id", "username", "email", "mobile", "is_active",
+            "created_at"
+        ]
 
     def get_mobile(self, obj):
         return obj.user.mobile if obj.user else None

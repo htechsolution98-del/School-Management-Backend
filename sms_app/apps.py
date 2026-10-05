@@ -16,4 +16,7 @@ class SmsAppConfig(AppConfig):
             import sms_app.signals
         except ImportError:
             pass
+        from sms_app.text_normalization import connect_normalization_signals
+
+        connect_normalization_signals()
         post_migrate.connect(auto_seed_on_migrate, sender=self)

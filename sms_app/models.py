@@ -56,8 +56,8 @@ class School(models.Model):
     index_no = models.CharField(max_length=100, null=True, blank=True)
 
     is_active = models.BooleanField(null=True, blank=True)
-    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
     updated_at = models.DateTimeField(auto_now=True, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     def __str__(self):
         return self.name
@@ -83,6 +83,8 @@ class School(models.Model):
 # -----------SCHOLL FEATURE---------
 class Feature(models.Model):
     name = models.CharField(max_length=100, unique=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     def __str__(self):
         return self.name
@@ -96,6 +98,7 @@ class SchoolFeature(models.Model):
     school = models.ForeignKey("School", on_delete=models.CASCADE)
     feature = models.ForeignKey(Feature, on_delete=models.CASCADE)
     is_enabled = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     class Meta:
         unique_together = ("school", "feature")
@@ -117,6 +120,7 @@ class Module(models.Model):
         Feature, on_delete=models.CASCADE, null=True, blank=True
     )
     is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     class Meta:
         db_table = "module"
@@ -137,6 +141,7 @@ class UserModuleAccess(models.Model):
     module = models.ForeignKey(
         Module, on_delete=models.CASCADE, related_name="user_access"
     )
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     class Meta:
         db_table = "user_module_access"
@@ -233,6 +238,7 @@ class AcademicYear(models.Model):
     start_month = models.PositiveSmallIntegerField(null=True, blank=True)
     end_month = models.PositiveSmallIntegerField(null=True, blank=True)
     is_active = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     def get_start_year(self):
         if self.name and len(self.name) >= 4 and self.name[:4].isdigit():
@@ -280,6 +286,7 @@ class ClassCategory(models.Model):
     school = models.ForeignKey(
         School, on_delete=models.CASCADE, null=True, blank=True, db_index=True
     )
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     def __str__(self):
         return self.name
@@ -299,6 +306,7 @@ class SchoolClass(models.Model):
     )
 
     school_class = models.CharField(max_length=70)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     def __str__(self):
         return self.school_class
@@ -317,6 +325,7 @@ class Division(models.Model):
     SchoolClass = models.ForeignKey(SchoolClass, on_delete=models.CASCADE)
     division = models.CharField(null=True, blank=True, max_length=20)
     capacity = models.IntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     def __str__(self):
         return f"{self.SchoolClass} ({self.division})"
@@ -408,6 +417,7 @@ class Admission(models.Model):
         blank=True,
         related_name="verified_fees",
     )
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     class Meta:
         db_table = "admission"
@@ -428,6 +438,7 @@ class AdmissionFeeStructure(models.Model):
     fee_amount = models.DecimalField(
         max_digits=10, decimal_places=2, null=True, blank=True
     )
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     def __str__(self):
         return f"{self.class_name} - {self.fee_amount}"
@@ -447,6 +458,7 @@ class FormSection(models.Model):
     )
     title = models.CharField(max_length=255)
     order = models.PositiveIntegerField()
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     def __str__(self):
         return self.title
@@ -484,6 +496,7 @@ class FormField(models.Model):
 
     # ✅ NEW
     is_system_field = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     def __str__(self):
         return f"{self.label} ({self.field_type})"
@@ -502,6 +515,7 @@ class AdmissionFieldValue(models.Model):
     field = models.ForeignKey(FormField, on_delete=models.CASCADE)
 
     value = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     class Meta:
         db_table = "admission_field_value"
@@ -521,6 +535,7 @@ class DocumentField(models.Model):
     is_required = models.BooleanField(default=False)
 
     order = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     class Meta:
         db_table = "document_field"
@@ -540,6 +555,7 @@ class AdmissionDocument(models.Model):
     file = models.FileField(upload_to="admission_documents/")
 
     uploaded_at = models.DateTimeField(auto_now_add=True)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     class Meta:
         db_table = "admission_document"
@@ -621,6 +637,7 @@ class Perents(models.Model):
 
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     perents_of = models.ForeignKey(Student, on_delete=models.CASCADE)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     class Meta:
         db_table = "parents"
@@ -631,6 +648,7 @@ class StudentVerify(models.Model):
     admission_number = models.CharField(max_length=100, null=True, blank=True)
     student = models.ForeignKey(Student, on_delete=models.CASCADE)
     clerk_verify = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     class Meta:
         db_table = "student_verify"
@@ -682,6 +700,7 @@ class RazorPayData(models.Model):
     school = models.ForeignKey(School, on_delete=models.CASCADE)
     razorpay_key_id = models.CharField(max_length=255, blank=True, null=True)
     razorpay_secret_key = models.CharField(max_length=255, blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     class Meta:
         db_table = "razor_pay_data"
@@ -764,6 +783,7 @@ class StudentFieldValue(models.Model):
     )
 
     value = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     def __str__(self):
         return f"{self.student} - {self.field.label}"
@@ -844,6 +864,7 @@ class Subject(models.Model):
     division = models.ForeignKey(
         Division, on_delete=models.CASCADE, related_name="subjects"
     )
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     def __str__(self):
         return f"{self.name} ({self.division})"
@@ -862,6 +883,7 @@ class Syllabus(models.Model):
     
     subject = models.ForeignKey("Subject", on_delete=models.CASCADE, related_name="syllabi")
     syllabus_file = models.FileField(upload_to="syllabus/")
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     def __str__(self):
         return f"{self.division} - {self.subject}"
@@ -912,6 +934,7 @@ class AssignClass(models.Model):
         Division, on_delete=models.CASCADE, null=True, blank=True
     )
     is_class_teacher = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
 
     def __str__(self):
@@ -929,6 +952,7 @@ class Tt_year(models.Model):
         School, on_delete=models.CASCADE, null=True, blank=True, db_index=True
     )
     year = models.CharField(max_length=10, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     class Meta:
         db_table = "tt_year"
@@ -953,6 +977,7 @@ class Tt_day(models.Model):
         Division, on_delete=models.CASCADE, null=True, blank=True
     )
     lecture = models.CharField(max_length=50, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     class Meta:
         db_table = "tt_day"
@@ -965,6 +990,7 @@ class Tt_day_time(models.Model):
     day = models.ForeignKey(Tt_day, on_delete=models.CASCADE, null=True, blank=True)
     start = models.TimeField(null=True, blank=True)
     end = models.TimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     class Meta:
         db_table = "tt_day_time"
@@ -976,6 +1002,7 @@ class Tt_breaks(models.Model):
     breaks = models.IntegerField(null=True, blank=True)
     time = models.CharField(max_length=50, null=True, blank=True)
     description = models.CharField(max_length=100, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     class Meta:
         db_table = "tt_breaks"
@@ -988,6 +1015,7 @@ class Tt_slot(models.Model):
     day = models.ForeignKey(Tt_day, on_delete=models.CASCADE, null=True, blank=True)
     lecture = models.CharField(max_length=50, null=True, blank=True)
     slot = models.JSONField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     class Meta:
         db_table = "tt_slot"
@@ -1006,6 +1034,7 @@ class Time_table(models.Model):
     day = models.CharField(max_length=50, null=True, blank=True)
     teacher = models.ForeignKey(Staff, on_delete=models.CASCADE, null=True, blank=True)
     slot = models.CharField(max_length=50, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     def __str__(self):
         return f"{self.year} - {self.day} - {self.class_div} - {self.slot}"
@@ -1022,6 +1051,7 @@ class AttendanceTimeRule(models.Model):
     start_time = models.TimeField(null=True, blank=True)
     end_time = models.TimeField(null=True, blank=True)
     half_day_time = models.TimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     class Meta:
         db_table = "attendance_time_rule"
@@ -1036,6 +1066,7 @@ class AttendanceLocation(models.Model):
     longitude = models.DecimalField(max_digits=9, decimal_places=6)
     radius = models.DecimalField(max_digits=10, decimal_places=2)
     time_rule = models.ForeignKey(AttendanceTimeRule, on_delete=models.CASCADE, null=True)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     def __str__(self):
         return f"Attendance Location for {self.school}"
@@ -1058,6 +1089,7 @@ class Attendance(models.Model):
     is_half_day = models.BooleanField(default=False)
     check_in = models.DateTimeField(null=True, blank=True)
     check_out = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     class Meta:
         db_table = "attendance"
@@ -1090,6 +1122,7 @@ class LeaveTemplate(models.Model):
     # name = models.CharField(max_length=100, null=True, blank=True)
     time_line = models.CharField(max_length=20, choices=TIMELINE_CHOICES, null=True, blank=True)
     school = models.ForeignKey(School, on_delete=models.CASCADE, null=True)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
     
     def __str__(self):
         return f"{self.school} - {self.time_line}"
@@ -1106,8 +1139,8 @@ class LeaveType(models.Model):
     leave_num = models.IntegerField(null=True, blank=True)
     category = models.ForeignKey(SchoolFeature, on_delete=models.CASCADE, null=True)
     is_carry_forward = models.BooleanField(default=False)
-    
     created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
+    
     
 
     def __str__(self):
@@ -1145,11 +1178,11 @@ class LeaveRequest(models.Model):
     reason = models.TextField(null=True, blank=True)
     status = models.CharField(max_length=20, default="PENDING", null=True, blank=True)
 
-    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
     updated_at = models.DateTimeField(
         auto_now=True, null=True, blank=True
     )  # at a time no nedd this
     is_paid = models.BooleanField(default=False, help_text="If True, salary will be deducted for approved days of this leave request.")
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     def __str__(self):
         # return f"{self.staff.name} - {self.leave_type} - {self.status}"
@@ -1184,6 +1217,7 @@ class LeavePerDay(models.Model):
         max_length=20, choices=STATUS_CHOICES, default="PENDING", null=True, blank=True
     )
     approved_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     def __str__(self):
         return f"{self.date} - {self.leave.total_days} leaves"
@@ -1210,6 +1244,7 @@ class StaffRemainingLeave(models.Model):
     month = models.IntegerField(default=timezone.now().month)
     
     year = models.IntegerField(default=timezone.now().year)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     def __str__(self):
         return f"{self.staff} - {self.leave_template}"
@@ -1275,6 +1310,7 @@ class FeeType(models.Model):
     billing_cycle = models.CharField(
         max_length=20, choices=BILLING_CHOICES, null=True, blank=True
     )
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     def __str__(self):
         return self.name or "Fee Type"
@@ -1306,6 +1342,7 @@ class FeeWiseClass(models.Model):
     max_late_fee = models.DecimalField(
         max_digits=10, decimal_places=2, null=True, blank=True
     )
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     def __str__(self):
         return f"{self.feetype} - {self.school_class} - {self.amount}"
@@ -1565,6 +1602,7 @@ class SalaryComponent(models.Model):
     component_type = models.CharField(max_length=20, choices=COMPONENT_TYPE) # Deduction,Earning
     is_active = models.BooleanField(default=True)
     school = models.ForeignKey(School, on_delete=models.CASCADE)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     class Meta:
         db_table = "salary_component"
@@ -1588,6 +1626,7 @@ class StaffSalaryComponent(models.Model):
 
     # optional
     is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     class Meta:
         db_table = "staff_salary_component"
@@ -1698,6 +1737,7 @@ class WorkingDay(models.Model):
     )
 
     day = models.CharField(max_length=20, choices=DAY_CHOICES)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     class Meta:
         db_table = "working_day"
@@ -1725,6 +1765,7 @@ class Holiday(models.Model):
     end_date = models.DateField(null=True, blank=True)
 
     description = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     class Meta:
         db_table = "holiday"
@@ -1805,6 +1846,7 @@ class LectureSlot(models.Model):
     start_time = models.TimeField()
 
     end_time = models.TimeField()
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     class Meta:
         db_table = "lecture_slot"
@@ -1837,6 +1879,7 @@ class BreakSlot(models.Model):
     end_time = models.TimeField()
 
     duration_minutes = models.PositiveIntegerField()
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     class Meta:
         db_table = "break_slot"
@@ -1885,6 +1928,7 @@ class TimetableEntry(models.Model):
     teacher_staff = models.ForeignKey(
         Staff, on_delete=models.CASCADE, related_name="timetable_entries"
     )
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     class Meta:
         db_table = "timetable_entry"
@@ -1919,6 +1963,7 @@ class Time_Table_tb(models.Model):
     start_time = models.TimeField()
 
     end_time = models.TimeField()
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     def clean(self):
         if self.start_time >= self.end_time:
@@ -1955,6 +2000,7 @@ class Slot(models.Model):
     )
 
     teacher = models.ForeignKey(Staff, on_delete=models.CASCADE, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     class Meta:
         db_table = "slot"
@@ -2113,6 +2159,7 @@ class Homework(models.Model):
 class CertificateType(models.Model):
     name = models.CharField(max_length=100, null=True, blank=True)
     school = models.ForeignKey(School, on_delete=models.CASCADE, null=True)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
     
     def __str__(self):
         return self.name
@@ -2180,6 +2227,7 @@ class CertificateTemplateField(models.Model):
     )
 
     display_order = models.PositiveIntegerField(default=1)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     class Meta:
         ordering = ["display_order"]
@@ -2352,6 +2400,7 @@ class StudentDocument(models.Model):
     updated_at = models.DateTimeField(
         auto_now=True
     )
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     class Meta:
         db_table = "student_document"
@@ -2477,6 +2526,7 @@ class HomeworkSubmissions(models.Model):
     student=models.ForeignKey(Student,on_delete=models.CASCADE,related_name='submission')
     file = models.FileField(upload_to='homework_submissions/')
     submitted_at = models.DateTimeField(auto_now_add=True)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     class Meta:
         unique_together = ('homework', 'student')
@@ -2558,6 +2608,7 @@ class StockRequest(models.Model):
     quantity=models.PositiveIntegerField(default=0)
     status=models.CharField(max_length=50,choices=STATUS_CHOICE,default="pending")
     requested_at = models.DateTimeField(auto_now_add=True)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     class Meta():
         db_table="stock_request"
@@ -2641,6 +2692,7 @@ class Procurement(models.Model):
             ("received", "Received"),
         ],
     )
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
     def restock(self):
         for item in self.items.all():
             stock = item.stock_item
@@ -2654,6 +2706,7 @@ class ProcurementItem(models.Model):
     stock_item=models.ForeignKey(StockItems, on_delete=models.CASCADE)
     quantity=models.PositiveIntegerField(default=0)
     unit_price = models.DecimalField(max_digits=10, decimal_places=2)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
 
 class LossPrevention(models.Model):
@@ -2752,6 +2805,7 @@ class LateBookFees(models.Model):
     fees = models.IntegerField() # perday penalty
     
     grace_period_days = models.PositiveIntegerField(default=7)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
  
     def __str__(self):
         return f"{self.school.name} - per-day fee: {self.fees}, grace: {self.grace_period_days}d"
@@ -2775,6 +2829,7 @@ class BookIssued(models.Model):
         ("RETURNED", "RETURNED"),
     ]
     status = models.CharField(max_length=10,choices=STATUS_CHOICES, default="ISSUED")
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
     
     def __str__(self):
         return f"{self.student.name}-{self.book.title}"

@@ -11,7 +11,8 @@ class SchoolClassSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = SchoolClass
-        fields = ["id", "school_class", "category"]
+        fields = ["id", "school_class", "category", "created_at"]
+        read_only_fields = ["created_at"]
 
     def validate(self, data):
         request = self.context.get("request")
@@ -68,7 +69,8 @@ class SetDivisionSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Division
-        fields = ["id", "SchoolClass", "class_name", "division", "capacity"]
+        fields = ["id", "SchoolClass", "class_name", "division", "capacity", "created_at"]
+        read_only_fields = ["created_at"]
 
 
 
@@ -80,7 +82,8 @@ class SetDivisionListSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Division
-        fields = ["id", "SchoolClass", "class_name", "division", "capacity"]
+        fields = ["id", "SchoolClass", "class_name", "division", "capacity", "created_at"]
+        read_only_fields = ["created_at"]
 
 
 # =========serializers for set division by clerk========
@@ -95,7 +98,9 @@ class DivisionSetSerilaizer(serializers.ModelSerializer):
 
     class Meta:
         model = Student
-        fields = ["division", "capacity"]
+        fields = ["division", "capacity",
+            "created_at"
+        ]
 
     def create(self, validated_data):
         total_division = int(validated_data.pop("division"))
@@ -173,6 +178,7 @@ class AssignClassSerializer(serializers.ModelSerializer):
             "division_name",
             "class_name",
             "is_class_teacher",
+            "created_at"
         ]
 
         read_only_fields = ["teacher_name", "subject_name", "division_name", "class_name"]
@@ -284,7 +290,9 @@ class Tt_breaksSerializer(serializers.ModelSerializer):
 class Tt_slotSerializer(serializers.ModelSerializer):
     class Meta:
         model = Tt_slot
-        fields = ["id", "lecture", "slot"]
+        fields = ["id", "lecture", "slot",
+            "created_at"
+        ]
         read_only_fields = ["id", "lecture"]
 
 
@@ -313,6 +321,7 @@ class SetTimeTableSerializer(serializers.ModelSerializer):
             "slot",
             "start",
             "end",
+            "created_at"
         ]
 
 
@@ -327,7 +336,9 @@ class Tt_yearSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Tt_year
-        fields = ["year", "start_year", "end_year"]
+        fields = ["year", "start_year", "end_year",
+            "created_at"
+        ]
 
         read_only_fields = ["year"]
 
@@ -404,6 +415,7 @@ class Time_tableSerializer(serializers.ModelSerializer):
             "day_time",
             "breaks",
             "slot",
+            "created_at"
         ]
         # read_only_fields = ["year"]
 
@@ -599,8 +611,9 @@ class AttendanceLocationSerializer(serializers.ModelSerializer):
             "start_time",
             "end_time",
             "half_day_time",
+            "created_at",
         ]
-        read_only_fields = ["school"]
+        read_only_fields = ["school", "created_at"]
 
     def validate(self, attrs):
         return super().validate(attrs)
@@ -709,6 +722,7 @@ class AttendanceSerializer(serializers.ModelSerializer):
             "is_half_day",
             "check_in",
             "check_out",
+            "created_at",
         ]
 
         read_only_fields = [
@@ -723,6 +737,7 @@ class AttendanceSerializer(serializers.ModelSerializer):
             "is_half_day",
             "check_in",
             "check_out",
+            "created_at",
         ]
 
     def validate_latitude(self, value):
@@ -872,8 +887,9 @@ class AcademicYearSerializer(serializers.ModelSerializer):
             "month_numbers",
             "billing_periods",
             "is_active",
+            "created_at",
         ]
-        read_only_fields = ["school", "name"]
+        read_only_fields = ["school", "name", "created_at"]
 
     def get_month_numbers(self, obj):
         return obj.get_month_numbers()
@@ -1835,6 +1851,7 @@ class StudentHomeworkListSerializer(serializers.ModelSerializer):
             "due_date",
             "attachment",
             "is_active",
+            "created_at"
         ]
         read_only_fields = fields
 
@@ -1847,21 +1864,27 @@ class StudentHomeworkListSerializer(serializers.ModelSerializer):
 class ExamSerializer(serializers.ModelSerializer):
     class Meta:
         model=Exam
-        fields=["id","title","description","exam_date","start_time","end_time","class_group"]
+        fields=["id","title","description","exam_date","start_time","end_time","class_group",
+            "created_at"
+        ]
 
 
 
 class ExamNotificationSerializer(serializers.ModelSerializer):
     class Meta:
         model=ExamNotification
-        fields=["id","exam","title","message"]
+        fields=["id","exam","title","message",
+            "created_at"
+        ]
 
 
 
 class HomeworkSubmissionSerializer(serializers.ModelSerializer):
     class Meta():
         model=HomeworkSubmissions
-        fields=["id","homework","file","submitted_at"]
+        fields=["id","homework","file","submitted_at",
+            "created_at"
+        ]
         read_only_fields=["student","submitted_at"]
 
     def validate(self, attrs):
@@ -1886,7 +1909,7 @@ class MonthlyProgressReportSerializer(serializers.ModelSerializer):
     class Meta:
         model=MonthlyProgressReport
         fields='__all__'
-        read_only_fields=["school","attendance_percentage","created_by","overall_score"]
+        read_only_fields = ["created_at", "school","attendance_percentage","created_by","overall_score"]
 
     def create(self,validated_data):
             student=validated_data["student"]
@@ -1934,7 +1957,9 @@ class MonthlyProgressReportSerializer(serializers.ModelSerializer):
 class StudyMaterialSerializer(serializers.ModelSerializer):
     class Meta:
         model=StudyMaterial
-        fields=["subject","student_class","material_type","title","description","file"]
+        fields=["subject","student_class","material_type","title","description","file",
+            "created_at"
+        ]
         
 
 

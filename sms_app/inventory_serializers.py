@@ -4,7 +4,9 @@ from .models import *
 class StockItemsSerializer(serializers.ModelSerializer):
     class Meta:
         model=StockItems
-        fields=["id","name","category","quantity","min_quantity"]
+        fields=["id","name","category","quantity","min_quantity",
+            "created_at"
+        ]
 
 
 
@@ -14,14 +16,15 @@ class StockRequestSerializer(serializers.ModelSerializer):
     class Meta:
         model = StockRequest
         fields = [
-            "id",
-            "stock_item",
-            "quantity",
-            "status",
-            "teacher",
-            "teacher_name",
+                "id",
+                "stock_item",
+                "quantity",
+                "status",
+                "teacher",
+                "teacher_name",
+                "created_at",
         ]
-        read_only_fields = ["teacher", "teacher_name"]
+        read_only_fields = ["teacher", "teacher_name", "created_at"]
 
     def get_teacher_name(self, obj):
         return " ".join(
@@ -40,14 +43,18 @@ class StockRequestSerializer(serializers.ModelSerializer):
 class AssetSerializer(serializers.ModelSerializer):
     class Meta:
         model=Asset
-        fields=["id","asset_name","category","asset_code","quantity","unit_price","purchase_date","total_value"]
+        fields=["id","asset_name","category","asset_code","quantity","unit_price","purchase_date","total_value",
+            "created_at"
+        ]
     
 
 
 class AssetMaintenanceSerializer(serializers.ModelSerializer):
     class Meta:
         model=AssetMaintenance
-        fields=["id","asset","issue","maintance_date","status"]
+        fields=["id","asset","issue","maintance_date","status",
+            "created_at"
+        ]
 
         
 
@@ -55,21 +62,25 @@ class AssetMaintenanceSerializer(serializers.ModelSerializer):
 class ProcurementSerializer(serializers.ModelSerializer):
     class Meta:
         model=Procurement
-        fields=["id","supplier","purchase_date","status"]
+        fields=["id","supplier","purchase_date","status","created_at"]
+        read_only_fields=["created_at"]
 
 
 
 class ProcurementItemSerializer(serializers.ModelSerializer):
     class Meta:
         model=ProcurementItem
-        fields=["id","procurement","stock_item","quantity","unit_price"]
+        fields=["id","procurement","stock_item","quantity","unit_price","created_at"]
+        read_only_fields=["created_at"]
 
 
 
 class LosspreventionSerializer(serializers.ModelSerializer):
     class Meta:
         model=LossPrevention
-        fields=["id","maintenance","remark","replacement_cost","repair_cost","amount_saved"]
+        fields=["id","maintenance","remark","replacement_cost","repair_cost","amount_saved",
+            "created_at"
+        ]
 
 
 

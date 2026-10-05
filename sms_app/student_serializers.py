@@ -69,7 +69,9 @@ class AdmissionFieldValueReadSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = AdmissionFieldValue
-        fields = ["id", "field", "field_label", "value"]
+        fields = ["id", "field", "field_label", "value",
+            "created_at"
+        ]
 
 
 # 2
@@ -87,6 +89,7 @@ class FormFieldSerializer(serializers.ModelSerializer):
             "order",
             "map_to_student_field",
             "is_system_field",
+            "created_at"
         ]
 
     def validate_map_to_student_field(self, value):
@@ -110,7 +113,9 @@ class FormSectionSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = FormSection
-        fields = ["id", "title", "order", "fields"]
+        fields = ["id", "title", "order", "fields",
+            "created_at"
+        ]
 
 
 # ===================== FEE STRUCTURE =====================
@@ -120,7 +125,9 @@ class FormSectionSerializer(serializers.ModelSerializer):
 class DocumentFieldSerializer(serializers.ModelSerializer):
     class Meta:
         model = DocumentField
-        fields = ["id", "label", "is_required", "order"]
+        fields = ["id", "label", "is_required", "order",
+            "created_at"
+        ]
 
 
 # ===================== MAIN SERIALIZER =====================
@@ -173,6 +180,7 @@ class FeesVerifySerializer(serializers.ModelSerializer):
             "fee_verified_at",
             "field_values",
             "fee_data",
+            "created_at"
         ]
 
         read_only_fields = [
@@ -237,7 +245,9 @@ class AdmissionFeeStructureSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = AdmissionFeeStructure
-        fields = ["class_name", "class_label", "class_code", "fee_amount"]
+        fields = ["class_name", "class_label", "class_code", "fee_amount",
+            "created_at"
+        ]
 
 
 
@@ -253,6 +263,7 @@ class AdmissionFeeSerializer(serializers.ModelSerializer):
             "currency",
             "payment_mode",
             "paid_at",
+            "created_at"
         ]
 
 
@@ -266,7 +277,9 @@ class ReceiptFieldValueSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = AdmissionFieldValue
-        fields = ["id", "field", "field_name", "section_name", "value"]
+        fields = ["id", "field", "field_name", "section_name", "value",
+            "created_at"
+        ]
 
 
 
@@ -280,7 +293,9 @@ class ReceiptDocumentSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = AdmissionDocument
-        fields = ["id", "document_field", "document_name", "file", "uploaded_at"]
+        fields = ["id", "document_field", "document_name", "file", "uploaded_at",
+            "created_at"
+        ]
 
 
 
@@ -337,6 +352,7 @@ class AdmissionReceiptDataSerializer(serializers.ModelSerializer):
             "field_values",
             "documents",
             "payment_detail",
+            "created_at"
         ]
 
     def get_temp_user_data(self, obj):
@@ -405,6 +421,7 @@ class AdmissionFormSerializer(serializers.ModelSerializer):
             "fee_type",
             "fee_structures_input",
             "document_fields",
+            "created_at"
         ]
         read_only_fields = ["unique_link"]
 
@@ -500,6 +517,7 @@ class AdmissionFormViewSerializer(serializers.ModelSerializer):
             "fees",
             "fee_structures",
             "document_fields",
+            "created_at"
         ]
 
 
@@ -511,7 +529,9 @@ class AdmissionFormViewSerializer(serializers.ModelSerializer):
 class ChangeFormStatus(serializers.ModelSerializer):
     class Meta:
         model = AdmissionForm
-        fields = ["is_active"]
+        fields = ["is_active",
+            "created_at"
+        ]
 
 
 # --------Admission Form submite serializers---------
@@ -521,7 +541,9 @@ class ChangeFormStatus(serializers.ModelSerializer):
 class AdmissionFieldValueSerializer(serializers.ModelSerializer):
     class Meta:
         model = AdmissionFieldValue
-        fields = ["field", "value"]
+        fields = ["field", "value",
+            "created_at"
+        ]
 
 
 
@@ -562,6 +584,7 @@ class AdmissionSubmissionSerializer(serializers.ModelSerializer):
             "fee_type",
             "fee_amount",
             "payment_status",
+            "created_at"
         ]
         read_only_fields = [
             "id",
@@ -793,7 +816,9 @@ class AdmissionDocumentItemSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = AdmissionDocument
-        fields = ["document_field", "file"]
+        fields = ["document_field", "file",
+            "created_at"
+        ]
 
 
 # 2
@@ -810,7 +835,9 @@ class AdmissionDocumentSubmissionSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = AdmissionDocument
-        fields = ["admission_number", "documents"]
+        fields = ["admission_number", "documents",
+            "created_at"
+        ]
         read_only_fields = ["school"]
 
     def validate(self, data):
@@ -899,7 +926,9 @@ class AdmissionDocumentSubmissionSerializer(serializers.ModelSerializer):
 class FormFieldSimpleSerializer(serializers.ModelSerializer):
     class Meta:
         model = FormField
-        fields = ["id", "label"]
+        fields = ["id", "label",
+            "created_at"
+        ]
 
 
 # 2
@@ -913,7 +942,9 @@ class AdmissionFieldValueViewSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = AdmissionFieldValue
-        fields = ["field", "field_id", "value"]
+        fields = ["field", "field_id", "value",
+            "created_at"
+        ]
 
 
 # 3
@@ -924,7 +955,9 @@ class AdmissionUpdateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Admission
-        fields = ["admission_number", "field_values"]
+        fields = ["admission_number", "field_values",
+            "created_at"
+        ]
         read_only_fields = ["admission_number"]
 
     def update(self, instance, validated_data):
@@ -973,7 +1006,9 @@ class AdmissionDocumentSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Admission
-        fields = ["admission_number", "documents"]
+        fields = ["admission_number", "documents",
+            "created_at"
+        ]
         read_only_fields = ["admission_number"]
 
 
@@ -987,7 +1022,10 @@ class AdmissionDocumentUpdateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Admission
-        fields = []
+        fields = [
+            "created_at",
+        ]
+        read_only_fields = ["created_at"]
 
     def update(self, instance, validated_data):
 
@@ -1063,6 +1101,7 @@ class TempUserAdmissionDataSerializer(serializers.ModelSerializer):
             "pay_process",
             "sections",
             "fee_data",
+            "created_at"
         ]
 
     def get_sections(self, obj):
@@ -1128,7 +1167,9 @@ class StudentFieldValueReadSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = StudentFieldValue
-        fields = ["field_label", "value", "file"]
+        fields = ["field_label", "value", "file",
+            "created_at"
+        ]
 
 
 
@@ -1151,7 +1192,9 @@ class AdmissionDocumentReadSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = AdmissionDocument
-        fields = ["id", "document_field", "document_label", "file"]
+        fields = ["id", "document_field", "document_label", "file",
+            "created_at"
+        ]
 
 
 # =======================
@@ -1179,6 +1222,7 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
             # "clerk_verified_at",
             "field_values",
             "documents",
+            "created_at"
         ]
 
     def validate(self, attrs):
@@ -1437,9 +1481,12 @@ class GetAdmissionDataSerializer(serializers.ModelSerializer):
             "status",
             "gr_no",
             "division",
+            "submitted_at",
             "field_values",
             "documents",
+            "created_at"
         ]
+        read_only_fields = ["submitted_at"]
 
 
 
@@ -1506,7 +1553,9 @@ class StudentSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Student
-        fields = ["id", "surname", "name", "gr_no"]
+        fields = ["id", "surname", "name", "gr_no",
+            "created_at"
+        ]
 
 
 # serializers.py
@@ -1522,21 +1571,27 @@ class StudentGetSerializer(serializers.ModelSerializer):
     class_name = serializers.CharField(source = "school_class.school_class",read_only = True)
     class Meta:
         model = Student
-        fields = ["id", "gr_no", "surname", "name", "father_name", "mother_name", "school_class", "class_name"]
+        fields = ["id", "gr_no", "surname", "name", "father_name", "mother_name", "school_class", "class_name",
+            "created_at"
+        ]
 
 
 
 class StudentDocumentSerializer(serializers.ModelSerializer):
     class Meta:
         model=StudentDocument
-        fields=["id","student","document_type","title","description","document"]
+        fields=["id","student","document_type","title","description","document",
+            "created_at"
+        ]
 
 
 
 class StudentNotificationSerializer(serializers.ModelSerializer):
     class Meta:
         model=StudentNotification
-        fields=["notification_type","title","message"]
+        fields=["notification_type","title","message",
+            "created_at"
+        ]
 
 
 
