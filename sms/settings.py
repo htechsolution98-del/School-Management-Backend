@@ -43,6 +43,19 @@ INSTALLED_APPS = [
     "cloudinary_storage",
     "cloudinary",
     "sms_app",
+    "sms_shared_core",
+    
+    # Microservice Apps
+    "services.auth_identity",
+    "services.tenant_subscription",
+    "services.academic_timetable",
+    "services.student_admission",
+    "services.staff_hr",
+    "services.examination_result",
+    "services.finance_accounting",
+    "services.library_management",
+    "services.inventory_asset",
+    "services.notification_messaging",
     
     "rest_framework",
     "rest_framework_simplejwt",
@@ -50,7 +63,6 @@ INSTALLED_APPS = [
     
     "corsheaders",
     "drf_yasg",
-    
 ]
 ASGI_APPLICATION = "sms.asgi.application"
 ALLOWED_HOSTS = ['*']  # for testing
@@ -126,16 +138,40 @@ SIMPLE_JWT = {
 
 }
 
+from corsheaders.defaults import default_headers
+
+CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOW_CREDENTIALS = True
+
 CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:8000",
     "http://localhost:8000",
     "http://127.0.0.1:3000",
+    "http://127.0.0.1:3001",
+    "http://localhost:8000",
     "http://localhost:3000",
+    "http://localhost:3001",
     "https://api.vidyapranali.in",
-    "https://vidyapranali.in"
+    "https://vidyapranali.in",
+]
+
+CORS_ALLOW_HEADERS = list(default_headers) + [
+    "x-school-id",
+    "x-school-slug",
+    "authorization",
+    "content-type",
+    "accept",
+    "origin",
+    "x-requested-with",
 ]
 
 CSRF_TRUSTED_ORIGINS = [
+    "http://127.0.0.1:8000",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:3001",
+    "http://localhost:8000",
+    "http://localhost:3000",
+    "http://localhost:3001",
     "https://api.vidyapranali.in",
     "https://vidyapranali.in",
 ]

@@ -3612,5 +3612,5 @@ class SubscriptionSetting(models.Model):
         return f"{self.key} = {self.value}"
 
 
-
-
+# --- INVENTORY & STUDENT ITEM MANAGEMENT MODULE ---
+from .inventory_models import *

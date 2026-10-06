@@ -30,7 +30,7 @@ from drf_yasg import openapi
 from django.conf import settings
 from django.conf.urls.static import static
 from sms_app.views import *
-from sms_app.auth_views import InitDatabaseView, CookieTokenRefreshView
+from sms_app.auth_views import CustomLoginView, InitDatabaseView, CookieTokenRefreshView
 from sms_app.finance_ledger_views import *
 from sms_app.library_leave_views import *
 from sms_app.subscription_views import (
@@ -40,6 +40,14 @@ from sms_app.subscription_views import (
     SubscriptionPaymentViewSet,
     SubscriptionAuditLogViewSet,
     SubscriptionSettingViewSet,
+)
+from sms_app.inventory_views import (
+    ItemCategoryViewSet, ItemSizeViewSet, ItemColorViewSet,
+    ItemPricingViewSet, ItemViewSet, SupplierViewSet,
+    PurchaseViewSet, StockTransactionViewSet, StockAdjustmentViewSet,
+    StudentItemEntitlementViewSet, StudentItemIssueViewSet,
+    ReplacementRequestViewSet, StudentItemReturnViewSet,
+    InventoryReportViewSet
 )
 
 schema_view = get_schema_view(
@@ -179,7 +187,21 @@ router.register(r'staff-salary-payment', StaffSalaryPaymentViewSet, basename='st
 router.register(r'student-fee', StudentFeeViewSet, basename='student-fee')
 router.register(r'student-fee-payment', StudentFeePaymentViewSet, basename='student-fee-payment')
 
-# Inventory Management Endpoints (Cleared - ready for fresh rebuild from scratch)
+# Student Item & Inventory Management Endpoints
+router.register(r'inventory/categories', ItemCategoryViewSet, basename='inventory-categories')
+router.register(r'inventory/sizes', ItemSizeViewSet, basename='inventory-sizes')
+router.register(r'inventory/colors', ItemColorViewSet, basename='inventory-colors')
+router.register(r'inventory/pricing', ItemPricingViewSet, basename='inventory-pricing')
+router.register(r'inventory/items', ItemViewSet, basename='inventory-items')
+router.register(r'inventory/suppliers', SupplierViewSet, basename='inventory-suppliers')
+router.register(r'inventory/purchases', PurchaseViewSet, basename='inventory-purchases')
+router.register(r'inventory/stock', StockTransactionViewSet, basename='inventory-stock')
+router.register(r'inventory/adjustments', StockAdjustmentViewSet, basename='inventory-adjustments')
+router.register(r'inventory/entitlements', StudentItemEntitlementViewSet, basename='inventory-entitlements')
+router.register(r'inventory/issues', StudentItemIssueViewSet, basename='inventory-issues')
+router.register(r'inventory/replacements', ReplacementRequestViewSet, basename='inventory-replacements')
+router.register(r'inventory/returns', StudentItemReturnViewSet, basename='inventory-returns')
+router.register(r'inventory/reports', InventoryReportViewSet, basename='inventory-reports')
 
 router.register(r'board-meetings', BoardMeetingViewSet, basename='board-meetings')
 router.register(r'homework', HomeworkViewSet, basename='homework')
@@ -462,6 +484,13 @@ urlpatterns = [
     
     path('api/webhook/',RazorpayWebhookView.as_view()),
     
+    # Auth Routes
+    path('api/access/', CustomLoginView.as_view(), name='token_obtain_pair'),
+    path('api/api-login/', CustomLoginView.as_view(), name='api_login'),
+    path('api/refresh/', CookieTokenRefreshView.as_view(), name='token_refresh_cookie'),
+    path('api/token/refresh/', CookieTokenRefreshView.as_view(), name='token_refresh'),
+    path('api/init-database/', InitDatabaseView.as_view(), name='init_database'),
+
     path('payfee/',TemplateView.as_view(template_name='textfee.html')),
      # Swagger UI
     path('swagger/', schema_view.with_ui('swagger', cache_timeout=0)),
@@ -475,10 +504,41 @@ urlpatterns = [
 ]
 
 
+inventory_router = DefaultRouter()
+inventory_router.register(r'categories', ItemCategoryViewSet, basename='inventory-category')
+inventory_router.register(r'sizes', ItemSizeViewSet, basename='inventory-size')
+inventory_router.register(r'colors', ItemColorViewSet, basename='inventory-color')
+inventory_router.register(r'pricing', ItemPricingViewSet, basename='inventory-pricing')
+inventory_router.register(r'items', ItemViewSet, basename='inventory-item')
+inventory_router.register(r'suppliers', SupplierViewSet, basename='inventory-supplier')
+inventory_router.register(r'purchases', PurchaseViewSet, basename='inventory-purchase')
+inventory_router.register(r'stock-transactions', StockTransactionViewSet, basename='inventory-stock-transaction')
+inventory_router.register(r'adjustments', StockAdjustmentViewSet, basename='inventory-adjustment')
+inventory_router.register(r'entitlements', StudentItemEntitlementViewSet, basename='inventory-entitlement')
+inventory_router.register(r'issues', StudentItemIssueViewSet, basename='inventory-issue')
+inventory_router.register(r'replacements', ReplacementRequestViewSet, basename='inventory-replacement')
+inventory_router.register(r'returns', StudentItemReturnViewSet, basename='inventory-return')
+inventory_router.register(r'reports', InventoryReportViewSet, basename='inventory-report')
+
+urlpatterns += [
+    path('api/inventory/', include(inventory_router.urls)),
+    path('inventory/', include(inventory_router.urls)),
+    
+    # Microservice Routes
+    path('', include('services.auth_identity.urls')),
+    path('', include('services.tenant_subscription.urls')),
+    path('', include('services.academic_timetable.urls')),
+    path('', include('services.student_admission.urls')),
+    path('', include('services.staff_hr.urls')),
+    path('', include('services.examination_result.urls')),
+    path('', include('services.finance_accounting.urls')),
+    path('', include('services.library_management.urls')),
+    path('', include('services.inventory_asset.urls')),
+    path('', include('services.notification_messaging.urls')),
+]
+
 if settings.DEBUG:
     urlpatterns += static(
         settings.MEDIA_URL,
         document_root=settings.MEDIA_ROOT
     )
-
- 
