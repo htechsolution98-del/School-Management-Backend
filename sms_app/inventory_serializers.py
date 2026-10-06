@@ -15,7 +15,7 @@ class ItemCategorySerializer(serializers.ModelSerializer):
     class Meta:
         model = ItemCategory
         fields = ['id', 'school', 'name', 'description', 'is_active', 'items_count', 'created_at', 'updated_at']
-        read_only_fields = ['id', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'school', 'created_at', 'updated_at']
 
     def get_items_count(self, obj):
         return obj.items.filter(is_active=True).count()
@@ -25,14 +25,14 @@ class ItemSizeSerializer(serializers.ModelSerializer):
     class Meta:
         model = ItemSize
         fields = ['id', 'school', 'name', 'size_type', 'is_active', 'created_at']
-        read_only_fields = ['id', 'created_at']
+        read_only_fields = ['id', 'school', 'created_at']
 
 
 class ItemColorSerializer(serializers.ModelSerializer):
     class Meta:
         model = ItemColor
         fields = ['id', 'school', 'name', 'hex_code', 'is_active', 'created_at']
-        read_only_fields = ['id', 'created_at']
+        read_only_fields = ['id', 'school', 'created_at']
 
 
 class ItemPricingSerializer(serializers.ModelSerializer):
@@ -49,7 +49,7 @@ class ItemPricingSerializer(serializers.ModelSerializer):
             'charging_type', 'included_fee_type', 'included_fee_type_name',
             'effective_from', 'effective_to', 'is_active', 'created_at', 'updated_at'
         ]
-        read_only_fields = ['id', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'school', 'created_at', 'updated_at']
 
 
 class ItemSerializer(serializers.ModelSerializer):
@@ -67,7 +67,7 @@ class ItemSerializer(serializers.ModelSerializer):
             'current_stock', 'stock_status', 'active_pricing',
             'created_by', 'updated_by', 'created_at', 'updated_at'
         ]
-        read_only_fields = ['id', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'school', 'created_by', 'updated_by', 'created_at', 'updated_at']
 
     def get_current_stock(self, obj):
         total = obj.stock_transactions.aggregate(total_qty=Sum('quantity'))['total_qty'] or 0
@@ -99,7 +99,7 @@ class SupplierSerializer(serializers.ModelSerializer):
             'address', 'gst_number', 'is_active', 'total_purchases_count',
             'total_purchases_amount', 'created_at', 'updated_at'
         ]
-        read_only_fields = ['id', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'school', 'created_at', 'updated_at']
 
     def get_total_purchases_count(self, obj):
         return obj.purchases.count()
@@ -136,7 +136,7 @@ class PurchaseSerializer(serializers.ModelSerializer):
             'grand_total', 'payment_status', 'status', 'notes', 'items',
             'created_by', 'created_at', 'updated_at'
         ]
-        read_only_fields = ['id', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'school', 'created_by', 'created_at', 'updated_at']
 
 
 class StockTransactionSerializer(serializers.ModelSerializer):
@@ -156,7 +156,7 @@ class StockTransactionSerializer(serializers.ModelSerializer):
             'reference_type', 'reference_id', 'transaction_date', 'remarks',
             'created_by', 'created_at'
         ]
-        read_only_fields = ['id', 'created_at']
+        read_only_fields = ['id', 'school', 'created_by', 'created_at']
 
 
 class StudentItemEntitlementSerializer(serializers.ModelSerializer):
@@ -182,7 +182,7 @@ class StudentItemEntitlementSerializer(serializers.ModelSerializer):
             'charging_type', 'fee_type', 'fee_type_name', 'status',
             'created_at', 'updated_at'
         ]
-        read_only_fields = ['id', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'school', 'created_at', 'updated_at']
 
     def get_student_name(self, obj):
         return f"{obj.student.first_name if hasattr(obj.student, 'first_name') else obj.student.name} {obj.student.surname}".strip()
@@ -210,7 +210,7 @@ class StudentItemIssueSerializer(serializers.ModelSerializer):
             'charged_amount', 'profit', 'issue_date', 'issue_reason', 'remarks',
             'issued_by', 'created_at'
         ]
-        read_only_fields = ['id', 'created_at']
+        read_only_fields = ['id', 'school', 'issued_by', 'created_at']
 
     def get_student_name(self, obj):
         return f"{obj.student.name} {obj.student.surname}".strip()
@@ -240,7 +240,7 @@ class ReplacementRequestSerializer(serializers.ModelSerializer):
             'quantity', 'reason', 'description', 'status', 'requested_at',
             'reviewed_at', 'reviewed_by', 'admin_remarks'
         ]
-        read_only_fields = ['id', 'requested_at']
+        read_only_fields = ['id', 'school', 'requested_at', 'reviewed_at', 'reviewed_by']
 
     def get_student_name(self, obj):
         return f"{obj.student.name} {obj.student.surname}".strip()
@@ -259,7 +259,7 @@ class StudentItemReturnSerializer(serializers.ModelSerializer):
             'size', 'size_name', 'color', 'color_name', 'quantity',
             'return_date', 'condition', 'reason', 'received_by', 'remarks', 'created_at'
         ]
-        read_only_fields = ['id', 'created_at']
+        read_only_fields = ['id', 'school', 'received_by', 'created_at']
 
     def get_student_name(self, obj):
         return f"{obj.student.name} {obj.student.surname}".strip()
@@ -278,7 +278,7 @@ class StockAdjustmentSerializer(serializers.ModelSerializer):
             'color', 'color_name', 'adjustment_type', 'quantity', 'reason',
             'remarks', 'adjustment_date', 'created_by', 'created_at'
         ]
-        read_only_fields = ['id', 'created_at']
+        read_only_fields = ['id', 'school', 'created_by', 'created_at']
 
 
 class InventoryAuditLogSerializer(serializers.ModelSerializer):
@@ -287,4 +287,4 @@ class InventoryAuditLogSerializer(serializers.ModelSerializer):
     class Meta:
         model = InventoryAuditLog
         fields = ['id', 'school', 'user', 'user_name', 'action', 'entity_type', 'entity_id', 'old_values', 'new_values', 'created_at']
-        read_only_fields = ['id', 'created_at']
+        read_only_fields = ['id', 'school', 'created_at']

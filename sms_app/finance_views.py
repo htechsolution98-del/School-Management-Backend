@@ -384,13 +384,27 @@ class RazorpayWebhookView(APIView):
 class FeeTypeViewSet(ModelViewSet):
     queryset = FeeType.objects.all()
     serializer_class = FeeTypeSerializer
-    permission_classes = [IsAuthenticated, IsFeeManager]
+    permission_classes = [IsAuthenticated]
+
+    def get_school(self):
+        user = self.request.user
+        school = getattr(user, 'school', None)
+        if not school and user and user.is_authenticated:
+            school = School.objects.filter(login_id=user.id).first()
+        if not school:
+            school_id = self.request.headers.get('X-School-ID') or self.request.query_params.get('school_id')
+            if school_id:
+                school = School.objects.filter(id=school_id).first()
+        return school
 
     def get_queryset(self):
-        return FeeType.objects.filter(school=self.request.user.school)
+        school = self.get_school()
+        if school:
+            return FeeType.objects.filter(school=school)
+        return FeeType.objects.all()
 
     def perform_create(self, serializer):
-        school = self.request.user.school
+        school = self.get_school()
         serializer.save(school=school)
 
 

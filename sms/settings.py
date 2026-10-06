@@ -122,14 +122,39 @@ SIMPLE_JWT = {
 
 }
 
+from corsheaders.defaults import default_headers
+
+CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOW_CREDENTIALS = True
+
 CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:8000",
     "http://127.0.0.1:3000",
+    "http://127.0.0.1:3001",
+    "http://localhost:8000",
+    "http://localhost:3000",
+    "http://localhost:3001",
     "https://api.vidyapranali.in",
-    "https://vidyapranali.in"
+    "https://vidyapranali.in",
+]
+
+CORS_ALLOW_HEADERS = list(default_headers) + [
+    "x-school-id",
+    "x-school-slug",
+    "authorization",
+    "content-type",
+    "accept",
+    "origin",
+    "x-requested-with",
 ]
 
 CSRF_TRUSTED_ORIGINS = [
+    "http://127.0.0.1:8000",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:3001",
+    "http://localhost:8000",
+    "http://localhost:3000",
+    "http://localhost:3001",
     "https://api.vidyapranali.in",
     "https://vidyapranali.in",
 ]

@@ -24,19 +24,48 @@ from .inventory_services import InventoryService
 from .models import School, AcademicYear, SchoolClass, Student, FeeType
 
 
+def resolve_school_from_request(request):
+    user = getattr(request, 'user', None)
+    if user and user.is_authenticated:
+        if hasattr(user, 'school') and user.school:
+            return user.school
+        
+        # Check if user is the school owner / admin
+        school_owner = School.objects.filter(login_id=user.id).first()
+        if school_owner:
+            return school_owner
+
+        # Check staff / clerk / teacher profile
+        staff = getattr(user, 'staff_profile', None) or getattr(user, 'staff', None)
+        if staff and getattr(staff, 'school', None):
+            return staff.school
+
+        # Check student profile
+        student = getattr(user, 'student', None)
+        if student and getattr(student, 'school', None):
+            return student.school
+
+    # Check custom headers, query params or body
+    school_id = (
+        request.headers.get('X-School-ID') or
+        request.headers.get('x-school-id') or
+        request.query_params.get('school_id') or
+        (request.data.get('school') if hasattr(request, 'data') and isinstance(request.data, dict) else None)
+    )
+    if school_id:
+        s = School.objects.filter(id=school_id).first()
+        if s:
+            return s
+
+    return School.objects.first()
+
+
 class BaseSchoolViewSet(viewsets.ModelViewSet):
     """Base ViewSet ensuring multi-tenant isolation by school"""
     permission_classes = [permissions.IsAuthenticated]
 
     def get_school(self):
-        user = self.request.user
-        if hasattr(user, 'school') and user.school:
-            return user.school
-        # Fallback for school query param or user's first school
-        school_id = self.request.query_params.get('school_id') or self.request.data.get('school')
-        if school_id:
-            return School.objects.filter(id=school_id).first()
-        return School.objects.first()
+        return resolve_school_from_request(self.request)
 
     def get_queryset(self):
         school = self.get_school()
@@ -49,19 +78,54 @@ class BaseSchoolViewSet(viewsets.ModelViewSet):
         serializer.save(school=school)
 
 
+
 class ItemCategoryViewSet(BaseSchoolViewSet):
     queryset = ItemCategory.objects.all()
     serializer_class = ItemCategorySerializer
+
+    def create(self, request, *args, **kwargs):
+        school = self.get_school()
+        name = (request.data.get('name') or '').strip()
+        existing = ItemCategory.objects.filter(school=school, name__iexact=name).first()
+        if existing:
+            return Response(
+                {"name": ["A category with this name already exists in your school."]},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        return super().create(request, *args, **kwargs)
 
 
 class ItemSizeViewSet(BaseSchoolViewSet):
     queryset = ItemSize.objects.all()
     serializer_class = ItemSizeSerializer
 
+    def create(self, request, *args, **kwargs):
+        school = self.get_school()
+        name = (request.data.get('name') or '').strip()
+        size_type = request.data.get('size_type') or 'ALPHA'
+        existing = ItemSize.objects.filter(school=school, name__iexact=name, size_type=size_type).first()
+        if existing:
+            return Response(
+                {"name": ["A size variant with this name and type already exists."]},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        return super().create(request, *args, **kwargs)
+
 
 class ItemColorViewSet(BaseSchoolViewSet):
     queryset = ItemColor.objects.all()
     serializer_class = ItemColorSerializer
+
+    def create(self, request, *args, **kwargs):
+        school = self.get_school()
+        name = (request.data.get('name') or '').strip()
+        existing = ItemColor.objects.filter(school=school, name__iexact=name).first()
+        if existing:
+            return Response(
+                {"name": ["A color variant with this name already exists."]},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        return super().create(request, *args, **kwargs)
 
 
 class ItemPricingViewSet(BaseSchoolViewSet):
@@ -77,6 +141,30 @@ class ItemPricingViewSet(BaseSchoolViewSet):
         if academic_year_id:
             qs = qs.filter(academic_year_id=academic_year_id)
         return qs
+
+    def create(self, request, *args, **kwargs):
+        school = self.get_school()
+        item_id = request.data.get('item')
+        academic_year_id = request.data.get('academic_year')
+        school_class_id = request.data.get('school_class') or None
+
+        # Check if pricing already exists for this (school, item, academic_year, school_class)
+        existing = ItemPricing.objects.filter(
+            school=school,
+            item_id=item_id,
+            academic_year_id=academic_year_id,
+            school_class_id=school_class_id
+        ).first()
+
+        if existing:
+            # Update existing record instead of creating duplicate
+            serializer = self.get_serializer(existing, data=request.data, partial=True)
+            serializer.is_valid(raise_exception=True)
+            serializer.save(school=school)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+
+        return super().create(request, *args, **kwargs)
+
 
 
 class ItemViewSet(BaseSchoolViewSet):
@@ -432,13 +520,7 @@ class InventoryReportViewSet(viewsets.ViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_school(self):
-        user = self.request.user
-        if hasattr(user, 'school') and user.school:
-            return user.school
-        school_id = self.request.query_params.get('school_id')
-        if school_id:
-            return School.objects.filter(id=school_id).first()
-        return School.objects.first()
+        return resolve_school_from_request(self.request)
 
     @action(detail=False, methods=['get'], url_path='dashboard-summary')
     def dashboard_summary(self, request):
