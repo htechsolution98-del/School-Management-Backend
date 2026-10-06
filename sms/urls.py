@@ -32,8 +32,6 @@ from django.conf.urls.static import static
 from sms_app.views import *
 from sms_app.auth_views import InitDatabaseView, CookieTokenRefreshView
 from sms_app.finance_ledger_views import *
-from sms_app.dashboard_views import WorkspaceDashboardAPIView, WorkspaceDashboardRecordsAPIView
-from sms_app.student_profile_views import ClerkStudentProfilesView, ClerkStudentDocumentReviewView
 from sms_app.inventory_views import *
 from sms_app.library_leave_views import *
 from sms_app.subscription_views import (
@@ -294,11 +292,6 @@ urlpatterns = [
     path('api/',include(router.urls)),
 
     path('api/dashboard-count/', DashboardCountAPIView.as_view(), name='dashboard-count'),
-    path('api/workspace-dashboard/', WorkspaceDashboardAPIView.as_view(), name='workspace-dashboard'),
-    path('api/workspace-dashboard/records/', WorkspaceDashboardRecordsAPIView.as_view(), name='workspace-dashboard-records'),
-    path('api/clerk/student-profiles/', ClerkStudentProfilesView.as_view(), name='clerk-student-profiles'),
-    path('api/clerk/student-profiles/<int:student_id>/', ClerkStudentProfilesView.as_view(), name='clerk-student-profile'),
-    path('api/clerk/student-profiles/<int:student_id>/documents/<str:source>/<int:document_id>/', ClerkStudentDocumentReviewView.as_view(), name='clerk-student-document-review'),
     path('api/inv-transfer/', InventoryWarehouseTransferAPIView.as_view(), name='inv-transfer'),
     path('api/inv-dashboard-summary/', InventoryDashboardSummaryAPIView.as_view(), name='inv-dashboard-summary'),
     path('api/access/',CustomLoginView.as_view()),  
