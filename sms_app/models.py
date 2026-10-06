@@ -558,6 +558,9 @@ class AdmissionDocument(models.Model):
 
     file = models.FileField(upload_to="admission_documents/")
 
+    is_verified = models.BooleanField(default=False)
+    verified_at = models.DateTimeField(null=True, blank=True)
+    verified_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="+")
     uploaded_at = models.DateTimeField(auto_now_add=True)
     created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
@@ -2434,6 +2437,8 @@ class StudentDocument(models.Model):
         choices=DOCUMENT_TYPES,
     )
 
+    profile_field = models.ForeignKey("SchoolProfileField", on_delete=models.SET_NULL, null=True, blank=True, related_name="documents")
+
     title = models.CharField(max_length=255)
 
     description = models.TextField(
@@ -2456,6 +2461,9 @@ class StudentDocument(models.Model):
         default=True
     )
 
+    is_verified = models.BooleanField(default=False)
+    verified_at = models.DateTimeField(null=True, blank=True)
+    verified_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="+")
     uploaded_at = models.DateTimeField(
         auto_now_add=True
     )
@@ -3207,6 +3215,8 @@ class RTEDocument(models.Model):
     admission = models.ForeignKey(Admission, on_delete=models.CASCADE, related_name="rte_documents", null=True, blank=True)
     document_name = models.CharField(max_length=255)
     document_file = models.FileField(upload_to="rte_documents/")
+    verified_at = models.DateTimeField(null=True, blank=True)
+    verified_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="+")
     uploaded_at = models.DateTimeField(auto_now_add=True)
     is_verified = models.BooleanField(default=False)
     expiry_date = models.DateField(null=True, blank=True)
@@ -3614,3 +3624,20 @@ class SubscriptionSetting(models.Model):
 
 # --- INVENTORY & STUDENT ITEM MANAGEMENT MODULE ---
 from .inventory_models import *
+
+
+class SchoolProfileField(models.Model):
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name="profile_fields")
+    kind = models.CharField(max_length=10, choices=[("ID", "Government ID"), ("DOCUMENT", "Document")])
+    label = models.CharField(max_length=100)
+    key = models.CharField(max_length=100)
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["school", "kind", "key"], name="unique_school_profile_field")]
+
+
+class StudentProfileValue(models.Model):
+    student = models.ForeignKey(Student, on_delete=models.CASCADE, related_name="profile_values")
+    field = models.ForeignKey(SchoolProfileField, on_delete=models.CASCADE)
+    value = models.CharField(max_length=255, blank=True)
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["student", "field"], name="unique_student_profile_value")]

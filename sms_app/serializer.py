@@ -1,3 +1,4 @@
+from .student_profile_services import AadhaarValidationMixin, DynamicIDValidationMixin, is_aadhaar_field, validate_aadhaar
 import math
 import calendar
 
@@ -510,7 +511,7 @@ class StudentExtraSerializer(serializers.ModelSerializer):
         fields = "__all__"
 
 
-class ManualStudentSerializer(serializers.ModelSerializer):
+class ManualStudentSerializer(AadhaarValidationMixin, serializers.ModelSerializer):
     extra_data = StudentExtraSerializer(required=False)
 
     class Meta:
@@ -897,7 +898,7 @@ class ChangeFormStatus(serializers.ModelSerializer):
 
 # --------Admission Form submite serializers---------
 # 1class
-class AdmissionFieldValueSerializer(serializers.ModelSerializer):
+class AdmissionFieldValueSerializer(DynamicIDValidationMixin, serializers.ModelSerializer):
     class Meta:
         model = AdmissionFieldValue
         fields = ["created_at", "field", "value"]
@@ -1337,7 +1338,7 @@ class FormFieldSimpleSerializer(serializers.ModelSerializer):
 
 
 # 2
-class AdmissionFieldValueViewSerializer(serializers.ModelSerializer):
+class AdmissionFieldValueViewSerializer(DynamicIDValidationMixin, serializers.ModelSerializer):
     field = FormFieldSimpleSerializer(read_only=True)  # for response
     field_id = serializers.PrimaryKeyRelatedField(
         queryset=FormField.objects.all(), source="field", write_only=True
@@ -1375,6 +1376,9 @@ class AdmissionUpdateSerializer(serializers.ModelSerializer):
                         field=field_obj,
                         defaults={"value": val},
                     )
+                    id_mapping = "aadhar_number" if is_aadhaar_field(field_obj) else field_obj.map_to_student_field
+                    if id_mapping in {"aadhar_number", "abc_id", "udise_no"}:
+                        Student.objects.filter(admission=instance, school=instance.school).update(**{id_mapping: val})
                     if field_obj.label and any(k in field_obj.label.lower() for k in ["division", "section", "sec"]):
                         Student.objects.filter(admission=instance).update(division=val)
 
@@ -1697,6 +1701,10 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
         ]
 
     def validate(self, attrs):
+        if self.instance:
+            for field_value in self.instance.field_values.select_related("field"):
+                if is_aadhaar_field(field_value.field):
+                    validate_aadhaar(field_value.value)
         gr_no = attrs.get("gr_no")
         request = self.context.get("request")
         school = getattr(getattr(request, "user", None), "school", None)
@@ -5345,7 +5353,7 @@ class StudentHomeworkListSerializer(serializers.ModelSerializer):
 # --------------------------------GET STUDENT DATA----------------------------
 
 
-class StudentGetSerializer(serializers.ModelSerializer):
+class StudentGetSerializer(AadhaarValidationMixin, serializers.ModelSerializer):
     school_class = serializers.PrimaryKeyRelatedField(
         queryset=SchoolClass.objects.all(), required=False, allow_null=True
     )
