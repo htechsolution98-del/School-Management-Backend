@@ -14,6 +14,7 @@ class SchoolStatusMiddleware(MiddlewareMixin):
         "/api/access/",  # login
         "/api/api-login/",  # login
         "/api/token/refresh/",  # token refresh
+        "/api/refresh/",  # cookie and body token refresh
         "/api/send-otp/",  # send OTP
         "/api/verify-otp/",  # verify OTP
     ]

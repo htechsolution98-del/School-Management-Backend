@@ -11,6 +11,7 @@ from .models import *
 from .serializer import *
 from .permissions import *
 from .utils import *
+from .validators import normalize_mobile
 import datetime
 from django.core.cache import cache
 from django.db import transaction
@@ -23,7 +24,13 @@ User = get_user_model()
 class FeatureView(ModelViewSet):
     queryset = Feature.objects.all()
     serializer_class = FeatureSerialzer
-    http_method_names = ["get", "post", "delete"]
+    http_method_names = ["get", "post", "patch", "delete"]
+
+    def get_permissions(self):
+        permissions = [IsAuthenticated()]
+        if self.action not in ("list", "retrieve"):
+            permissions.append(Is_super_admin())
+        return permissions
 
     def list(self, request, *args, **kwargs):
         if not Feature.objects.exists():
@@ -79,14 +86,14 @@ class GetFeatureView(ModelViewSet):
         if not school:
             return SchoolFeature.objects.none()
 
-        # If no school features recorded yet at all, initialize them
+        qs = SchoolFeature.objects.filter(school=school, is_enabled=True, feature__is_active=True)
         if not SchoolFeature.objects.filter(school=school).exists():
             features = Feature.objects.all()
             if features.exists():
                 sfs = [SchoolFeature(school=school, feature=f, is_enabled=True) for f in features]
                 SchoolFeature.objects.bulk_create(sfs, ignore_conflicts=True)
-
-        return SchoolFeature.objects.filter(school=school, is_enabled=True)
+                qs = SchoolFeature.objects.filter(school=school, is_enabled=True, feature__is_active=True)
+        return qs
 
 
 
@@ -156,6 +163,10 @@ class SchoolView(ModelViewSet):
         # cache.set(cache_key, qs, timeout=300)
         return qs
 
+    # NOTE: keeping School.email / School.phone aligned with the login user is
+    # handled by the `sync_school_login_credentials` post_save receiver in
+    # signals.py, so every write path stays consistent.
+
     def perform_create(self, serializer):
         features = serializer.validated_data.pop("feature_ids", [])
         name = serializer.validated_data.get("name")
@@ -170,8 +181,12 @@ class SchoolView(ModelViewSet):
             school_code = generate_school_code(name)
 
         with transaction.atomic():
-            # ✅ Create user
-            user = User.objects.create(username=school_code, email=email)
+            # ✅ Create user (email + mobile are both login identifiers)
+            user = User.objects.create(
+                username=school_code,
+                email=email.strip().lower(),
+                mobile=normalize_mobile(serializer.validated_data.get("phone")) or None,
+            )
             user.role = "admin(trustee)"  # if custom field exists
             user.set_password("123456")
             user.save()
@@ -194,6 +209,7 @@ class SchoolView(ModelViewSet):
             # ✅ Link user to school
             user.school = school  # if field exists
             user.save()
+
         #  Clear cache after create
         # cache.delete("school_list")
 
@@ -203,7 +219,7 @@ class SchoolView(ModelViewSet):
         is_being_deactivated = serializer.validated_data.get("is_active") is False
         with transaction.atomic():
             school = serializer.save()
-            
+
             if features is not None:
                 new_feature_ids = set(f.id for f in features)
                 all_school_features = SchoolFeature.objects.filter(school=school)

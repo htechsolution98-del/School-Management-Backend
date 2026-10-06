@@ -1,5 +1,9 @@
 from rest_framework import serializers
+import math
+from datetime import date
+from django.utils import timezone
 from .models import *
+from .utils import is_inside_radius, is_after_time, is_before_time
 
 class ClassCategorySerializer(serializers.ModelSerializer):
     class Meta:
@@ -11,15 +15,16 @@ class SchoolClassSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = SchoolClass
-        fields = ["id", "school_class", "category", "is_rte_applicable"]
+        fields = ['id', 'school_class', 'category', 'is_rte_applicable', 'created_at']
+        read_only_fields = ['created_at']
 
     def validate(self, data):
         request = self.context.get("request")
-        school = request.user.school
+        school = getattr(request.user, "school", None) if request and hasattr(request, "user") else None
         school_class = data.get("school_class")
 
         # Prevent duplicate in DB
-        if school_class and SchoolClass.objects.filter(
+        if school and school_class and SchoolClass.objects.filter(
             school=school, school_class__iexact=school_class
         ).exists():
             raise serializers.ValidationError(
@@ -30,12 +35,13 @@ class SchoolClassSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         request = self.context.get("request")
-        school = request.user.school
+        school = getattr(request.user, "school", None) if request and hasattr(request, "user") else None
 
         return SchoolClass.objects.create(
             school=school,
             school_class=validated_data["school_class"],
             category=validated_data.get("category"),
+            is_rte_applicable=validated_data.get("is_rte_applicable", False),
         )
 
 
@@ -68,7 +74,8 @@ class SetDivisionSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Division
-        fields = ["id", "SchoolClass", "class_name", "division", "capacity"]
+        fields = ["id", "SchoolClass", "class_name", "division", "capacity", "created_at"]
+        read_only_fields = ["created_at"]
 
 
 
@@ -80,7 +87,8 @@ class SetDivisionListSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Division
-        fields = ["id", "SchoolClass", "class_name", "division", "capacity"]
+        fields = ["id", "SchoolClass", "class_name", "division", "capacity", "created_at"]
+        read_only_fields = ["created_at"]
 
 
 # =========serializers for set division by clerk========
@@ -95,7 +103,9 @@ class DivisionSetSerilaizer(serializers.ModelSerializer):
 
     class Meta:
         model = Student
-        fields = ["division", "capacity"]
+        fields = ["division", "capacity",
+            "created_at"
+        ]
 
     def create(self, validated_data):
         total_division = int(validated_data.pop("division"))
@@ -177,6 +187,7 @@ class AssignClassSerializer(serializers.ModelSerializer):
             "class_name",
             "class_id",
             "is_class_teacher",
+            "created_at"
         ]
 
         read_only_fields = ["teacher_name", "subject_name", "division_name", "class_name", "class_id"]
@@ -288,7 +299,9 @@ class Tt_breaksSerializer(serializers.ModelSerializer):
 class Tt_slotSerializer(serializers.ModelSerializer):
     class Meta:
         model = Tt_slot
-        fields = ["id", "lecture", "slot"]
+        fields = ["id", "lecture", "slot",
+            "created_at"
+        ]
         read_only_fields = ["id", "lecture"]
 
 
@@ -317,6 +330,7 @@ class SetTimeTableSerializer(serializers.ModelSerializer):
             "slot",
             "start",
             "end",
+            "created_at"
         ]
 
 
@@ -331,7 +345,9 @@ class Tt_yearSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Tt_year
-        fields = ["year", "start_year", "end_year"]
+        fields = ["year", "start_year", "end_year",
+            "created_at"
+        ]
 
         read_only_fields = ["year"]
 
@@ -408,6 +424,7 @@ class Time_tableSerializer(serializers.ModelSerializer):
             "day_time",
             "breaks",
             "slot",
+            "created_at"
         ]
         # read_only_fields = ["year"]
 
@@ -603,8 +620,9 @@ class AttendanceLocationSerializer(serializers.ModelSerializer):
             "start_time",
             "end_time",
             "half_day_time",
+            "created_at",
         ]
-        read_only_fields = ["school"]
+        read_only_fields = ["school", "created_at"]
 
     def validate(self, attrs):
         return super().validate(attrs)
@@ -713,6 +731,7 @@ class AttendanceSerializer(serializers.ModelSerializer):
             "is_half_day",
             "check_in",
             "check_out",
+            "created_at",
         ]
 
         read_only_fields = [
@@ -727,6 +746,7 @@ class AttendanceSerializer(serializers.ModelSerializer):
             "is_half_day",
             "check_in",
             "check_out",
+            "created_at",
         ]
 
     def validate_latitude(self, value):
@@ -876,8 +896,9 @@ class AcademicYearSerializer(serializers.ModelSerializer):
             "month_numbers",
             "billing_periods",
             "is_active",
+            "created_at",
         ]
-        read_only_fields = ["school", "name"]
+        read_only_fields = ["school", "name", "created_at"]
 
     def get_month_numbers(self, obj):
         return obj.get_month_numbers()
@@ -1729,45 +1750,40 @@ class HomeworkSerializer(serializers.ModelSerializer):
 #         return super().create(validated_data)
 
 
-# class HomeworkSubmissionDetailSerializer(serializers.ModelSerializer):
-#     """
-#     Detailed serializer for viewing a single submission with all details.
-#     """
+class HomeworkSubmissionDetailSerializer(serializers.ModelSerializer):
+    """
+    Detailed serializer for viewing a single submission with all details.
+    """
 
-#     student_name = serializers.SerializerMethodField()
-#     homework_title = serializers.CharField(source="homework.title", read_only=True)
-#     teacher_name = serializers.CharField(source="checked_by.staff.name", read_only=True)
+    student_name = serializers.SerializerMethodField()
+    homework_title = serializers.CharField(source="homework.title", read_only=True)
 
-#     class Meta:
-#         model = HomeworkSubmission
-#         fields = [
-#             "id",
-#             "homework",
-#             "homework_title",
-#             "student",
-#             "student_name",
-#             "attachment",
-#             "submitted_at",
-#             "status",
-#             "marks",
-#             "teacher_remark",
-#             "checked_by",
-#             "teacher_name",
-#             "checked_at",
-#         ]
-#         read_only_fields = fields
+    class Meta:
+        model = HomeworkSubmissions
+        fields = [
+            "id",
+            "homework",
+            "homework_title",
+            "student",
+            "student_name",
+            "file",
+            "submitted_at",
+        ]
+        read_only_fields = fields
 
-#     def get_student_name(self, obj):
-#         return " ".join(
-#             filter(
-#                 None,
-#                 [
-#                     obj.student.surname,
-#                     obj.student.name,
-#                     obj.student.father_name,
-#                 ],
-#             )
-#         )
+    def get_student_name(self, obj):
+        if not obj.student:
+            return ""
+        return " ".join(
+            filter(
+                None,
+                [
+                    obj.student.surname,
+                    obj.student.name,
+                    obj.student.father_name,
+                ],
+            )
+        )
 
 
 # class CheckHomeworkSubmissionSerializer(serializers.ModelSerializer):
@@ -1839,6 +1855,7 @@ class StudentHomeworkListSerializer(serializers.ModelSerializer):
             "due_date",
             "attachment",
             "is_active",
+            "created_at"
         ]
         read_only_fields = fields
 
@@ -1851,14 +1868,18 @@ class StudentHomeworkListSerializer(serializers.ModelSerializer):
 class ExamSerializer(serializers.ModelSerializer):
     class Meta:
         model=Exam
-        fields=["id","title","description","exam_date","start_time","end_time","class_group"]
+        fields=["id","title","description","exam_date","start_time","end_time","class_group",
+            "created_at"
+        ]
 
 
 
 class ExamNotificationSerializer(serializers.ModelSerializer):
     class Meta:
         model=ExamNotification
-        fields=["id","exam","title","message"]
+        fields=["id","exam","title","message",
+            "created_at"
+        ]
 
 
 
@@ -1870,11 +1891,7 @@ class HomeworkSubmissionSerializer(serializers.ModelSerializer):
 
     class Meta():
         model = HomeworkSubmissions
-        fields = [
-            "id", "homework", "homework_title", "student", "student_name",
-            "file", "attachment", "submitted_at", "status", "marks",
-            "teacher_remark", "checked_by", "checked_at"
-        ]
+        fields = ['id', 'homework', 'homework_title', 'student', 'student_name', 'file', 'attachment', 'submitted_at', 'status', 'marks', 'teacher_remark', 'checked_by', 'checked_at', 'created_at']
         read_only_fields = ["student", "submitted_at", "checked_by", "checked_at"]
 
     def get_student_name(self, obj):
@@ -1892,7 +1909,7 @@ class HomeworkSubmissionSerializer(serializers.ModelSerializer):
 
         homework = attrs.get("homework")
         if homework and homework.due_date:
-            submission_date = now().date()
+            submission_date = timezone.now().date()
             due_date = homework.due_date
             if submission_date > due_date and self.instance is None:
                 raise serializers.ValidationError(
@@ -1909,7 +1926,7 @@ class MonthlyProgressReportSerializer(serializers.ModelSerializer):
     class Meta:
         model=MonthlyProgressReport
         fields='__all__'
-        read_only_fields=["school","attendance_percentage","created_by","overall_score"]
+        read_only_fields = ["created_at", "school","attendance_percentage","created_by","overall_score"]
 
     def create(self,validated_data):
             student=validated_data["student"]
@@ -1957,7 +1974,9 @@ class MonthlyProgressReportSerializer(serializers.ModelSerializer):
 class StudyMaterialSerializer(serializers.ModelSerializer):
     class Meta:
         model=StudyMaterial
-        fields=["subject","student_class","material_type","title","description","file"]
+        fields=["subject","student_class","material_type","title","description","file",
+            "created_at"
+        ]
         
 
 

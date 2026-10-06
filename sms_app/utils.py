@@ -1,5 +1,6 @@
 
 import string
+import math
 # pyrefly: ignore [missing-import]
 from django.db import transaction
 import random
@@ -328,6 +329,74 @@ def optimize_image(uploaded_file, size=(800, 800), quality=60):
 
 def progress_group(school_id, student_id):
     return f"school_{school_id}_student_{student_id}_progress-report"
+
+
+def is_inside_radius(lat1, lon1, lat2, lon2, radius_meters):
+    R = 6371000
+
+    def to_rad(deg):
+        return deg * math.pi / 180
+
+    dlat = to_rad(lat2 - lat1)
+    dlon = to_rad(lon2 - lon1)
+
+    a = (
+        math.sin(dlat / 2) ** 2
+        + math.cos(to_rad(lat1)) * math.cos(to_rad(lat2)) * math.sin(dlon / 2) ** 2
+    )
+
+    c = 2 * math.asin(math.sqrt(a))
+    distance = R * c
+
+    return distance <= radius_meters
+
+
+def is_after_time(current_time, rule_time):
+    return bool(rule_time and current_time > rule_time)
+
+
+def is_before_time(current_time, rule_time):
+    return bool(rule_time and current_time < rule_time)
+
+
+def get_student_fee_for_online_payment(user, student_fee_id):
+    student = Student.objects.filter(user=user).select_related("school").first()
+
+    if student:
+        student_fee = StudentFee.objects.select_related(
+            "student", "feetype", "school"
+        ).get(id=student_fee_id, student=student, school=student.school)
+        return student_fee, student.school
+
+    school = getattr(user, "school", None)
+    if not school:
+        raise StudentFee.DoesNotExist
+
+    student_fee = StudentFee.objects.select_related("student", "feetype", "school").get(
+        id=student_fee_id, school=school
+    )
+    return student_fee, school
+
+
+def get_student_fee_payment_for_online_verify(user, order_id):
+    student = Student.objects.filter(user=user).select_related("school").first()
+    queryset = StudentFeePayment.objects.select_related(
+        "student_fee",
+        "student_fee__student",
+        "student_fee__feetype",
+        "student",
+        "feetype",
+    ).filter(razorpay_order_id=order_id)
+
+    if student:
+        return queryset.get(student=student, school=student.school)
+
+    school = getattr(user, "school", None)
+    if not school:
+        raise StudentFeePayment.DoesNotExist
+
+    return queryset.get(school=school)
+
 
 
 

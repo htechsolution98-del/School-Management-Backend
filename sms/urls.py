@@ -30,7 +30,7 @@ from drf_yasg import openapi
 from django.conf import settings
 from django.conf.urls.static import static
 from sms_app.views import *
-from sms_app.auth_views import InitDatabaseView
+from sms_app.auth_views import InitDatabaseView, CookieTokenRefreshView
 from sms_app.finance_ledger_views import *
 from sms_app.library_leave_views import *
 from sms_app.subscription_views import (
@@ -323,6 +323,7 @@ urlpatterns = [
     path('api/delete-location/<int:pk>/',DeleteUpdateLocationView.as_view()),
     
     path('api/api-login/', LoginView.as_view()),
+    path('api/me/', CurrentUserProfileView.as_view(), name='current_user_profile'),
     
     # path('school/<int:school_id>/', school_wise_report, name='school_wise_report'),
     

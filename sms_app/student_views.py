@@ -1,9 +1,12 @@
 from rest_framework.views import APIView
 from rest_framework.views import APIView
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.viewsets import ModelViewSet, ReadOnlyModelViewSet
 from rest_framework import generics
+import re
+import json
+import logging
 from rest_framework.response import Response
 from rest_framework import status
 from django.contrib.auth import authenticate
@@ -143,23 +146,223 @@ class FormSubmissionViewSet(ModelViewSet):
     queryset = Admission.objects.all()
     permission_classes = [IsClerkOrTempUser]
     serializer_class = AdmissionSubmissionSerializer
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    def _extract_uploaded_documents(self, request, form=None):
+        """
+        Extract uploaded document files from request.FILES and request.data.
+        Supports multiple formats:
+        1. Repeated or list keys: document_field + file
+        2. Nested keys: documents[0][document_field], documents[0][file]
+        3. Field-specific keys: document_<field_id>, file_<field_id>, or raw ID as key
+        4. Field label matching: e.g. 'aadhaar', 'birth_certificate', 'photo' matching DocumentField.label
+        """
+        data = request.data
+        files = request.FILES
+        uploaded_docs = []
+        handled_file_ids = set()
+
+        doc_fields_by_id = {}
+        doc_fields_by_name = {}
+        if form:
+            for df in form.document_fields.all():
+                doc_fields_by_id[df.id] = df
+                clean_name = re.sub(r"[^a-z0-9]", "", df.label.lower())
+                doc_fields_by_name[clean_name] = df
+
+        # 1. Repeated or list keys: document_field and file
+        doc_field_vals = (
+            data.getlist("document_field")
+            if hasattr(data, "getlist")
+            else [data.get("document_field")]
+        )
+        file_vals = (
+            files.getlist("file")
+            if hasattr(files, "getlist")
+            else [files.get("file")]
+        )
+        if any(v is not None for v in doc_field_vals) and any(f is not None for f in file_vals):
+            for df_val, f_val in zip(doc_field_vals, file_vals):
+                if df_val and f_val:
+                    uploaded_docs.append({"document_field": df_val, "file": f_val})
+                    handled_file_ids.add(id(f_val))
+
+        # 2. Nested keys: documents[i][document_field] and documents[i][file]
+        i = 0
+        while True:
+            df_val = data.get(f"documents[{i}][document_field]") or data.get(
+                f"documents.{i}.document_field"
+            )
+            f_val = files.get(f"documents[{i}][file]") or files.get(
+                f"documents.{i}.file"
+            )
+            if df_val is None and f_val is None:
+                break
+            if df_val and f_val:
+                uploaded_docs.append({"document_field": df_val, "file": f_val})
+                handled_file_ids.add(id(f_val))
+            i += 1
+
+        # 3. Check remaining files in request.FILES
+        for key, file_obj in files.items():
+            if id(file_obj) in handled_file_ids:
+                continue
+
+            target_df = None
+            # Check numeric ID in key (e.g. "document_10", "file_10", "10")
+            id_match = re.search(r"\d+", str(key))
+            if id_match:
+                df_id = int(id_match.group(0))
+                if df_id in doc_fields_by_id:
+                    target_df = doc_fields_by_id[df_id]
+                else:
+                    target_df = DocumentField.objects.filter(id=df_id).first()
+
+            # If not found by ID, match by normalized label (e.g. "aadhaar", "birth", "photo")
+            if not target_df and doc_fields_by_name:
+                clean_key = re.sub(r"[^a-z0-9]", "", str(key).lower())
+                for clean_label, df in doc_fields_by_name.items():
+                    if clean_key and (clean_key in clean_label or clean_label in clean_key):
+                        target_df = df
+                        break
+
+            if target_df:
+                uploaded_docs.append({"document_field": target_df.id, "file": file_obj})
+                handled_file_ids.add(id(file_obj))
+
+        return uploaded_docs, doc_fields_by_id
 
     def create(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.data)
+        # Normalize request.data if field_values is passed as JSON string in multipart form
+        data = request.data
+        if hasattr(data, "dict"):
+            data_dict = data.dict()
+        elif hasattr(data, "copy"):
+            data_dict = data.copy()
+        else:
+            data_dict = dict(data)
+
+        if "field_values" in data_dict and isinstance(data_dict["field_values"], str):
+            try:
+                data_dict["field_values"] = json.loads(data_dict["field_values"])
+            except Exception:
+                pass
+
+        serializer = self.get_serializer(data=data_dict)
         serializer.is_valid(raise_exception=True)
-        self.perform_create(serializer)
+        admission = serializer.save()
 
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        form = getattr(admission, "form", None)
+        uploaded_docs, doc_fields_lookup = self._extract_uploaded_documents(request, form)
 
-    # def get_serializer_class(self):
-    #     if self.action in ['list', 'retrieve']:
-    #         return FormSubmissionReadSerializer
-    #     return FormSubmissionSerializer
+        logger = logging.getLogger(__name__)
+        saved_documents = []
+        upload_warnings = []
 
-    # def perform_create(self, serializer):
-    #     serializer.save(user=self.request.user)
+        for item in uploaded_docs:
+            df_val = item["document_field"]
+            file_obj = item["file"]
 
+            doc_field_obj = None
+            if str(df_val).isdigit() and int(df_val) in doc_fields_lookup:
+                doc_field_obj = doc_fields_lookup[int(df_val)]
+            elif str(df_val).isdigit():
+                doc_field_obj = DocumentField.objects.filter(id=int(df_val)).first()
 
+            if not doc_field_obj:
+                continue
+
+            # Ensure seek(0) to avoid seeking errors or empty uploads
+            if hasattr(file_obj, "seek"):
+                try:
+                    file_obj.seek(0)
+                except Exception as seek_err:
+                    logger.warning(
+                        "Could not seek file %s: %s",
+                        getattr(file_obj, "name", ""),
+                        seek_err,
+                    )
+
+            # Wrap document upload in a clean try...except block
+            try:
+                doc_inst, _ = AdmissionDocument.objects.update_or_create(
+                    admission=admission,
+                    document_field=doc_field_obj,
+                    defaults={
+                        "file": file_obj,
+                        "school": admission.school,
+                    },
+                )
+                saved_documents.append(doc_inst)
+            except Exception as upload_err:
+                logger.error(
+                    "Cloudinary document upload failed for %s (%s): %s",
+                    getattr(doc_field_obj, "label", "unknown"),
+                    getattr(file_obj, "name", "unknown"),
+                    upload_err,
+                    exc_info=True,
+                )
+                # Fallback to local storage so Django does not crash with a 500 response
+                try:
+                    from django.core.files.storage import FileSystemStorage
+
+                    fs = FileSystemStorage()
+                    if hasattr(file_obj, "seek"):
+                        try:
+                            file_obj.seek(0)
+                        except Exception:
+                            pass
+                    fname = fs.save(
+                        f"admission_documents/{getattr(file_obj, 'name', 'doc')}",
+                        file_obj,
+                    )
+                    doc_inst, _ = AdmissionDocument.objects.update_or_create(
+                        admission=admission,
+                        document_field=doc_field_obj,
+                        defaults={
+                            "file": fname,
+                            "school": admission.school,
+                        },
+                    )
+                    saved_documents.append(doc_inst)
+                except Exception as local_err:
+                    logger.error(
+                        "Fallback local save also failed: %s",
+                        local_err,
+                        exc_info=True,
+                    )
+                    upload_warnings.append(f"{doc_field_obj.label}: {str(upload_err)}")
+
+        # Format document list with asset URLs
+        documents_response = []
+        for doc in AdmissionDocument.objects.filter(admission=admission).select_related(
+            "document_field"
+        ):
+            asset_url = None
+            try:
+                if doc.file:
+                    asset_url = doc.file.url
+                    if asset_url and not asset_url.startswith("http"):
+                        asset_url = request.build_absolute_uri(asset_url)
+            except Exception:
+                pass
+            documents_response.append(
+                {
+                    "id": doc.id,
+                    "document_field": doc.document_field_id,
+                    "document_field_name": (
+                        doc.document_field.label if doc.document_field else None
+                    ),
+                    "file_url": asset_url,
+                }
+            )
+
+        response_data = dict(serializer.data)
+        response_data["documents"] = documents_response
+        if upload_warnings:
+            response_data["upload_warnings"] = upload_warnings
+
+        return Response(response_data, status=status.HTTP_201_CREATED)
 
 
 from .models import RTEDocument
@@ -263,12 +466,9 @@ class DocumentSubmissionView(ModelViewSet):
             else [files.get("file") or data.get("file")]
         )
 
-        # Simple payload, supports one or many repeated keys:
-        # document_field=<id>, file=<uploaded file>
-        # document_field=<id>, file=<uploaded file>
         if any(value is not None for value in document_fields) or uploaded_files:
             max_count = max(len(document_fields), len(uploaded_files))
-            return [
+            docs = [
                 {
                     "document_field": (
                         document_fields[index] if index < len(document_fields) else None
@@ -279,6 +479,14 @@ class DocumentSubmissionView(ModelViewSet):
                 }
                 for index in range(max_count)
             ]
+            for item in docs:
+                f = item.get("file")
+                if hasattr(f, "seek"):
+                    try:
+                        f.seek(0)
+                    except Exception:
+                        pass
+            return docs
 
         documents = []
         i = 0
@@ -296,6 +504,12 @@ class DocumentSubmissionView(ModelViewSet):
 
             if document_field is None and file is None:
                 break
+
+            if hasattr(file, "seek"):
+                try:
+                    file.seek(0)
+                except Exception:
+                    pass
 
             documents.append(
                 {
@@ -321,14 +535,17 @@ class DocumentSubmissionView(ModelViewSet):
         serializer = self.get_serializer(data=final_data)
         serializer.is_valid(raise_exception=True)
 
-        # SAVE ONLY ONCE
-        self.perform_create(serializer)
+        logger = logging.getLogger(__name__)
+        try:
+            self.perform_create(serializer)
+        except Exception as upload_err:
+            logger.error("Error during document submission perform_create: %s", upload_err, exc_info=True)
 
         admission_number = data.get("admission_number")
         fee_amount = 0
 
+        admission = None
         if admission_number:
-
             admission = (
                 Admission.objects.select_related("form")
                 .filter(admission_number=admission_number)
@@ -347,7 +564,6 @@ class DocumentSubmissionView(ModelViewSet):
             elif admission.form.fee_type == "general":
 
                 fee_amount = float(admission.form.fees)
-
             else:
                 value_obj = AdmissionFieldValue.objects.filter(
                     admission=admission,
@@ -393,11 +609,31 @@ class DocumentSubmissionView(ModelViewSet):
                 else:
                     fee_amount = 0.0
 
+        # Collect saved documents with URLs
+        docs_list = []
+        if admission:
+            for doc in AdmissionDocument.objects.filter(admission=admission).select_related("document_field"):
+                url = None
+                try:
+                    if doc.file:
+                        url = doc.file.url
+                        if url and not url.startswith("http"):
+                            url = request.build_absolute_uri(url)
+                except Exception:
+                    pass
+                docs_list.append({
+                    "id": doc.id,
+                    "document_field": doc.document_field_id,
+                    "document_field_name": doc.document_field.label if doc.document_field else None,
+                    "file_url": url,
+                })
+
         return Response(
             {
                 "message": "Documents uploaded successfully",
                 "fee_amount": fee_amount,
                 "admission_number": admission_number,
+                "documents": docs_list,
             },
             status=status.HTTP_201_CREATED,
         )
@@ -777,12 +1013,17 @@ import razorpay
 class ClerkVerifyView(ModelViewSet):
     queryset = Admission.objects.all()
     serializer_class = ClerkVerifySerializer
-    permission_classes = [IsAuthenticated, IsCLerk]
+    permission_classes = [IsAuthenticated, IsClerkOrPrincipal]
     lookup_field = "admission_number"
     http_method_names = ["patch"]
 
     def get_queryset(self):
-        return Admission.objects.filter(school=self.request.user.school)
+        user = getattr(self.request, "user", None)
+        if user and (getattr(user, "is_superuser", False) or getattr(user, "role", "").upper() in ["ADMIN", "SUPER_ADMIN", "TRUSTEE"]):
+            return Admission.objects.all()
+        if user and getattr(user, "school", None):
+            return Admission.objects.filter(school=user.school)
+        return Admission.objects.none()
 
     def update(self, request, *args, **kwargs):
         response = super().update(request, *args, **kwargs)

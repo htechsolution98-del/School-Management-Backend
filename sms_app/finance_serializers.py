@@ -4,20 +4,37 @@ from django.utils import timezone
 from rest_framework import serializers
 from decimal import Decimal
 from .models import *
+import calendar
 import re
+from datetime import date
+from .library_leave_views import get_approved_paid_leave_days
 
 class RazarDataSerializer(serializers.ModelSerializer):
     class Meta:
         model = RazorPayData
         fields = "__all__"
-        # read_only_fields = ['school/']
+        extra_kwargs = {
+            field: {"required": True, "allow_blank": False, "allow_null": False,
+                    "error_messages": {"required": f"{label} is required.", "blank": f"{label} is required."}}
+            for field, label in [("razorpay_key_id", "Razorpay Key ID"), ("razorpay_secret_key", "Razorpay Secret Key")]
+        }
+
+    def validate_razorpay_key_id(self, value):
+        if not re.fullmatch(r"rzp_(test|live)_[A-Za-z0-9]+", value.strip()):
+            raise serializers.ValidationError("Enter a valid Key ID starting with rzp_test_ or rzp_live_.")
+        return value.strip()
+
+    def validate_razorpay_secret_key(self, value):
+        if re.search(r"\s", value.strip()):
+            raise serializers.ValidationError("Secret key cannot contain spaces.")
+        return value.strip()
 
     def validate(self, attrs):
-        school = attrs.get("school")
+        school = attrs.get("school", getattr(self.instance, "school", None))
 
-        if RazorPayData.objects.filter(school=school).exists():
+        if RazorPayData.objects.filter(school=school).exclude(pk=getattr(self.instance, "pk", None)).exists():
             raise serializers.ValidationError(
-                {"meassage": "This School Razor Pay Data Already Added"}
+                {"school": "This school already has Razorpay credentials. Edit the existing record instead."}
             )
         return attrs
 
@@ -93,6 +110,7 @@ class FeeWiseClassSerializer(serializers.ModelSerializer):
             "late_fee_type",
             "late_fee_amount",
             "max_late_fee",
+            "created_at"
         ]
         read_only_fields = ["school", "feetype_name", "billing_cycle", "school_class_name"]
 
@@ -179,8 +197,9 @@ class SalaryComponentSerializer(serializers.ModelSerializer):
             "name",
             "component_type",
             "is_active",
+            "created_at",
         ]
-        read_only_fields = ["school"]
+        read_only_fields = ["school", "created_at"]
 
     def validate_name(self, value):
         value = value.strip()
@@ -235,7 +254,9 @@ class StaffSalaryComponentSerializer(serializers.ModelSerializer):
             "calculation_type",
             "value",
             "is_active",
+            "created_at",
         ]
+        read_only_fields = ["created_at"]
 
     def validate(self, attrs):
         request = self.context.get("request")
@@ -462,6 +483,7 @@ class GenerateStaffSalaryPaymentSerializer(serializers.ModelSerializer):
             "payment_status",
             "payment_date",
             "note",
+            "created_at"
         ]
 
     def validate_salary_month(self, value):
@@ -629,6 +651,7 @@ class StudentFeeSerializer(serializers.ModelSerializer):
         source="student.school_class_id", read_only=True
     )
     school_class_name = serializers.SerializerMethodField()
+    due_date = serializers.DateField(required=False, allow_null=True)
     payable_amount = serializers.DecimalField(
         max_digits=10, decimal_places=2, read_only=True
     )
@@ -639,6 +662,15 @@ class StudentFeeSerializer(serializers.ModelSerializer):
         max_digits=10, decimal_places=2, read_only=True
     )
     payments = serializers.SerializerMethodField()
+
+    def to_internal_value(self, data):
+        if hasattr(data, "_mutable") and not data._mutable:
+            data = data.copy()
+        elif isinstance(data, dict):
+            data = dict(data)
+        if data.get("due_date") == "":
+            data["due_date"] = None
+        return super().to_internal_value(data)
 
     class Meta:
         model = StudentFee
@@ -796,6 +828,13 @@ class StudentFeeSerializer(serializers.ModelSerializer):
                     )
 
             due_date = attrs.get("due_date", getattr(self.instance, "due_date", None))
+            if not due_date and billing_period and re.match(r"^\d{4}-\d{2}$", billing_period):
+                try:
+                    y, m = map(int, billing_period.split("-"))
+                    due_date = date(y, m, 10)
+                    attrs["due_date"] = due_date
+                except Exception:
+                    pass
             if due_date and due_date.strftime("%Y-%m") != billing_period:
                 raise serializers.ValidationError(
                     {
@@ -1148,7 +1187,9 @@ class StudentFeePaymentSerializer(serializers.ModelSerializer):
 class BudgetSerializer(serializers.ModelSerializer):
     class Meta:
         model=Budget
-        fields=["id","name","allocated_amount","financial_year","spent_amount","amount_left"]
+        fields=["id","name","allocated_amount","financial_year","spent_amount","amount_left",
+            "created_at"
+        ]
         read_only_fields=["spent_amount","amount_left"]
 
 
@@ -1156,7 +1197,9 @@ class BudgetSerializer(serializers.ModelSerializer):
 class BudgetExpenseSerializer(serializers.ModelSerializer):
     class Meta:
         model=BudgetExpense
-        fields=["id","budget","expense_type","amount","description"]
+        fields=["id","budget","expense_type","amount","description",
+            "created_at"
+        ]
 
 
 

@@ -1,5 +1,7 @@
 import hmac
 import hashlib
+import json
+import razorpay
 from django.conf import settings
 from sms_app.razorpay_client import client, get_school_razorpay
 from rest_framework.views import APIView
@@ -14,6 +16,7 @@ from .serializer import *
 from .permissions import *
 from .utils import *
 import datetime
+import re
 from django.core.cache import cache
 from django.db import transaction
 from django.db.models import Q
@@ -23,12 +26,18 @@ from rest_framework.decorators import api_view, permission_classes
 class FeeVerifyView(ModelViewSet):
     queryset = Admission.objects.all()
     serializer_class = FeesVerifySerializer
-    permission_classes = [IsAuthenticated, IsFeeManager]
+    permission_classes = [IsAuthenticated, IsFeeManager | IsClerkOrPrincipal]
     lookup_field = "admission_number"
 
     def get_queryset(self):
+        user = self.request.user
+        school = getattr(user, "school", None)
+        if not school:
+            staff = getattr(user, "staff", None)
+            if staff and staff.school:
+                school = staff.school
         return Admission.objects.filter(
-            pay_process=True, school=self.request.user.school
+            pay_process=True, school=school
         )
 
     def update(self, request, *args, **kwargs):
@@ -384,27 +393,24 @@ class RazorpayWebhookView(APIView):
 class FeeTypeViewSet(ModelViewSet):
     queryset = FeeType.objects.all()
     serializer_class = FeeTypeSerializer
-    permission_classes = [IsAuthenticated]
-
-    def get_school(self):
-        user = self.request.user
-        school = getattr(user, 'school', None)
-        if not school and user and user.is_authenticated:
-            school = School.objects.filter(login_id=user.id).first()
-        if not school:
-            school_id = self.request.headers.get('X-School-ID') or self.request.query_params.get('school_id')
-            if school_id:
-                school = School.objects.filter(id=school_id).first()
-        return school
+    permission_classes = [IsAuthenticated, IsFeeManager | IsClerkOrPrincipal]
 
     def get_queryset(self):
-        school = self.get_school()
-        if school:
-            return FeeType.objects.filter(school=school)
-        return FeeType.objects.all()
+        user = self.request.user
+        school = getattr(user, "school", None)
+        if not school:
+            staff = getattr(user, "staff", None)
+            if staff and staff.school:
+                school = staff.school
+        return FeeType.objects.filter(school=school)
 
     def perform_create(self, serializer):
-        school = self.get_school()
+        user = self.request.user
+        school = getattr(user, "school", None)
+        if not school:
+            staff = getattr(user, "staff", None)
+            if staff and staff.school:
+                school = staff.school
         serializer.save(school=school)
 
 
@@ -413,11 +419,22 @@ class FeeTypeViewSet(ModelViewSet):
 class FeeWiseClassViewSet(ModelViewSet):
     queryset = FeeWiseClass.objects.all()
     serializer_class = FeeWiseClassSerializer
-    permission_classes = [IsAuthenticated, IsFeeManager]
+    permission_classes = [IsAuthenticated, IsFeeManager | IsClerkOrPrincipal]
 
     def get_queryset(self):
+        user = self.request.user
+        school = getattr(user, "school", None)
+        if not school:
+            staff = getattr(user, "staff", None)
+            if staff and staff.school:
+                school = staff.school
+        if not school:
+            student = getattr(user, "student", None)
+            if student and student.school:
+                school = student.school
+
         queryset = FeeWiseClass.objects.filter(
-            school=self.request.user.school
+            school=school
         ).select_related("feetype", "school_class")
 
         feetype = self.request.query_params.get("feetype")
@@ -431,7 +448,13 @@ class FeeWiseClassViewSet(ModelViewSet):
         return queryset
 
     def perform_create(self, serializer):
-        serializer.save(school=self.request.user.school)
+        user = self.request.user
+        school = getattr(user, "school", None)
+        if not school:
+            staff = getattr(user, "staff", None)
+            if staff and staff.school:
+                school = staff.school
+        serializer.save(school=school)
 
 
 
@@ -614,7 +637,17 @@ class StudentFeeViewSet(ModelViewSet):
         return Response(serializer.data)
 
     def perform_create(self, serializer):
-        serializer.save(school=self.request.user.school)
+        save_kwargs = {"school": self.request.user.school}
+        validated_due_date = serializer.validated_data.get("due_date")
+        if not validated_due_date:
+            billing_period = serializer.validated_data.get("billing_period")
+            if billing_period and re.match(r"^\d{4}-\d{2}$", billing_period):
+                try:
+                    y, m = map(int, billing_period.split("-"))
+                    save_kwargs["due_date"] = datetime.date(y, m, 10)
+                except Exception:
+                    pass
+        serializer.save(**save_kwargs)
 
 
 
