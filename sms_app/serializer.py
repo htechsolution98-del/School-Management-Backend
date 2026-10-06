@@ -5331,42 +5331,190 @@ class StudentHomeworkListSerializer(serializers.ModelSerializer):
 
 
 class StudentGetSerializer(serializers.ModelSerializer):
+    school_class = serializers.PrimaryKeyRelatedField(
+        queryset=SchoolClass.objects.all(), required=False, allow_null=True
+    )
+    academic_year = serializers.PrimaryKeyRelatedField(
+        queryset=AcademicYear.objects.all(), required=False, allow_null=True
+    )
     class_name = serializers.SerializerMethodField()
-    school_class = serializers.SerializerMethodField()
+    academic_year_name = serializers.SerializerMethodField()
     full_name = serializers.SerializerMethodField()
+    email = serializers.SerializerMethodField()
+    verified_by_name = serializers.SerializerMethodField()
+    photo_url = serializers.SerializerMethodField()
+    documents = serializers.SerializerMethodField()
 
     class Meta:
         model = Student
-        fields = ['id', 'gr_no', 'roll_no', 'division', 'surname', 'name', 'father_name', 'mother_name', 'full_name', 'school_class', 'class_name', 'created_at']
+        fields = [
+            'id',
+            'gr_no',
+            'roll_no',
+            'division',
+            'name',
+            'surname',
+            'father_name',
+            'mother_name',
+            'full_name',
+            'date_of_birth',
+            'mobile',
+            'email',
+            'school_class',
+            'class_name',
+            'academic_year',
+            'academic_year_name',
+            'admission_date',
+            'aadhar_number',
+            'abc_id',
+            'udise_no',
+            'is_rte',
+            'is_verified',
+            'verified_by',
+            'verified_by_name',
+            'verified_at',
+            'photo_url',
+            'documents',
+            'is_active',
+            'created_at',
+        ]
+        read_only_fields = ['id', 'verified_by', 'verified_at', 'created_at']
 
-    def get_school_class(self, obj):
-        if obj.school_class_id:
-            return obj.school_class_id
+    def get_class_name(self, obj):
+        if obj.school_class:
+            return obj.school_class.school_class
         if hasattr(obj, "admission") and obj.admission:
             fv = obj.admission.field_values.filter(
                 Q(field__map_to_student_field="school_class") | Q(field__label__icontains="class")
             ).first()
             if fv and fv.value:
-                val = str(fv.value).strip()
-                sc = SchoolClass.objects.filter(school=obj.school, school_class__iexact=val).first()
+                sc = SchoolClass.objects.filter(school=obj.school, school_class__iexact=str(fv.value).strip()).first()
                 if sc:
-                    obj.school_class = sc
-                    obj.save(update_fields=["school_class"])
-                    return sc.id
+                    return sc.school_class
         return None
 
-    def get_class_name(self, obj):
-        if obj.school_class:
-            return obj.school_class.school_class
-        sc_id = self.get_school_class(obj)
-        if sc_id:
-            sc = SchoolClass.objects.filter(id=sc_id).first()
-            return sc.school_class if sc else None
+    def get_academic_year_name(self, obj):
+        if obj.academic_year:
+            return obj.academic_year.name
         return None
 
     def get_full_name(self, obj):
-        parts = [p for p in [obj.surname, obj.name, obj.father_name] if p]
-        return " ".join(parts) if parts else str(obj)
+        parts = [p for p in [obj.name, obj.father_name, obj.surname] if p]
+        if parts:
+            return " ".join(parts)
+        if obj.name:
+            return obj.name
+        return f"Student {obj.gr_no}" if obj.gr_no else f"Student #{obj.id}"
+
+    def get_email(self, obj):
+        if obj.user and obj.user.email:
+            return obj.user.email
+        if hasattr(obj, "admission") and obj.admission and hasattr(obj.admission, "user") and obj.admission.user:
+            return obj.admission.user.email
+        return None
+
+    def get_verified_by_name(self, obj):
+        if obj.verified_by:
+            name = f"{obj.verified_by.first_name} {obj.verified_by.last_name}".strip()
+            return name if name else obj.verified_by.username
+        return None
+
+    def get_photo_url(self, obj):
+        if hasattr(obj, "admission") and obj.admission:
+            photo_doc = obj.admission.documents.filter(
+                Q(document_field__label__icontains="photo")
+                | Q(document_field__label__icontains="picture")
+                | Q(document_field__label__icontains="image")
+                | Q(document_field__label__icontains="avatar")
+            ).first()
+            if photo_doc and photo_doc.file:
+                try:
+                    return photo_doc.file.url
+                except Exception:
+                    return str(photo_doc.file)
+
+        photo_sdoc = obj.student_documents.filter(
+            Q(title__icontains="photo") | Q(document_type__icontains="photo")
+        ).first()
+        if photo_sdoc and photo_sdoc.document:
+            try:
+                return photo_sdoc.document.url
+            except Exception:
+                return str(photo_sdoc.document)
+
+        return None
+
+    def get_documents(self, obj):
+        docs = []
+        if hasattr(obj, "admission") and obj.admission:
+            for ad_doc in obj.admission.documents.select_related("document_field").all():
+                url = None
+                if ad_doc.file:
+                    try:
+                        url = ad_doc.file.url
+                    except Exception:
+                        url = str(ad_doc.file)
+                label = ad_doc.document_field.label if ad_doc.document_field else "Admission Document"
+                docs.append({
+                    "id": f"adm_{ad_doc.id}",
+                    "raw_id": ad_doc.id,
+                    "title": label,
+                    "label": label,
+                    "file_url": url,
+                    "url": url,
+                    "type": "ADMISSION_DOCUMENT",
+                    "uploaded_at": ad_doc.uploaded_at or ad_doc.created_at,
+                })
+
+        for s_doc in obj.student_documents.all():
+            url = None
+            if s_doc.document:
+                try:
+                    url = s_doc.document.url
+                except Exception:
+                    url = str(s_doc.document)
+            label = s_doc.title or s_doc.get_document_type_display() or "Student Document"
+            docs.append({
+                "id": f"std_{s_doc.id}",
+                "raw_id": s_doc.id,
+                "title": label,
+                "label": label,
+                "file_url": url,
+                "url": url,
+                "type": "STUDENT_DOCUMENT",
+                "uploaded_at": s_doc.created_at,
+            })
+        return docs
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if not data.get("name") and hasattr(instance, "admission") and instance.admission:
+            fv = instance.admission.field_values.filter(
+                Q(field__map_to_student_field="name")
+                | (
+                    Q(field__label__icontains="name")
+                    & ~Q(field__label__icontains="father")
+                    & ~Q(field__label__icontains="mother")
+                    & ~Q(field__label__icontains="surname")
+                )
+            ).first()
+            if fv and fv.value:
+                data["name"] = str(fv.value)
+                instance.name = str(fv.value)
+                instance.save(update_fields=["name"])
+
+        if not data.get("school_class") and hasattr(instance, "admission") and instance.admission:
+            fv = instance.admission.field_values.filter(
+                Q(field__map_to_student_field="school_class") | Q(field__label__icontains="class")
+            ).first()
+            if fv and fv.value:
+                sc = SchoolClass.objects.filter(school=instance.school, school_class__iexact=str(fv.value).strip()).first()
+                if sc:
+                    data["school_class"] = sc.id
+                    data["class_name"] = sc.school_class
+                    instance.school_class = sc
+                    instance.save(update_fields=["school_class"])
+        return data
 
 class StaffFaceSerializer(serializers.ModelSerializer):
     class Meta:

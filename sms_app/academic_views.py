@@ -2147,47 +2147,8 @@ class HomeworkViewSet(ModelViewSet):
 
 
 
-class StudentGetView(ModelViewSet):
-    queryset = Student.objects.all()
-    serializer_class = StudentGetSerializer
-    permission_classes = [IsAuthenticated]
-
-    def get_queryset(self):
-        user = self.request.user
-        school = getattr(user, "school", None)
-        if not school:
-            student = Student.objects.filter(user=user).first()
-            if student:
-                school = student.school
-        if not school:
-            staff = getattr(user, "staff", None)
-            if staff and staff.school:
-                school = staff.school
-        qs = Student.objects.filter(school=school)
-
-        class_id = self.request.query_params.get("class_id") or self.request.query_params.get("school_class")
-        if class_id:
-            if str(class_id).isdigit():
-                qs = qs.filter(school_class_id=int(class_id))
-            else:
-                qs = qs.filter(school_class__school_class__iexact=str(class_id).strip())
-
-        academic_year = self.request.query_params.get("academic_year")
-        if academic_year:
-            if str(academic_year).isdigit():
-                qs = qs.filter(academic_year_id=int(academic_year))
-            else:
-                qs = qs.filter(academic_year__name__icontains=str(academic_year).strip())
-
-        return qs
-
-    @action(detail=False, methods=["get"], url_path="me")
-    def my_profile(self, request):
-        student = Student.objects.filter(user=request.user).first()
-        if not student:
-            return Response({"error": "Student profile not found"}, status=404)
-        serializer = self.get_serializer(student)
-        return Response(serializer.data)
+from .student_views import StudentViewSet
+StudentGetView = StudentViewSet
 
 
 
