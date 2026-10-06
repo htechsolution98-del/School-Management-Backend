@@ -643,6 +643,7 @@ class StudentFeeSerializer(serializers.ModelSerializer):
         queryset=FeeType.objects.all(), required=False
     )
     feetype_name = serializers.CharField(source="feetype.name", read_only=True)
+    fee_billing_cycle = serializers.CharField(source="feetype.billing_cycle", read_only=True)
     fee_wise_class = serializers.PrimaryKeyRelatedField(read_only=True)
     school_class = serializers.IntegerField(
         source="student.school_class_id", read_only=True
@@ -671,6 +672,7 @@ class StudentFeeSerializer(serializers.ModelSerializer):
             "school_class_name",
             "feetype",
             "feetype_name",
+            "fee_billing_cycle",
             "fee_wise_class",
             "billing_period",
             "amount",
@@ -701,6 +703,7 @@ class StudentFeeSerializer(serializers.ModelSerializer):
             "school_class",
             "school_class_name",
             "feetype_name",
+            "fee_billing_cycle",
             "payable_amount",
             "actual_payable_amount",
             "balance_amount",
@@ -916,6 +919,10 @@ class StudentFeePaymentSerializer(serializers.ModelSerializer):
     feetype = serializers.PrimaryKeyRelatedField(read_only=True)
     feetype_name = serializers.CharField(source="feetype.name", read_only=True)
     school_name = serializers.SerializerMethodField()
+    school_logo = serializers.ImageField(source="school.logo", read_only=True)
+    school_email = serializers.CharField(source="school.email", read_only=True)
+    school_phone = serializers.CharField(source="school.phone", read_only=True)
+    school_address = serializers.CharField(source="school.address", read_only=True)
     academic_year = serializers.PrimaryKeyRelatedField(
         source="student_fee.academic_year", read_only=True
     )
@@ -950,6 +957,10 @@ class StudentFeePaymentSerializer(serializers.ModelSerializer):
             "id",
             "school",
             "school_name",
+            "school_logo",
+            "school_email",
+            "school_phone",
+            "school_address",
             "student_fee",
             "student",
             "student_name",
@@ -992,6 +1003,10 @@ class StudentFeePaymentSerializer(serializers.ModelSerializer):
         read_only_fields = [
             "school",
             "school_name",
+            "school_logo",
+            "school_email",
+            "school_phone",
+            "school_address",
             "student",
             "student_name",
             "student_gr_no",

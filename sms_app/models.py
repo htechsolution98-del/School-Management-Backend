@@ -3628,5 +3628,21 @@ class SubscriptionSetting(models.Model):
         return f"{self.key} = {self.value}"
 
 
+class StudentDocumentReview(models.Model):
+    """Verification for an exact uploaded version of any student document."""
+    student = models.ForeignKey(Student, on_delete=models.CASCADE, related_name="document_reviews")
+    source = models.CharField(max_length=20, choices=[("admission", "Admission"), ("student", "Student record"), ("rte", "RTE")])
+    document_id = models.PositiveIntegerField()
+    file_name = models.CharField(max_length=1024)
+    status = models.CharField(max_length=24, default="pending", choices=[("pending", "Pending verification"), ("verified", "Verified"), ("requires_reupload", "Requires reupload")])
+    note = models.TextField(blank=True)
+    reviewed_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["student", "source", "document_id"], name="unique_student_document_review")]
+
+
 
 
