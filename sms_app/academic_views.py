@@ -13,10 +13,11 @@ from .academic_serializers import AssignClassSerializer, ClassCategorySerializer
 from .permissions import *
 from .utils import *
 import datetime
+from decimal import Decimal
 from django.core.cache import cache
 from django.db import transaction
 from django.db.models import Q
-from channels.layers import get_channel_layer
+from channels.layers import get_channel_layer  # type: ignore
 from asgiref.sync import async_to_sync
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
@@ -96,8 +97,8 @@ class ClassCategoryViewSet(ModelViewSet):
         return ClassCategory.objects.filter(school=school)
     
     def perform_create(self, serializer):
-        user = getattr(self.request, "user", None)
-        serializer.save(school=user.school)
+        school = getattr(self.request.user, "school", None) if hasattr(self.request, "user") else None
+        serializer.save(school=school)
 
 
 class SchoolClassView(ModelViewSet):
@@ -404,13 +405,24 @@ class SetSubjectView(ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        qs = Subject.objects.filter(school=self.request.user.school)
+        user = self.request.user
+        school = getattr(user, "school", None)
+        qs = Subject.objects.filter(school=school) if school else Subject.objects.all()
         
-        user_groups = list(self.request.user.groups.values_list('name', flat=True)) if self.request.user else []
-        is_admin_or_clerk = any(role in user_groups for role in ["PRINCIPAL", "CLERK", "admin(trustee)"])
+        user_groups = [g.upper() for g in user.groups.values_list('name', flat=True)] if user else []
+        user_role = str(getattr(user, "role", "") or "").strip().upper()
+        staff = getattr(user, "staff", None)
+        staff_cat = str(getattr(staff, "category", "") or "").strip().upper() if staff else ""
+
+        is_admin_or_clerk = (
+            getattr(user, "is_superuser", False)
+            or getattr(user, "is_staff", False)
+            or user_role in ["PRINCIPAL", "CLERK", "ADMIN", "SUPERADMIN", "ADMIN(TRUSTEE)", "TRUSTEE"]
+            or staff_cat in ["CLERK", "PRINCIPAL"]
+            or any(r in user_groups for r in ["PRINCIPAL", "CLERK", "ADMIN(TRUSTEE)", "ADMIN"])
+        )
         
         if not is_admin_or_clerk:
-            staff = getattr(self.request.user, "staff", None)
             if staff:
                 from .models import AssignClass
                 assigned_subjects = AssignClass.objects.filter(teacher=staff).values_list('subject_id', flat=True)
@@ -442,10 +454,11 @@ class SetSubjectView(ModelViewSet):
 
     # ✅ LIST
     def list(self, request, *args, **kwargs):
-        school_id = request.user.school.id
+        school_id = request.user.school.id if getattr(request.user, "school", None) else "all"
         school_class = request.query_params.get("SchoolClass")
+        user_id = request.user.id if request.user else "anon"
 
-        cache_key = f"subjects_{school_id}_{school_class if school_class else 'all'}"
+        cache_key = f"subjects_{school_id}_{school_class if school_class else 'all'}_{user_id}"
 
         # 🔐 SAFE CACHE GET
         try:
@@ -607,6 +620,107 @@ class SyllabusView(ModelViewSet):
         cache.set(cache_key, serializer.data, timeout=60 * 10)
 
         return Response({"message": "Data fetched from DB", "data": serializer.data})
+
+    # ✅ SERVE / STREAM FILE SAFELY
+    @action(detail=True, methods=["get"], url_path="file")
+    def get_file(self, request, pk=None):
+        syllabus = self.get_object()
+        if not syllabus.syllabus_file:
+            return Response({"error": "No file attached"}, status=status.HTTP_404_NOT_FOUND)
+
+        import mimetypes
+        import io
+        import os
+        import zipfile
+        import requests  # type: ignore
+        from django.http import HttpResponse, FileResponse
+        from django.conf import settings
+
+        filename = os.path.basename(syllabus.syllabus_file.name) or "syllabus_document"
+
+        def sniff_mimetype(magic_bytes, name="", header_type=None):
+            if magic_bytes:
+                if magic_bytes.startswith(b"%PDF"):
+                    return "application/pdf", ".pdf"
+                if magic_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+                    return "image/png", ".png"
+                if magic_bytes.startswith(b"\xff\xd8\xff"):
+                    return "image/jpeg", ".jpg"
+                if magic_bytes.startswith(b"GIF87a") or magic_bytes.startswith(b"GIF89a"):
+                    return "image/gif", ".gif"
+                if len(magic_bytes) >= 12 and magic_bytes.startswith(b"RIFF") and magic_bytes[8:12] == b"WEBP":
+                    return "image/webp", ".webp"
+            if header_type and header_type not in ("application/octet-stream", "binary/octet-stream"):
+                clean = header_type.split(";")[0].strip().lower()
+                if clean == "application/pdf":
+                    return "application/pdf", ".pdf"
+                if clean in ("image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif"):
+                    ext = ".png" if clean == "image/png" else (".jpg" if "jpeg" in clean or "jpg" in clean else ".webp")
+                    return clean, ext
+            if name:
+                guessed, _ = mimetypes.guess_type(name)
+                if guessed and guessed != "application/octet-stream":
+                    _, ext = os.path.splitext(name)
+                    return guessed, ext
+            return "application/pdf", ".pdf"
+
+        # 1. Try local/direct storage open if available
+        try:
+            f = syllabus.syllabus_file.open("rb")
+            magic = f.read(32)
+            f.seek(0)
+            c_type, ext = sniff_mimetype(magic, name=filename)
+            disp_name = filename if (ext and filename.lower().endswith(ext)) else f"{filename}{ext}"
+            resp = FileResponse(f, content_type=c_type)
+            resp["Content-Disposition"] = f'inline; filename="{disp_name}"'
+            return resp
+        except Exception:
+            pass
+
+        # 2. Try proxying raw bytes directly from syllabus_file.url
+        try:
+            url = syllabus.syllabus_file.url
+            res = requests.get(url, timeout=15)
+            if res.status_code == 200:
+                raw_bytes = res.content
+                c_type, ext = sniff_mimetype(raw_bytes[:32], name=filename, header_type=res.headers.get("Content-Type"))
+                disp_name = filename if (ext and filename.lower().endswith(ext)) else f"{filename}{ext}"
+                response = HttpResponse(raw_bytes, content_type=c_type)
+                response["Content-Disposition"] = f'inline; filename="{disp_name}"'
+                return response
+            elif res.status_code == 401:
+                # 3. Cloudinary returned 401 (Restricted PDF/ZIP delivery on public CDN).
+                # Retrieve authenticated archive and extract raw bytes in memory
+                import cloudinary.utils
+                name = syllabus.syllabus_file.name.replace("\\", "/").lstrip("/")
+                prefix = getattr(settings, 'CLOUDINARY_STORAGE', {}).get('PREFIX', 'media')
+                public_id = f"{prefix}/{name}" if not name.startswith(prefix) else name
+
+                guessed_type, _ = mimetypes.guess_type(filename)
+                res_type = "raw" if (guessed_type == "application/pdf" or filename.lower().endswith(".pdf")) else "image"
+                for rt in [res_type, "raw", "image"]:
+                    try:
+                        arch_url = cloudinary.utils.download_archive_url(
+                            public_ids=[public_id],
+                            resource_type=rt
+                        )
+                        r_arch = requests.get(arch_url, timeout=15)
+                        if r_arch.status_code == 200:
+                            zf = zipfile.ZipFile(io.BytesIO(r_arch.content))
+                            names = zf.namelist()
+                            if names:
+                                data = zf.read(names[0])
+                                c_type, ext = sniff_mimetype(data[:32], name=filename)
+                                disp_name = filename if (ext and filename.lower().endswith(ext)) else f"{filename}{ext}"
+                                response = HttpResponse(data, content_type=c_type)
+                                response["Content-Disposition"] = f'inline; filename="{disp_name}"'
+                                return response
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        return Response({"error": "File not found or inaccessible in storage"}, status=status.HTTP_404_NOT_FOUND)
 
     # ✅ UPDATE
     def perform_update(self, serializer):
@@ -1215,7 +1329,7 @@ class TimeTableViewSet(ModelViewSet):
         curr_m = start_minutes
         for sc in slot_configs:
             sc["start_m"] = curr_m
-            sc["end_m"] = min(end_minutes, curr_m + sc["duration"])
+            sc["end_m"] = min(end_minutes, curr_m + int(sc["duration"]))
             curr_m = sc["end_m"]
 
         def format_minutes(m):
@@ -1553,15 +1667,16 @@ class StudentAttendanceView(APIView):
 
         try:
             channel_layer = get_channel_layer()
-            async_to_sync(channel_layer.group_send)(
-                group_name,
-                {
-                    "type": "attendance_message",
-                    "notification_id": notification.id,
-                    "title": notification.title,
-                    "message": notification.message,
-                }
-            )
+            if channel_layer:
+                async_to_sync(channel_layer.group_send)(
+                    group_name,
+                    {
+                        "type": "attendance_message",
+                        "notification_id": notification.id,
+                        "title": notification.title,
+                        "message": notification.message,
+                    }
+                )
         except Exception as e:
             print("Channel send notification error:", e)
 
@@ -1612,17 +1727,20 @@ class StudentAttendanceView(APIView):
             f"_attendance"
         )
 
-        channel_layer = get_channel_layer()
-
-        async_to_sync(channel_layer.group_send)(
-            group_name,
-            {
-                "type": "attendance_message",
-                "notification_id": notification.id,
-                "title": notification.title,
-                "message": notification.message,
-            }
-        )
+        try:
+            channel_layer = get_channel_layer()
+            if channel_layer:
+                async_to_sync(channel_layer.group_send)(
+                    group_name,
+                    {
+                        "type": "attendance_message",
+                        "notification_id": notification.id,
+                        "title": notification.title,
+                        "message": notification.message,
+                    }
+                )
+        except Exception as e:
+            print("Channel send notification error:", e)
 
         return Response(serializer.data)
     def delete(self, request, id):
@@ -1670,15 +1788,9 @@ class HomeworkViewSet(ModelViewSet):
     serializer_class=HomeworkSerializer
 
     def get_student_division_name(self, student):
-        # division_name = (student.division or "").strip()
         if not student.division:
             return ""
         return (student.division.division or "").strip()
-
-        # if "(" in division_name and ")" in division_name:
-        #     division_name = division_name.rsplit("(", 1)[-1].split(")", 1)[0].strip()
-
-        return division_name
 
     # def get_serializer_class(self):
     #     """Return appropriate serializer based on action"""
@@ -2428,21 +2540,23 @@ class ExamView(APIView):
             )
         )
 
-        channel_layer = get_channel_layer()
-
-        group_name = (
-    f"school_{exam.school_id}_class_{exam.class_group_id}_parents"
-)
-
-        async_to_sync(channel_layer.group_send)(
-            group_name,
-            {
-                "type": "send_notification",
-                "notification_id": notification.id,
-                "title": notification.title,
-                "message": notification.message,
-            }
-        )
+        try:
+            channel_layer = get_channel_layer()
+            group_name = (
+                f"school_{exam.school_id}_class_{exam.class_group_id}_parents"
+            )
+            if channel_layer:
+                async_to_sync(channel_layer.group_send)(
+                    group_name,
+                    {
+                        "type": "send_notification",
+                        "notification_id": notification.id,
+                        "title": notification.title,
+                        "message": notification.message,
+                    }
+                )
+        except Exception as e:
+            print("Channel send exam notification error:", e)
 
         return Response(
             ExamSerializer(exam).data,
@@ -2668,30 +2782,35 @@ class MonthlyProgressReportView(APIView):
                 report.student.id
             )
 
-            async_to_sync(
-                channel_layer.group_send
-            )(
-                group_name,
-                {
-                    "type": "progressreport_message",
-                    "student": report.student.id,
-                    "month": report.month,
-                    "year": report.year,
-                    "attendance_percentage": round(
-                        float(report.attendance_percentage), 2
-                    ),
-                    "overall_score": round(
-                        float(report.overall_score), 2
-                    ),
-                    "grade": data["grade"],
-                    "discipline": report.discipline,
-                    "communication_skills": report.communication_skills,
-                    "emotional_development": report.emotional_development,
-                    "social_development": report.social_development,
-                    "freindly_with_others": report.freindly_with_others,
-                    "remark": report.remark,
-                }
-            )
+            try:
+                channel_layer = get_channel_layer()
+                if channel_layer:
+                    async_to_sync(
+                        channel_layer.group_send
+                    )(
+                        group_name,
+                        {
+                            "type": "progressreport_message",
+                            "student": report.student.id,
+                            "month": report.month,
+                            "year": report.year,
+                            "attendance_percentage": round(
+                                float(report.attendance_percentage), 2
+                            ),
+                            "overall_score": round(
+                                float(report.overall_score), 2
+                            ),
+                            "grade": data["grade"],
+                            "discipline": report.discipline,
+                            "communication_skills": report.communication_skills,
+                            "emotional_development": report.emotional_development,
+                            "social_development": report.social_development,
+                            "freindly_with_others": report.freindly_with_others,
+                            "remark": report.remark,
+                        }
+                    )
+            except Exception as e:
+                print("Failed to broadcast progress report message:", e)
 
             return Response(
                 serializer.data,
@@ -2721,33 +2840,36 @@ class MonthlyProgressReportView(APIView):
 
             data = MonthlyProgressReportSerializer(report).data
 
-            channel_layer = get_channel_layer()
-
-            async_to_sync(channel_layer.group_send)(
-                progress_group(
-                    report.school.id,
-                    report.student.id
-                ),
-                {
-                    "type": "progressreport_message",
-                    "student": report.student.id,
-                    "month": report.month,
-                    "year": report.year,
-                    "attendance_percentage": round(
-                        float(report.attendance_percentage), 2
-                    ),
-                    "overall_score": round(
-                        float(report.overall_score), 2
-                    ),
-                    "grade": data["grade"],
-                    "discipline": report.discipline,
-                    "communication_skills": report.communication_skills,
-                    "emotional_development": report.emotional_development,
-                    "social_development": report.social_development,
-                    "freindly_with_others": report.freindly_with_others,
-                    "remark": report.remark,
-                }
-            )
+            try:
+                channel_layer = get_channel_layer()
+                if channel_layer:
+                    async_to_sync(channel_layer.group_send)(
+                        progress_group(
+                            report.school.id,
+                            report.student.id
+                        ),
+                        {
+                            "type": "progressreport_message",
+                            "student": report.student.id,
+                            "month": report.month,
+                            "year": report.year,
+                            "attendance_percentage": round(
+                                float(report.attendance_percentage), 2
+                            ),
+                            "overall_score": round(
+                                float(report.overall_score), 2
+                            ),
+                            "grade": data["grade"],
+                            "discipline": report.discipline,
+                            "communication_skills": report.communication_skills,
+                            "emotional_development": report.emotional_development,
+                            "social_development": report.social_development,
+                            "freindly_with_others": report.freindly_with_others,
+                            "remark": report.remark,
+                        }
+                    )
+            except Exception as e:
+                print("Failed to broadcast progress report update message:", e)
 
             return Response(
                 serializer.data,
@@ -2833,21 +2955,26 @@ class StudyMaterialView(APIView):
             
             group_name = f"student_{material.school.id}_class_{material.student_class.id}"
 
-            async_to_sync(channel_layer.group_send)(
-                group_name,
-                {
-                    "type": "studymaterial",
+            try:
+                channel_layer = get_channel_layer()
+                if channel_layer:
+                    async_to_sync(channel_layer.group_send)(
+                        group_name,
+                        {
+                            "type": "studymaterial",
 
-                    "subject": str(material.subject),
-                    "student_class": str(material.student_class),
-                    "material_type": material.material_type,
-                    "title": material.title,
-                    "description": material.description,
+                            "subject": str(material.subject),
+                            "student_class": str(material.student_class),
+                            "material_type": material.material_type,
+                            "title": material.title,
+                            "description": material.description,
 
-                    # ✅ always send URL, not file object
-                    "file": request.build_absolute_uri(material.file.url),
-                }
-            )
+                            # ✅ always send URL, not file object
+                            "file": request.build_absolute_uri(material.file.url),
+                        }
+                    )
+            except Exception as e:
+                print("Failed to send study material notification:", e)
 
             return Response(serializer.data, status=201)
 
@@ -2911,8 +3038,8 @@ class ParentChildrenView(APIView):
             att_pct = round((present_att / total_att * 100), 1) if total_att > 0 else 100.0
 
             fees = StudentFee.objects.filter(student=s)
-            total_fee_amt = sum(float(f.amount) for f in fees)
-            paid_fee_amt = sum(float(f.paid_amount) for f in fees)
+            total_fee_amt = sum(float(f.amount or Decimal('0.00')) for f in fees)
+            paid_fee_amt = sum(float(f.paid_amount or Decimal('0.00')) for f in fees)
             due_fee_amt = max(total_fee_amt - paid_fee_amt, 0.0)
 
             notices = Announcement.objects.filter(
@@ -2980,13 +3107,13 @@ class TrusteeAnalyticsView(APIView):
 
         # 1. Total fee revenues
         student_fees = StudentFee.objects.filter(student__school=school)
-        total_billed = sum(float(f.amount) for f in student_fees)
-        total_collected = sum(float(f.paid_amount) for f in student_fees)
+        total_billed = sum(float(f.amount or Decimal('0.00')) for f in student_fees)
+        total_collected = sum(float(f.paid_amount or Decimal('0.00')) for f in student_fees)
         pending_collections = max(total_billed - total_collected, 0.0)
 
         # 2. Staff Payroll expense
         salary_payments = StaffSalaryPayment.objects.filter(school=school)
-        total_payroll = sum(float(sp.paid_amount) for sp in salary_payments)
+        total_payroll = sum(float(sp.paid_amount or Decimal('0.00')) for sp in salary_payments)
 
         # 3. Assets and Valuation
         assets = Asset.objects.filter(school=school)
