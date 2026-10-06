@@ -965,21 +965,10 @@ class ChangeAllLeaveView(APIView): # for APPROVE all day leave — principal/cle
                 status=404
             )
 
-        leave_days = leave_request.leave_days.all()
-
-        for leave_day in leave_days:
-            serializer = ChangeLeavePerDaySerializer(
-                leave_day,  
-                data={"status": status_value},
-                partial=True,
-                context={"request": request}
-            )
-
-            serializer.is_valid(raise_exception=True)
-            serializer.save()
-
-        leave_request.status = status_value
-        leave_request.save()
+        with transaction.atomic():
+            leave_request.leave_days.all().update(status=status_value)
+            leave_request.status = status_value
+            leave_request.save(update_fields=["status"])
 
         return Response(
             {"message": f"All leave days updated to {status_value}"}

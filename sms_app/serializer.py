@@ -1,3 +1,4 @@
+from .student_profile_services import AadhaarValidationMixin, DynamicIDValidationMixin, is_aadhaar_field, validate_aadhaar
 import math
 import calendar
 
@@ -510,7 +511,7 @@ class StudentExtraSerializer(serializers.ModelSerializer):
         fields = "__all__"
 
 
-class ManualStudentSerializer(serializers.ModelSerializer):
+class ManualStudentSerializer(AadhaarValidationMixin, serializers.ModelSerializer):
     extra_data = StudentExtraSerializer(required=False)
 
     class Meta:
@@ -897,7 +898,7 @@ class ChangeFormStatus(serializers.ModelSerializer):
 
 # --------Admission Form submite serializers---------
 # 1class
-class AdmissionFieldValueSerializer(serializers.ModelSerializer):
+class AdmissionFieldValueSerializer(DynamicIDValidationMixin, serializers.ModelSerializer):
     class Meta:
         model = AdmissionFieldValue
         fields = ["created_at", "field", "value"]
@@ -1337,7 +1338,7 @@ class FormFieldSimpleSerializer(serializers.ModelSerializer):
 
 
 # 2
-class AdmissionFieldValueViewSerializer(serializers.ModelSerializer):
+class AdmissionFieldValueViewSerializer(DynamicIDValidationMixin, serializers.ModelSerializer):
     field = FormFieldSimpleSerializer(read_only=True)  # for response
     field_id = serializers.PrimaryKeyRelatedField(
         queryset=FormField.objects.all(), source="field", write_only=True
@@ -1375,6 +1376,9 @@ class AdmissionUpdateSerializer(serializers.ModelSerializer):
                         field=field_obj,
                         defaults={"value": val},
                     )
+                    id_mapping = "aadhar_number" if is_aadhaar_field(field_obj) else field_obj.map_to_student_field
+                    if id_mapping in {"aadhar_number", "abc_id", "udise_no"}:
+                        Student.objects.filter(admission=instance, school=instance.school).update(**{id_mapping: val})
                     if field_obj.label and any(k in field_obj.label.lower() for k in ["division", "section", "sec"]):
                         Student.objects.filter(admission=instance).update(division=val)
 
@@ -1697,6 +1701,10 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
         ]
 
     def validate(self, attrs):
+        if self.instance:
+            for field_value in self.instance.field_values.select_related("field"):
+                if is_aadhaar_field(field_value.field):
+                    validate_aadhaar(field_value.value)
         gr_no = attrs.get("gr_no")
         request = self.context.get("request")
         school = getattr(getattr(request, "user", None), "school", None)
@@ -3897,15 +3905,15 @@ class GenerateStaffSalaryPaymentSerializer(serializers.ModelSerializer):
             paid_by=user,
         )
 
-        return payment
-
-
 class StudentFeeSerializer(serializers.ModelSerializer):
     student_name = serializers.SerializerMethodField()
+    is_rte_student = serializers.BooleanField(source="student.is_rte", read_only=True)
+    is_rte_applicable = serializers.BooleanField(source="feetype.is_rte_applicable", read_only=True)
     feetype = serializers.PrimaryKeyRelatedField(
         queryset=FeeType.objects.all(), required=False
     )
     feetype_name = serializers.CharField(source="feetype.name", read_only=True)
+    fee_billing_cycle = serializers.CharField(source="feetype.billing_cycle", read_only=True)
     fee_wise_class = serializers.PrimaryKeyRelatedField(read_only=True)
     school_class = serializers.IntegerField(
         source="student.school_class_id", read_only=True
@@ -3919,6 +3927,9 @@ class StudentFeeSerializer(serializers.ModelSerializer):
         source="payable_amount", max_digits=10, decimal_places=2, read_only=True
     )
     balance_amount = serializers.DecimalField(
+        max_digits=10, decimal_places=2, read_only=True
+    )
+    rte_govt_balance_amount = serializers.DecimalField(
         max_digits=10, decimal_places=2, read_only=True
     )
     payments = serializers.SerializerMethodField()
@@ -3940,10 +3951,13 @@ class StudentFeeSerializer(serializers.ModelSerializer):
             "academic_year",
             "student",
             "student_name",
+            "is_rte_student",
+            "is_rte_applicable",
             "school_class",
             "school_class_name",
             "feetype",
             "feetype_name",
+            "fee_billing_cycle",
             "fee_wise_class",
             "billing_period",
             "amount",
@@ -3960,6 +3974,11 @@ class StudentFeeSerializer(serializers.ModelSerializer):
             "payable_amount",
             "actual_payable_amount",
             "balance_amount",
+            "is_rte_govt_claim",
+            "rte_govt_claim_amount",
+            "rte_govt_paid_amount",
+            "rte_govt_balance_amount",
+            "rte_govt_status",
             "due_date",
             "status",
             "payment_mode",
@@ -3971,12 +3990,16 @@ class StudentFeeSerializer(serializers.ModelSerializer):
         read_only_fields = [
             "school",
             "student_name",
+            "is_rte_student",
+            "is_rte_applicable",
             "school_class",
             "school_class_name",
             "feetype_name",
+            "fee_billing_cycle",
             "payable_amount",
             "actual_payable_amount",
             "balance_amount",
+            "rte_govt_balance_amount",
             "payments",
             "created_at",
         ]
@@ -4054,8 +4077,15 @@ class StudentFeeSerializer(serializers.ModelSerializer):
         if attrs.get("amount") is None:
             attrs["amount"] = fee_wise_class.amount
 
-        if getattr(student, "is_rte", False):
-            attrs["amount"] = Decimal("0.00")
+        # Check RTE exemption
+        is_rte_student = getattr(student, "is_rte", False)
+        is_fee_rte_applicable = getattr(feetype, "is_rte_applicable", False)
+
+        if is_rte_student and not is_fee_rte_applicable:
+            attrs["is_rte_govt_claim"] = True
+            attrs["rte_govt_claim_amount"] = fee_wise_class.amount or Decimal("0.00")
+            attrs["rte_govt_paid_amount"] = Decimal("0.00")
+            attrs["rte_govt_status"] = "pending"
             attrs["discount_amount"] = Decimal("0.00")
             attrs["fine_amount"] = Decimal("0.00")
             attrs["paid_amount"] = Decimal("0.00")
@@ -4063,6 +4093,11 @@ class StudentFeeSerializer(serializers.ModelSerializer):
             attrs["late_fee_amount"] = Decimal("0.00")
             attrs["max_late_fee"] = Decimal("0.00")
             attrs["status"] = "paid"
+        else:
+            attrs["is_rte_govt_claim"] = False
+            attrs["rte_govt_claim_amount"] = Decimal("0.00")
+            attrs["rte_govt_paid_amount"] = Decimal("0.00")
+            attrs["rte_govt_status"] = "not_applicable"
 
         if feetype and feetype.billing_cycle == "monthly":
             if not billing_period:
@@ -4135,10 +4170,11 @@ class StudentFeeSerializer(serializers.ModelSerializer):
                 }
             )
 
-        if paid_amount > payable_amount:
-            raise serializers.ValidationError(
-                {"paid_amount": "Paid amount cannot be greater than payable amount."}
-            )
+        if not (is_rte_student and not is_fee_rte_applicable):
+            if paid_amount > payable_amount:
+                raise serializers.ValidationError(
+                    {"paid_amount": "Paid amount cannot be greater than payable amount."}
+                )
 
         late_fee_enabled = attrs.get(
             "late_fee_enabled", getattr(self.instance, "late_fee_enabled", False)
@@ -4185,6 +4221,8 @@ class StudentFeeSerializer(serializers.ModelSerializer):
         return attrs
 
 
+
+
 class StudentFeePaymentSerializer(serializers.ModelSerializer):
     student = serializers.PrimaryKeyRelatedField(read_only=True)
     student_name = serializers.SerializerMethodField()
@@ -4194,6 +4232,10 @@ class StudentFeePaymentSerializer(serializers.ModelSerializer):
     feetype = serializers.PrimaryKeyRelatedField(read_only=True)
     feetype_name = serializers.CharField(source="feetype.name", read_only=True)
     school_name = serializers.SerializerMethodField()
+    school_logo = serializers.ImageField(source="school.logo", read_only=True)
+    school_email = serializers.CharField(source="school.email", read_only=True)
+    school_phone = serializers.CharField(source="school.phone", read_only=True)
+    school_address = serializers.CharField(source="school.address", read_only=True)
     academic_year = serializers.PrimaryKeyRelatedField(
         source="student_fee.academic_year", read_only=True
     )
@@ -4217,6 +4259,18 @@ class StudentFeePaymentSerializer(serializers.ModelSerializer):
     fee_balance_amount = serializers.DecimalField(
         source="student_fee.balance_amount", max_digits=10, decimal_places=2, read_only=True
     )
+    is_rte_govt_claim = serializers.BooleanField(
+        source="student_fee.is_rte_govt_claim", read_only=True
+    )
+    rte_govt_claim_amount = serializers.DecimalField(
+        source="student_fee.rte_govt_claim_amount", max_digits=10, decimal_places=2, read_only=True
+    )
+    rte_govt_paid_amount = serializers.DecimalField(
+        source="student_fee.rte_govt_paid_amount", max_digits=10, decimal_places=2, read_only=True
+    )
+    rte_govt_status = serializers.CharField(
+        source="student_fee.rte_govt_status", read_only=True
+    )
     fee_status = serializers.CharField(source="student_fee.status", read_only=True)
     collected_by_username = serializers.CharField(source="collected_by.username", read_only=True)
     verified_by_username = serializers.CharField(source="verified_by.username", read_only=True)
@@ -4228,6 +4282,10 @@ class StudentFeePaymentSerializer(serializers.ModelSerializer):
             "id",
             "school",
             "school_name",
+            "school_logo",
+            "school_email",
+            "school_phone",
+            "school_address",
             "student_fee",
             "student",
             "student_name",
@@ -4247,7 +4305,12 @@ class StudentFeePaymentSerializer(serializers.ModelSerializer):
             "fee_payable_amount",
             "fee_paid_amount",
             "fee_balance_amount",
+            "is_rte_govt_claim",
+            "rte_govt_claim_amount",
+            "rte_govt_paid_amount",
+            "rte_govt_status",
             "fee_status",
+            "payer_type",
             "amount",
             "payment_mode",
             "transaction_id",
@@ -4270,6 +4333,10 @@ class StudentFeePaymentSerializer(serializers.ModelSerializer):
         read_only_fields = [
             "school",
             "school_name",
+            "school_logo",
+            "school_email",
+            "school_phone",
+            "school_address",
             "student",
             "student_name",
             "student_gr_no",
@@ -4288,6 +4355,10 @@ class StudentFeePaymentSerializer(serializers.ModelSerializer):
             "fee_payable_amount",
             "fee_paid_amount",
             "fee_balance_amount",
+            "is_rte_govt_claim",
+            "rte_govt_claim_amount",
+            "rte_govt_paid_amount",
+            "rte_govt_status",
             "fee_status",
             "razorpay_order_id",
             "razorpay_payment_id",
@@ -4361,20 +4432,46 @@ class StudentFeePaymentSerializer(serializers.ModelSerializer):
                 }
             )
 
-        paid_except_this = student_fee.payments.filter(is_verified=True).aggregate(
-            total=Sum("amount")
-        )["total"] or Decimal("0.00")
-        if self.instance:
-            if self.instance.is_verified:
-                paid_except_this -= self.instance.amount
+        payer_type = attrs.get("payer_type", getattr(self.instance, "payer_type", "student"))
 
-        remaining_amount = student_fee.payable_amount - paid_except_this
-        if amount > remaining_amount:
-            raise serializers.ValidationError(
-                {
-                    "amount": f"Amount cannot be greater than remaining balance {remaining_amount}."
-                }
+        # Validate Government Payer vs Student Payer
+        if payer_type == "government":
+            if not student_fee.is_rte_govt_claim:
+                raise serializers.ValidationError(
+                    {"payer_type": "Government RTE payment can only be recorded for RTE government claim fee records."}
+                )
+            paid_govt_except_this = (
+                student_fee.payments.filter(payer_type="government", is_bounced=False)
+                .filter(Q(is_verified=True) | ~Q(payment_mode="cheque"))
+                .aggregate(total=Sum("amount"))["total"]
+                or Decimal("0.00")
             )
+            if self.instance and self.instance.payer_type == "government":
+                if self.instance.is_verified or self.instance.payment_mode != "cheque":
+                    paid_govt_except_this -= self.instance.amount
+
+            remaining_govt = student_fee.rte_govt_claim_amount - paid_govt_except_this
+            if amount > remaining_govt:
+                raise serializers.ValidationError(
+                    {
+                        "amount": f"Amount cannot be greater than remaining government claim balance {remaining_govt}."
+                    }
+                )
+        else:
+            paid_except_this = student_fee.payments.filter(payer_type="student", is_verified=True).aggregate(
+                total=Sum("amount")
+            )["total"] or Decimal("0.00")
+            if self.instance:
+                if self.instance.is_verified:
+                    paid_except_this -= self.instance.amount
+
+            remaining_amount = student_fee.payable_amount - paid_except_this
+            if amount > remaining_amount:
+                raise serializers.ValidationError(
+                    {
+                        "amount": f"Amount cannot be greater than remaining balance {remaining_amount}."
+                    }
+                )
 
         return attrs
 
@@ -4392,6 +4489,11 @@ class StudentFeePaymentSerializer(serializers.ModelSerializer):
             validated_data["verified_at"] = timezone.now()
 
         payment = super().create(validated_data)
+        if not payment.receipt_number:
+            current_year = timezone.now().year
+            payment.receipt_number = f"RCPT-{current_year}-{payment.id:04d}"
+            payment.save(update_fields=["receipt_number"])
+
         payment.student_fee.refresh_payment_status()
         return payment
 
@@ -5330,43 +5432,191 @@ class StudentHomeworkListSerializer(serializers.ModelSerializer):
 # --------------------------------GET STUDENT DATA----------------------------
 
 
-class StudentGetSerializer(serializers.ModelSerializer):
+class StudentGetSerializer(AadhaarValidationMixin, serializers.ModelSerializer):
+    school_class = serializers.PrimaryKeyRelatedField(
+        queryset=SchoolClass.objects.all(), required=False, allow_null=True
+    )
+    academic_year = serializers.PrimaryKeyRelatedField(
+        queryset=AcademicYear.objects.all(), required=False, allow_null=True
+    )
     class_name = serializers.SerializerMethodField()
-    school_class = serializers.SerializerMethodField()
+    academic_year_name = serializers.SerializerMethodField()
     full_name = serializers.SerializerMethodField()
+    email = serializers.SerializerMethodField()
+    verified_by_name = serializers.SerializerMethodField()
+    photo_url = serializers.SerializerMethodField()
+    documents = serializers.SerializerMethodField()
 
     class Meta:
         model = Student
-        fields = ['id', 'gr_no', 'roll_no', 'division', 'surname', 'name', 'father_name', 'mother_name', 'full_name', 'school_class', 'class_name', 'created_at']
+        fields = [
+            'id',
+            'gr_no',
+            'roll_no',
+            'division',
+            'name',
+            'surname',
+            'father_name',
+            'mother_name',
+            'full_name',
+            'date_of_birth',
+            'mobile',
+            'email',
+            'school_class',
+            'class_name',
+            'academic_year',
+            'academic_year_name',
+            'admission_date',
+            'aadhar_number',
+            'abc_id',
+            'udise_no',
+            'is_rte',
+            'is_verified',
+            'verified_by',
+            'verified_by_name',
+            'verified_at',
+            'photo_url',
+            'documents',
+            'is_active',
+            'created_at',
+        ]
+        read_only_fields = ['id', 'verified_by', 'verified_at', 'created_at']
 
-    def get_school_class(self, obj):
-        if obj.school_class_id:
-            return obj.school_class_id
+    def get_class_name(self, obj):
+        if obj.school_class:
+            return obj.school_class.school_class
         if hasattr(obj, "admission") and obj.admission:
             fv = obj.admission.field_values.filter(
                 Q(field__map_to_student_field="school_class") | Q(field__label__icontains="class")
             ).first()
             if fv and fv.value:
-                val = str(fv.value).strip()
-                sc = SchoolClass.objects.filter(school=obj.school, school_class__iexact=val).first()
+                sc = SchoolClass.objects.filter(school=obj.school, school_class__iexact=str(fv.value).strip()).first()
                 if sc:
-                    obj.school_class = sc
-                    obj.save(update_fields=["school_class"])
-                    return sc.id
+                    return sc.school_class
         return None
 
-    def get_class_name(self, obj):
-        if obj.school_class:
-            return obj.school_class.school_class
-        sc_id = self.get_school_class(obj)
-        if sc_id:
-            sc = SchoolClass.objects.filter(id=sc_id).first()
-            return sc.school_class if sc else None
+    def get_academic_year_name(self, obj):
+        if obj.academic_year:
+            return obj.academic_year.name
         return None
 
     def get_full_name(self, obj):
-        parts = [p for p in [obj.surname, obj.name, obj.father_name] if p]
-        return " ".join(parts) if parts else str(obj)
+        parts = [p for p in [obj.name, obj.father_name, obj.surname] if p]
+        if parts:
+            return " ".join(parts)
+        if obj.name:
+            return obj.name
+        return f"Student {obj.gr_no}" if obj.gr_no else f"Student #{obj.id}"
+
+    def get_email(self, obj):
+        if obj.user and obj.user.email:
+            return obj.user.email
+        if hasattr(obj, "admission") and obj.admission and hasattr(obj.admission, "user") and obj.admission.user:
+            return obj.admission.user.email
+        return None
+
+    def get_verified_by_name(self, obj):
+        if obj.verified_by:
+            name = f"{obj.verified_by.first_name} {obj.verified_by.last_name}".strip()
+            return name if name else obj.verified_by.username
+        return None
+
+    def get_photo_url(self, obj):
+        if hasattr(obj, "admission") and obj.admission:
+            photo_doc = obj.admission.documents.filter(
+                Q(document_field__label__icontains="photo")
+                | Q(document_field__label__icontains="picture")
+                | Q(document_field__label__icontains="image")
+                | Q(document_field__label__icontains="avatar")
+            ).first()
+            if photo_doc and photo_doc.file:
+                try:
+                    return photo_doc.file.url
+                except Exception:
+                    return str(photo_doc.file)
+
+        photo_sdoc = obj.student_documents.filter(
+            Q(title__icontains="photo") | Q(document_type__icontains="photo")
+        ).first()
+        if photo_sdoc and photo_sdoc.document:
+            try:
+                return photo_sdoc.document.url
+            except Exception:
+                return str(photo_sdoc.document)
+
+        return None
+
+    def get_documents(self, obj):
+        docs = []
+        if hasattr(obj, "admission") and obj.admission:
+            for ad_doc in obj.admission.documents.select_related("document_field").all():
+                url = None
+                if ad_doc.file:
+                    try:
+                        url = ad_doc.file.url
+                    except Exception:
+                        url = str(ad_doc.file)
+                label = ad_doc.document_field.label if ad_doc.document_field else "Admission Document"
+                docs.append({
+                    "id": f"adm_{ad_doc.id}",
+                    "raw_id": ad_doc.id,
+                    "title": label,
+                    "label": label,
+                    "file_url": url,
+                    "url": url,
+                    "type": "ADMISSION_DOCUMENT",
+                    "uploaded_at": ad_doc.uploaded_at or ad_doc.created_at,
+                })
+
+        for s_doc in obj.student_documents.all():
+            url = None
+            if s_doc.document:
+                try:
+                    url = s_doc.document.url
+                except Exception:
+                    url = str(s_doc.document)
+            label = s_doc.title or s_doc.get_document_type_display() or "Student Document"
+            docs.append({
+                "id": f"std_{s_doc.id}",
+                "raw_id": s_doc.id,
+                "title": label,
+                "label": label,
+                "file_url": url,
+                "url": url,
+                "type": "STUDENT_DOCUMENT",
+                "uploaded_at": s_doc.created_at,
+            })
+        return docs
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if not data.get("name") and hasattr(instance, "admission") and instance.admission:
+            fv = instance.admission.field_values.filter(
+                Q(field__map_to_student_field="name")
+                | (
+                    Q(field__label__icontains="name")
+                    & ~Q(field__label__icontains="father")
+                    & ~Q(field__label__icontains="mother")
+                    & ~Q(field__label__icontains="surname")
+                )
+            ).first()
+            if fv and fv.value:
+                data["name"] = str(fv.value)
+                instance.name = str(fv.value)
+                instance.save(update_fields=["name"])
+
+        if not data.get("school_class") and hasattr(instance, "admission") and instance.admission:
+            fv = instance.admission.field_values.filter(
+                Q(field__map_to_student_field="school_class") | Q(field__label__icontains="class")
+            ).first()
+            if fv and fv.value:
+                sc = SchoolClass.objects.filter(school=instance.school, school_class__iexact=str(fv.value).strip()).first()
+                if sc:
+                    data["school_class"] = sc.id
+                    data["class_name"] = sc.school_class
+                    instance.school_class = sc
+                    instance.save(update_fields=["school_class"])
+        return data
 
 class StaffFaceSerializer(serializers.ModelSerializer):
     class Meta:

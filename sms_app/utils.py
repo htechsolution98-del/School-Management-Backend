@@ -166,7 +166,7 @@ COLUMN_MAPPING = {
 
 
 def import_students_from_excel(file, school_id, use_bulk=True):
-    df = pd.read_excel(file)
+    df = pd.read_excel(file, dtype={"Aadhaar Card No": str})
     df.columns = df.columns.astype(str).str.strip().str.replace(r"\s+", " ", regex=True)
 
     school = School.objects.get(id=school_id)
@@ -240,6 +240,9 @@ def import_students_from_excel(file, school_id, use_bulk=True):
                 "mobile": data["mobile"],
                 "aadhar_number": data["aadhar_number"],
             }
+
+            from .student_profile_services import validate_aadhaar
+            student_data["aadhar_number"] = validate_aadhaar(student_data["aadhar_number"])
 
             extra_data = {
                 "religion": data.get("religion"),
