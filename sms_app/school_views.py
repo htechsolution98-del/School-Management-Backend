@@ -19,6 +19,9 @@ from rest_framework.permissions import IsAuthenticated
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
 
+from channels.layers import get_channel_layer  # type: ignore
+from asgiref.sync import async_to_sync
+
 User = get_user_model()
 
 class FeatureView(ModelViewSet):
@@ -27,7 +30,7 @@ class FeatureView(ModelViewSet):
     http_method_names = ["get", "post", "patch", "delete"]
 
     def get_permissions(self):
-        permissions = [IsAuthenticated()]
+        permissions: list = [IsAuthenticated()]
         if self.action not in ("list", "retrieve"):
             permissions.append(Is_super_admin())
         return permissions
@@ -123,7 +126,7 @@ class ChangeFeatureStatusVIew(ModelViewSet):
 
                 # 🔹 Real-time WebSocket broadcast to all connected dashboards of this school
                 try:
-                    from channels.layers import get_channel_layer
+                    from channels.layers import get_channel_layer  # type: ignore
                     from asgiref.sync import async_to_sync
                     channel_layer = get_channel_layer()
                     if channel_layer:
@@ -257,16 +260,17 @@ class SchoolView(ModelViewSet):
         # 🔹 Force logout all active users of a deactivated school in real-time
         if is_being_deactivated:
             try:
-                from channels.layers import get_channel_layer
+                from channels.layers import get_channel_layer  # type: ignore
                 from asgiref.sync import async_to_sync
                 channel_layer = get_channel_layer()
-                async_to_sync(channel_layer.group_send)(
-                    f"school_{school.id}_choice_all",
-                    {
-                        "type": "school_deactivated",
-                        "message": "School is deactivated. Contact administrator.",
-                    },
-                )
+                if channel_layer:
+                    async_to_sync(channel_layer.group_send)(
+                        f"school_{school.id}_choice_all",
+                        {
+                            "type": "school_deactivated",
+                            "message": "School is deactivated. Contact administrator.",
+                        },
+                    )
             except Exception as e:
                 print("Failed to send school deactivation event:", e)
 
@@ -548,18 +552,21 @@ class AnnouncementView(APIView):
 
 
 
-            channel_layer=get_channel_layer()
-            
-            async_to_sync(channel_layer.group_send)(
-                group_name,
-                {
-                    "type":"announcement_send",
-                    "title":announcement.title,
-                    "description":announcement.description
-                    
-                }
-            )
-            return Response(serializer.data,status=200)
+            try:
+                channel_layer = get_channel_layer()
+                if channel_layer:
+                    async_to_sync(channel_layer.group_send)(
+                        group_name,
+                        {
+                            "type": "announcement_send",
+                            "title": announcement.title,
+                            "description": announcement.description,
+                        },
+                    )
+            except Exception as e:
+                print("Failed to broadcast announcement WebSocket message:", e)
+
+            return Response(serializer.data, status=200)
         return Response(serializer.errors,status=400)
     def put(self, request, id):
         try:

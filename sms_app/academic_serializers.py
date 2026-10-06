@@ -18,10 +18,10 @@ class SchoolClassSerializer(serializers.ModelSerializer):
         fields = ['id', 'school_class', 'category', 'is_rte_applicable', 'created_at']
         read_only_fields = ['created_at']
 
-    def validate(self, data):
+    def validate(self, attrs):
         request = self.context.get("request")
         school = getattr(request.user, "school", None) if request and hasattr(request, "user") else None
-        school_class = data.get("school_class")
+        school_class = attrs.get("school_class")
 
         # Prevent duplicate in DB
         if school and school_class and SchoolClass.objects.filter(
@@ -31,7 +31,7 @@ class SchoolClassSerializer(serializers.ModelSerializer):
                 {"message": f"{school_class} already exists"}
             )
 
-        return data
+        return attrs
 
     def create(self, validated_data):
         request = self.context.get("request")
@@ -192,14 +192,14 @@ class AssignClassSerializer(serializers.ModelSerializer):
 
         read_only_fields = ["teacher_name", "subject_name", "division_name", "class_name", "class_id"]
 
-    def validate(self, data):
+    def validate(self, attrs):
         request = self.context.get("request")
         school = request.user.school if request else None
 
-        division = data.get("division")
-        teacher = data.get("teacher")
-        subject = data.get("subject")
-        is_class_teacher = data.get("is_class_teacher", False)
+        division = attrs.get("division")
+        teacher = attrs.get("teacher")
+        subject = attrs.get("subject")
+        is_class_teacher = attrs.get("is_class_teacher", False)
 
         instance_id = self.instance.id if self.instance else None
 
@@ -256,7 +256,7 @@ class AssignClassSerializer(serializers.ModelSerializer):
                 "This teacher is already assigned to this subject for this division."
             )
 
-        return data
+        return attrs
 
     def create(self, validated_data):
         request = self.context.get("request")
@@ -351,9 +351,9 @@ class Tt_yearSerializer(serializers.ModelSerializer):
 
         read_only_fields = ["year"]
 
-    def validate(self, data):
-        start = data.get("start_year")
-        end = data.get("end_year")
+    def validate(self, attrs):
+        start = attrs.get("start_year")
+        end = attrs.get("end_year")
 
         if len(str(start)) != 4 or len(str(end)) != 4:
             raise serializers.ValidationError("Year must be 4 digits")
@@ -369,7 +369,7 @@ class Tt_yearSerializer(serializers.ModelSerializer):
         if end != start + 1:
             raise serializers.ValidationError("End year must be start_year + 1")
 
-        return data
+        return attrs
 
     def create(self, validated_data):
         start = validated_data.get("start_year")
@@ -428,11 +428,11 @@ class Time_tableSerializer(serializers.ModelSerializer):
         ]
         # read_only_fields = ["year"]
 
-    def validate(self, data):
-        slot_data = data.get("slot", [])
-        class_div = data.get("class_div") or data.get("division")
-        year = data.get("year")
-        day = data.get("day")
+    def validate(self, attrs):
+        slot_data = attrs.get("slot", [])
+        class_div = attrs.get("class_div") or attrs.get("division")
+        year = attrs.get("year")
+        day = attrs.get("day")
 
         if not class_div:
             raise serializers.ValidationError({"class_div": "This field is required."})
@@ -457,7 +457,7 @@ class Time_tableSerializer(serializers.ModelSerializer):
                     "Each slot must have slot, start and end"
                 )
 
-        return data
+        return attrs
 
     def create(self, validated_data):
 
@@ -1528,11 +1528,12 @@ class HomeworkSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         request = self.context.get("request")
-        user = request.user if request and request.user.is_authenticated else None
+        user = getattr(request, "user", None) if request and getattr(request.user, "is_authenticated", False) else None
 
         # Automatically set school and teacher from request
-        validated_data["school"] = user.school
-        validated_data["teacher"] = user.staff if hasattr(user, "staff") else None
+        if user:
+            validated_data["school"] = getattr(user, "school", None)
+            validated_data["teacher"] = getattr(user, "staff", None)
 
         return super().create(validated_data)
 

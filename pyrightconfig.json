@@ -1,10 +1,9 @@
 {
-  "venvPath": ".",
-  "venv": "venv",
-  "pythonVersion": "3.14",
+  "pythonVersion": "3.13",
   "extraPaths": [
     ".",
-    "venv/Lib/site-packages",
-    "sms_shared_core"
-  ]
+    "sms_shared_core",
+    "C:/Users/kp301/AppData/Local/Programs/Python/Python313/Lib/site-packages"
+  ],
+  "reportAttributeAccessIssue": "none"
 }

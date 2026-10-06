@@ -13,10 +13,11 @@ from .academic_serializers import AssignClassSerializer, ClassCategorySerializer
 from .permissions import *
 from .utils import *
 import datetime
+from decimal import Decimal
 from django.core.cache import cache
 from django.db import transaction
 from django.db.models import Q
-from channels.layers import get_channel_layer
+from channels.layers import get_channel_layer  # type: ignore
 from asgiref.sync import async_to_sync
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
@@ -96,8 +97,8 @@ class ClassCategoryViewSet(ModelViewSet):
         return ClassCategory.objects.filter(school=school)
     
     def perform_create(self, serializer):
-        user = getattr(self.request, "user", None)
-        serializer.save(school=user.school)
+        school = getattr(self.request.user, "school", None) if hasattr(self.request, "user") else None
+        serializer.save(school=school)
 
 
 class SchoolClassView(ModelViewSet):
@@ -631,7 +632,7 @@ class SyllabusView(ModelViewSet):
         import io
         import os
         import zipfile
-        import requests
+        import requests  # type: ignore
         from django.http import HttpResponse, FileResponse
         from django.conf import settings
 
@@ -1328,7 +1329,7 @@ class TimeTableViewSet(ModelViewSet):
         curr_m = start_minutes
         for sc in slot_configs:
             sc["start_m"] = curr_m
-            sc["end_m"] = min(end_minutes, curr_m + sc["duration"])
+            sc["end_m"] = min(end_minutes, curr_m + int(sc["duration"]))
             curr_m = sc["end_m"]
 
         def format_minutes(m):
@@ -1666,15 +1667,16 @@ class StudentAttendanceView(APIView):
 
         try:
             channel_layer = get_channel_layer()
-            async_to_sync(channel_layer.group_send)(
-                group_name,
-                {
-                    "type": "attendance_message",
-                    "notification_id": notification.id,
-                    "title": notification.title,
-                    "message": notification.message,
-                }
-            )
+            if channel_layer:
+                async_to_sync(channel_layer.group_send)(
+                    group_name,
+                    {
+                        "type": "attendance_message",
+                        "notification_id": notification.id,
+                        "title": notification.title,
+                        "message": notification.message,
+                    }
+                )
         except Exception as e:
             print("Channel send notification error:", e)
 
@@ -1725,17 +1727,20 @@ class StudentAttendanceView(APIView):
             f"_attendance"
         )
 
-        channel_layer = get_channel_layer()
-
-        async_to_sync(channel_layer.group_send)(
-            group_name,
-            {
-                "type": "attendance_message",
-                "notification_id": notification.id,
-                "title": notification.title,
-                "message": notification.message,
-            }
-        )
+        try:
+            channel_layer = get_channel_layer()
+            if channel_layer:
+                async_to_sync(channel_layer.group_send)(
+                    group_name,
+                    {
+                        "type": "attendance_message",
+                        "notification_id": notification.id,
+                        "title": notification.title,
+                        "message": notification.message,
+                    }
+                )
+        except Exception as e:
+            print("Channel send notification error:", e)
 
         return Response(serializer.data)
     def delete(self, request, id):
@@ -1783,15 +1788,9 @@ class HomeworkViewSet(ModelViewSet):
     serializer_class=HomeworkSerializer
 
     def get_student_division_name(self, student):
-        # division_name = (student.division or "").strip()
         if not student.division:
             return ""
         return (student.division.division or "").strip()
-
-        # if "(" in division_name and ")" in division_name:
-        #     division_name = division_name.rsplit("(", 1)[-1].split(")", 1)[0].strip()
-
-        return division_name
 
     # def get_serializer_class(self):
     #     """Return appropriate serializer based on action"""
@@ -2541,21 +2540,23 @@ class ExamView(APIView):
             )
         )
 
-        channel_layer = get_channel_layer()
-
-        group_name = (
-    f"school_{exam.school_id}_class_{exam.class_group_id}_parents"
-)
-
-        async_to_sync(channel_layer.group_send)(
-            group_name,
-            {
-                "type": "send_notification",
-                "notification_id": notification.id,
-                "title": notification.title,
-                "message": notification.message,
-            }
-        )
+        try:
+            channel_layer = get_channel_layer()
+            group_name = (
+                f"school_{exam.school_id}_class_{exam.class_group_id}_parents"
+            )
+            if channel_layer:
+                async_to_sync(channel_layer.group_send)(
+                    group_name,
+                    {
+                        "type": "send_notification",
+                        "notification_id": notification.id,
+                        "title": notification.title,
+                        "message": notification.message,
+                    }
+                )
+        except Exception as e:
+            print("Channel send exam notification error:", e)
 
         return Response(
             ExamSerializer(exam).data,
@@ -2781,30 +2782,35 @@ class MonthlyProgressReportView(APIView):
                 report.student.id
             )
 
-            async_to_sync(
-                channel_layer.group_send
-            )(
-                group_name,
-                {
-                    "type": "progressreport_message",
-                    "student": report.student.id,
-                    "month": report.month,
-                    "year": report.year,
-                    "attendance_percentage": round(
-                        float(report.attendance_percentage), 2
-                    ),
-                    "overall_score": round(
-                        float(report.overall_score), 2
-                    ),
-                    "grade": data["grade"],
-                    "discipline": report.discipline,
-                    "communication_skills": report.communication_skills,
-                    "emotional_development": report.emotional_development,
-                    "social_development": report.social_development,
-                    "freindly_with_others": report.freindly_with_others,
-                    "remark": report.remark,
-                }
-            )
+            try:
+                channel_layer = get_channel_layer()
+                if channel_layer:
+                    async_to_sync(
+                        channel_layer.group_send
+                    )(
+                        group_name,
+                        {
+                            "type": "progressreport_message",
+                            "student": report.student.id,
+                            "month": report.month,
+                            "year": report.year,
+                            "attendance_percentage": round(
+                                float(report.attendance_percentage), 2
+                            ),
+                            "overall_score": round(
+                                float(report.overall_score), 2
+                            ),
+                            "grade": data["grade"],
+                            "discipline": report.discipline,
+                            "communication_skills": report.communication_skills,
+                            "emotional_development": report.emotional_development,
+                            "social_development": report.social_development,
+                            "freindly_with_others": report.freindly_with_others,
+                            "remark": report.remark,
+                        }
+                    )
+            except Exception as e:
+                print("Failed to broadcast progress report message:", e)
 
             return Response(
                 serializer.data,
@@ -2834,33 +2840,36 @@ class MonthlyProgressReportView(APIView):
 
             data = MonthlyProgressReportSerializer(report).data
 
-            channel_layer = get_channel_layer()
-
-            async_to_sync(channel_layer.group_send)(
-                progress_group(
-                    report.school.id,
-                    report.student.id
-                ),
-                {
-                    "type": "progressreport_message",
-                    "student": report.student.id,
-                    "month": report.month,
-                    "year": report.year,
-                    "attendance_percentage": round(
-                        float(report.attendance_percentage), 2
-                    ),
-                    "overall_score": round(
-                        float(report.overall_score), 2
-                    ),
-                    "grade": data["grade"],
-                    "discipline": report.discipline,
-                    "communication_skills": report.communication_skills,
-                    "emotional_development": report.emotional_development,
-                    "social_development": report.social_development,
-                    "freindly_with_others": report.freindly_with_others,
-                    "remark": report.remark,
-                }
-            )
+            try:
+                channel_layer = get_channel_layer()
+                if channel_layer:
+                    async_to_sync(channel_layer.group_send)(
+                        progress_group(
+                            report.school.id,
+                            report.student.id
+                        ),
+                        {
+                            "type": "progressreport_message",
+                            "student": report.student.id,
+                            "month": report.month,
+                            "year": report.year,
+                            "attendance_percentage": round(
+                                float(report.attendance_percentage), 2
+                            ),
+                            "overall_score": round(
+                                float(report.overall_score), 2
+                            ),
+                            "grade": data["grade"],
+                            "discipline": report.discipline,
+                            "communication_skills": report.communication_skills,
+                            "emotional_development": report.emotional_development,
+                            "social_development": report.social_development,
+                            "freindly_with_others": report.freindly_with_others,
+                            "remark": report.remark,
+                        }
+                    )
+            except Exception as e:
+                print("Failed to broadcast progress report update message:", e)
 
             return Response(
                 serializer.data,
@@ -2946,21 +2955,26 @@ class StudyMaterialView(APIView):
             
             group_name = f"student_{material.school.id}_class_{material.student_class.id}"
 
-            async_to_sync(channel_layer.group_send)(
-                group_name,
-                {
-                    "type": "studymaterial",
+            try:
+                channel_layer = get_channel_layer()
+                if channel_layer:
+                    async_to_sync(channel_layer.group_send)(
+                        group_name,
+                        {
+                            "type": "studymaterial",
 
-                    "subject": str(material.subject),
-                    "student_class": str(material.student_class),
-                    "material_type": material.material_type,
-                    "title": material.title,
-                    "description": material.description,
+                            "subject": str(material.subject),
+                            "student_class": str(material.student_class),
+                            "material_type": material.material_type,
+                            "title": material.title,
+                            "description": material.description,
 
-                    # ✅ always send URL, not file object
-                    "file": request.build_absolute_uri(material.file.url),
-                }
-            )
+                            # ✅ always send URL, not file object
+                            "file": request.build_absolute_uri(material.file.url),
+                        }
+                    )
+            except Exception as e:
+                print("Failed to send study material notification:", e)
 
             return Response(serializer.data, status=201)
 
@@ -3024,8 +3038,8 @@ class ParentChildrenView(APIView):
             att_pct = round((present_att / total_att * 100), 1) if total_att > 0 else 100.0
 
             fees = StudentFee.objects.filter(student=s)
-            total_fee_amt = sum(float(f.amount) for f in fees)
-            paid_fee_amt = sum(float(f.paid_amount) for f in fees)
+            total_fee_amt = sum(float(f.amount or Decimal('0.00')) for f in fees)
+            paid_fee_amt = sum(float(f.paid_amount or Decimal('0.00')) for f in fees)
             due_fee_amt = max(total_fee_amt - paid_fee_amt, 0.0)
 
             notices = Announcement.objects.filter(
@@ -3093,13 +3107,13 @@ class TrusteeAnalyticsView(APIView):
 
         # 1. Total fee revenues
         student_fees = StudentFee.objects.filter(student__school=school)
-        total_billed = sum(float(f.amount) for f in student_fees)
-        total_collected = sum(float(f.paid_amount) for f in student_fees)
+        total_billed = sum(float(f.amount or Decimal('0.00')) for f in student_fees)
+        total_collected = sum(float(f.paid_amount or Decimal('0.00')) for f in student_fees)
         pending_collections = max(total_billed - total_collected, 0.0)
 
         # 2. Staff Payroll expense
         salary_payments = StaffSalaryPayment.objects.filter(school=school)
-        total_payroll = sum(float(sp.paid_amount) for sp in salary_payments)
+        total_payroll = sum(float(sp.paid_amount or Decimal('0.00')) for sp in salary_payments)
 
         # 3. Assets and Valuation
         assets = Asset.objects.filter(school=school)

@@ -1,7 +1,11 @@
 [environment]
-python = "venv/Scripts/python.exe"
+python = "C:/Users/kp301/AppData/Local/Programs/Python/Python313/python.exe"
 search-paths = [
     ".",
-    "venv/Lib/site-packages",
+    "C:/Users/kp301/AppData/Local/Programs/Python/Python313/Lib/site-packages",
     "sms_shared_core"
 ]
+
+[errors]
+missing-attribute = "ignore"
+untyped-import = "ignore"
