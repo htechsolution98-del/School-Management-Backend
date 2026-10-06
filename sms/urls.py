@@ -32,7 +32,6 @@ from django.conf.urls.static import static
 from sms_app.views import *
 from sms_app.auth_views import InitDatabaseView, CookieTokenRefreshView
 from sms_app.finance_ledger_views import *
-from sms_app.inventory_views import *
 from sms_app.library_leave_views import *
 from sms_app.subscription_views import (
     SubscriptionPlanViewSet,
@@ -293,8 +292,6 @@ urlpatterns = [
     path('api/',include(router.urls)),
 
     path('api/dashboard-count/', DashboardCountAPIView.as_view(), name='dashboard-count'),
-    path('api/inv-transfer/', InventoryWarehouseTransferAPIView.as_view(), name='inv-transfer'),
-    path('api/inv-dashboard-summary/', InventoryDashboardSummaryAPIView.as_view(), name='inv-dashboard-summary'),
     path('api/access/',CustomLoginView.as_view()),  
     
     path('api/refresh/', CookieTokenRefreshView.as_view(), name='token_refresh'),
