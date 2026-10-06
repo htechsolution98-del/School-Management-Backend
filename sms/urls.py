@@ -30,7 +30,7 @@ from drf_yasg import openapi
 from django.conf import settings
 from django.conf.urls.static import static
 from sms_app.views import *
-from sms_app.auth_views import InitDatabaseView, CookieTokenRefreshView
+from sms_app.auth_views import CustomLoginView, InitDatabaseView, CookieTokenRefreshView
 from sms_app.finance_ledger_views import *
 from sms_app.library_leave_views import *
 from sms_app.subscription_views import (
@@ -484,6 +484,13 @@ urlpatterns = [
     
     path('api/webhook/',RazorpayWebhookView.as_view()),
     
+    # Auth Routes
+    path('api/access/', CustomLoginView.as_view(), name='token_obtain_pair'),
+    path('api/api-login/', CustomLoginView.as_view(), name='api_login'),
+    path('api/refresh/', CookieTokenRefreshView.as_view(), name='token_refresh_cookie'),
+    path('api/token/refresh/', CookieTokenRefreshView.as_view(), name='token_refresh'),
+    path('api/init-database/', InitDatabaseView.as_view(), name='init_database'),
+
     path('payfee/',TemplateView.as_view(template_name='textfee.html')),
      # Swagger UI
     path('swagger/', schema_view.with_ui('swagger', cache_timeout=0)),
