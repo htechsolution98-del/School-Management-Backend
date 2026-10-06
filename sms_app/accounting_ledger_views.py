@@ -108,25 +108,42 @@ class StudentLedgerScheduleView(APIView):
             penalty = calculate_virtual_penalty(structure, due_date_str)
             payable = structure.amount + penalty
             is_rte = getattr(student, 'is_rte', False)
+            is_rte_applicable = getattr(structure.feetype, 'is_rte_applicable', False)
+            is_exempt_rte = is_rte and not is_rte_applicable
 
-            if is_rte:
-                amount_str = "0.00"
+            if is_exempt_rte:
+                amount_str = str(structure.amount)
                 penalty_str = "0.00"
                 payable_str = "0.00"
+                balance_str = "0.00"
                 late_fee_str = "0.00"
-                status_str = "paid"
+                status_str = "pending"
+                is_claim = True
+                claim_amount_str = str(structure.amount)
+                govt_status = "pending"
             else:
                 amount_str = str(structure.amount)
                 penalty_str = str(penalty)
                 payable_str = str(payable)
+                balance_str = str(payable)
                 late_fee_str = str(structure.late_fee_amount) if structure.late_fee_amount else "0.00"
                 status_str = "pending"
+                is_claim = False
+                claim_amount_str = "0.00"
+                govt_status = "not_applicable"
 
             return {
                 "id": f"virtual_{structure.feetype_id}_{billing_period}",
                 "is_virtual": True,
                 "feetype": structure.feetype_id,
                 "feetype_name": structure.feetype.name,
+                "is_rte_applicable": is_rte_applicable,
+                "is_rte_student": is_rte,
+                "is_rte_govt_claim": is_claim,
+                "rte_govt_claim_amount": claim_amount_str,
+                "rte_govt_paid_amount": "0.00",
+                "rte_govt_balance_amount": claim_amount_str,
+                "rte_govt_status": govt_status,
                 "fee_wise_class": structure.id,
                 "billing_period": billing_period,
                 "amount": amount_str,
@@ -134,10 +151,11 @@ class StudentLedgerScheduleView(APIView):
                 "late_fee_amount": late_fee_str,
                 "fine_amount": penalty_str,
                 "paid_amount": "0.00",
-                "balance_amount": payable_str,
+                "balance_amount": balance_str,
                 "payable_amount": payable_str,
+                "actual_payable_amount": payable_str,
                 "status": status_str,
-                "late_fee_enabled": structure.late_fee_enabled if not is_rte else False,
+                "late_fee_enabled": structure.late_fee_enabled if not is_exempt_rte else False,
                 "grace_days": structure.grace_days,
                 "late_fee_type": structure.late_fee_type,
                 "due_date": due_date_str,
@@ -145,21 +163,11 @@ class StudentLedgerScheduleView(APIView):
 
         def append_fee_or_virtual(structure, billing_period, due_date_str):
             key = f"{structure.feetype_id}_{billing_period}"
-            is_rte = getattr(student, 'is_rte', False)
             if key in actual_fees_by_key:
                 actual_fee = actual_fees_by_key[key]
                 actual_fee.refresh_payment_status()
                 data = StudentFeeSerializer(actual_fee, context={"request": request}).data
                 data["is_virtual"] = False
-                
-                if is_rte:
-                    data["amount"] = "0.00"
-                    data["fine_amount"] = "0.00"
-                    data["payable_amount"] = "0.00"
-                    data["balance_amount"] = "0.00"
-                    data["late_fee_amount"] = "0.00"
-                    data["status"] = "paid"
-                    
                 projected_ledger.append(data)
             else:
                 projected_ledger.append(
@@ -245,7 +253,6 @@ class GenerateSingleStudentFeeView(APIView):
                 }
             )
 
-
         existing = StudentFee.objects.filter(
             student=student, 
             academic_year=academic_year, 
@@ -255,6 +262,7 @@ class GenerateSingleStudentFeeView(APIView):
 
         if existing:
             existing.apply_late_fee(save=True)
+            existing.refresh_payment_status()
             return Response(StudentFeeSerializer(existing, context={"request": request}).data)
 
         due_date = request.data.get("due_date")
@@ -267,8 +275,8 @@ class GenerateSingleStudentFeeView(APIView):
             except Exception:
                 due_date = timezone.now().date()
 
-        fee = StudentFee.objects.create(
-            school=request.user.school,
+        fee = StudentFee(
+            school=request.user.school or student.school,
             academic_year=academic_year,
             student=student,
             feetype=fee_wise_class.feetype,
@@ -283,6 +291,9 @@ class GenerateSingleStudentFeeView(APIView):
             due_date=due_date,
             status="pending"
         )
+        fee.save()
         fee.apply_late_fee(save=True)
+        fee.refresh_payment_status()
         
         return Response(StudentFeeSerializer(fee, context={"request": request}).data, status=status.HTTP_201_CREATED)
+
