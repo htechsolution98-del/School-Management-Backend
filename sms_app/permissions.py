@@ -30,7 +30,13 @@ class IsCLerk(BasePermission):
         user = getattr(request, "user", None)
         if not user or not user.is_authenticated:
             return False
-        if getattr(user, "is_superuser", False):
+        if getattr(user, "is_superuser", False) or getattr(user, "is_staff", False):
+            return True
+        role = str(getattr(user, "role", "") or "").strip().upper()
+        if role in ["CLERK", "ADMIN", "SUPERADMIN", "SUPER_ADMIN", "PRINCIPAL", "TRUSTEE"]:
+            return True
+        staff = getattr(user, "staff", None)
+        if staff and str(getattr(staff, "category", "") or "").strip().upper() == "CLERK":
             return True
         return user.groups.filter(name__iexact="CLERK").exists()
 
@@ -40,9 +46,18 @@ class IsFeeManager(BasePermission):
         user = getattr(request, "user", None)
         if not user or not user.is_authenticated:
             return False
-        if getattr(user, "is_superuser", False):
+        if getattr(user, "is_superuser", False) or getattr(user, "is_staff", False):
             return True
-        return user.groups.filter(name__iexact="FEES MANAGEMENT").exists()
+        role = str(getattr(user, "role", "") or "").strip().upper()
+        if role in ["FEES MANAGEMENT", "FEE MANAGEMENT", "CLERK", "ADMIN", "SUPERADMIN", "SUPER_ADMIN", "PRINCIPAL", "TRUSTEE"]:
+            return True
+        staff = getattr(user, "staff", None)
+        if staff and str(getattr(staff, "category", "") or "").strip().upper() in ["FEES MANAGEMENT", "FEE MANAGEMENT", "CLERK", "PRINCIPAL"]:
+            return True
+        return (
+            user.groups.filter(name__iexact="FEES MANAGEMENT").exists()
+            or user.groups.filter(name__in=["FEES MANAGEMENT", "Fee Management", "fees management", "CLERK", "clerk", "Clerk", "ADMIN", "admin", "admin(trustee)", "PRINCIPAL", "principal"]).exists()
+        )
 
 
 class Isprincipal(BasePermission):
@@ -159,12 +174,18 @@ class IsClerkOrPrincipal(BasePermission):
         user = getattr(request, "user", None)
         if not user or not user.is_authenticated:
             return False
-        if getattr(user, "is_superuser", False):
+        if getattr(user, "is_superuser", False) or getattr(user, "is_staff", False):
             return True
-        role = getattr(user, "role", "")
-        if role in ["CLERK", "PRINCIPAL", "TRUSTEE", "ADMIN", "FEES MANAGEMENT"]:
+        role = str(getattr(user, "role", "") or "").strip().upper()
+        if role in ["CLERK", "PRINCIPAL", "TRUSTEE", "ADMIN", "SUPERADMIN", "SUPER_ADMIN", "FEES MANAGEMENT"]:
             return True
-        return user.groups.filter(name__in=["CLERK", "PRINCIPAL", "admin(trustee)", "FEES MANAGEMENT"]).exists()
+        staff = getattr(user, "staff", None)
+        if staff and str(getattr(staff, "category", "") or "").strip().upper() in ["CLERK", "PRINCIPAL"]:
+            return True
+        return (
+            user.groups.filter(name__iexact="CLERK").exists()
+            or user.groups.filter(name__in=["CLERK", "PRINCIPAL", "admin(trustee)", "FEES MANAGEMENT", "clerk", "Clerk", "ADMIN", "admin", "PRINCIPAL", "principal"]).exists()
+        )
         
 IsClerkOrPrincipalOrAdmin = IsClerkOrPrincipal
 
@@ -175,12 +196,18 @@ class IsPrincipalOrTrustee(BasePermission):
         user = getattr(request, "user", None)
         if not user or not user.is_authenticated:
             return False
-        if getattr(user, "is_superuser", False):
+        if getattr(user, "is_superuser", False) or getattr(user, "is_staff", False):
             return True
-        role = getattr(user, "role", "")
-        if role in ["CLERK", "PRINCIPAL", "TRUSTEE", "ADMIN"]:
+        role = str(getattr(user, "role", "") or "").strip().upper()
+        if role in ["CLERK", "PRINCIPAL", "TRUSTEE", "ADMIN", "SUPERADMIN", "SUPER_ADMIN"]:
             return True
-        return user.groups.filter(name__in=["CLERK", "PRINCIPAL", "admin(trustee)"]).exists()
+        staff = getattr(user, "staff", None)
+        if staff and str(getattr(staff, "category", "") or "").strip().upper() in ["CLERK", "PRINCIPAL"]:
+            return True
+        return (
+            user.groups.filter(name__iexact="CLERK").exists()
+            or user.groups.filter(name__in=["CLERK", "PRINCIPAL", "admin(trustee)", "clerk", "Clerk", "ADMIN", "admin", "PRINCIPAL", "principal"]).exists()
+        )
 
 
 class IsClerkOrTrustee(BasePermission):
@@ -188,9 +215,18 @@ class IsClerkOrTrustee(BasePermission):
         user = getattr(request, 'user', None)
         if not user or not user.is_authenticated:
             return False
-        if getattr(user, 'is_superuser', False):
+        if getattr(user, 'is_superuser', False) or getattr(user, 'is_staff', False):
             return True
-        return user.groups.filter(name__in=['CLERK', 'admin(trustee)']).exists()
+        role = str(getattr(user, "role", "") or "").strip().upper()
+        if role in ["CLERK", "TRUSTEE", "ADMIN", "SUPERADMIN", "SUPER_ADMIN", "PRINCIPAL"]:
+            return True
+        staff = getattr(user, "staff", None)
+        if staff and str(getattr(staff, "category", "") or "").strip().upper() in ["CLERK", "PRINCIPAL"]:
+            return True
+        return (
+            user.groups.filter(name__iexact="CLERK").exists()
+            or user.groups.filter(name__in=['CLERK', 'admin(trustee)', 'clerk', 'Clerk', 'ADMIN', 'admin', 'PRINCIPAL', 'principal', 'trustee']).exists()
+        )
 
 
 class IsClerkOrTempUser(BasePermission):

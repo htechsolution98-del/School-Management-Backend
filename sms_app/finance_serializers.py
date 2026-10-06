@@ -4,7 +4,10 @@ from django.utils import timezone
 from rest_framework import serializers
 from decimal import Decimal
 from .models import *
+import calendar
 import re
+from datetime import date
+from .library_leave_views import get_approved_paid_leave_days
 
 class RazarDataSerializer(serializers.ModelSerializer):
     class Meta:
@@ -648,6 +651,7 @@ class StudentFeeSerializer(serializers.ModelSerializer):
         source="student.school_class_id", read_only=True
     )
     school_class_name = serializers.SerializerMethodField()
+    due_date = serializers.DateField(required=False, allow_null=True)
     payable_amount = serializers.DecimalField(
         max_digits=10, decimal_places=2, read_only=True
     )
@@ -658,6 +662,15 @@ class StudentFeeSerializer(serializers.ModelSerializer):
         max_digits=10, decimal_places=2, read_only=True
     )
     payments = serializers.SerializerMethodField()
+
+    def to_internal_value(self, data):
+        if hasattr(data, "_mutable") and not data._mutable:
+            data = data.copy()
+        elif isinstance(data, dict):
+            data = dict(data)
+        if data.get("due_date") == "":
+            data["due_date"] = None
+        return super().to_internal_value(data)
 
     class Meta:
         model = StudentFee
@@ -815,6 +828,13 @@ class StudentFeeSerializer(serializers.ModelSerializer):
                     )
 
             due_date = attrs.get("due_date", getattr(self.instance, "due_date", None))
+            if not due_date and billing_period and re.match(r"^\d{4}-\d{2}$", billing_period):
+                try:
+                    y, m = map(int, billing_period.split("-"))
+                    due_date = date(y, m, 10)
+                    attrs["due_date"] = due_date
+                except Exception:
+                    pass
             if due_date and due_date.strftime("%Y-%m") != billing_period:
                 raise serializers.ValidationError(
                     {

@@ -1804,7 +1804,7 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
                         if school_class is None and value_str:
                             school_class = SchoolClass.objects.filter(
                                 school=student.school,
-                                school_class=value_str,
+                                school_class__iexact=value_str,
                             ).first()
 
                     if school_class:
@@ -3911,6 +3911,7 @@ class StudentFeeSerializer(serializers.ModelSerializer):
         source="student.school_class_id", read_only=True
     )
     school_class_name = serializers.SerializerMethodField()
+    due_date = serializers.DateField(required=False, allow_null=True)
     payable_amount = serializers.DecimalField(
         max_digits=10, decimal_places=2, read_only=True
     )
@@ -3921,6 +3922,15 @@ class StudentFeeSerializer(serializers.ModelSerializer):
         max_digits=10, decimal_places=2, read_only=True
     )
     payments = serializers.SerializerMethodField()
+
+    def to_internal_value(self, data):
+        if hasattr(data, "_mutable") and not data._mutable:
+            data = data.copy()
+        elif isinstance(data, dict):
+            data = dict(data)
+        if data.get("due_date") == "":
+            data["due_date"] = None
+        return super().to_internal_value(data)
 
     class Meta:
         model = StudentFee
@@ -4078,6 +4088,13 @@ class StudentFeeSerializer(serializers.ModelSerializer):
                     )
 
             due_date = attrs.get("due_date", getattr(self.instance, "due_date", None))
+            if not due_date and billing_period and re.match(r"^\d{4}-\d{2}$", billing_period):
+                try:
+                    y, m = map(int, billing_period.split("-"))
+                    due_date = date(y, m, 10)
+                    attrs["due_date"] = due_date
+                except Exception:
+                    pass
             if due_date and due_date.strftime("%Y-%m") != billing_period:
                 raise serializers.ValidationError(
                     {
@@ -5314,12 +5331,38 @@ class StudentHomeworkListSerializer(serializers.ModelSerializer):
 
 
 class StudentGetSerializer(serializers.ModelSerializer):
-    class_name = serializers.CharField(source="school_class.school_class", read_only=True)
+    class_name = serializers.SerializerMethodField()
+    school_class = serializers.SerializerMethodField()
     full_name = serializers.SerializerMethodField()
 
     class Meta:
         model = Student
         fields = ['id', 'gr_no', 'roll_no', 'division', 'surname', 'name', 'father_name', 'mother_name', 'full_name', 'school_class', 'class_name', 'created_at']
+
+    def get_school_class(self, obj):
+        if obj.school_class_id:
+            return obj.school_class_id
+        if hasattr(obj, "admission") and obj.admission:
+            fv = obj.admission.field_values.filter(
+                Q(field__map_to_student_field="school_class") | Q(field__label__icontains="class")
+            ).first()
+            if fv and fv.value:
+                val = str(fv.value).strip()
+                sc = SchoolClass.objects.filter(school=obj.school, school_class__iexact=val).first()
+                if sc:
+                    obj.school_class = sc
+                    obj.save(update_fields=["school_class"])
+                    return sc.id
+        return None
+
+    def get_class_name(self, obj):
+        if obj.school_class:
+            return obj.school_class.school_class
+        sc_id = self.get_school_class(obj)
+        if sc_id:
+            sc = SchoolClass.objects.filter(id=sc_id).first()
+            return sc.school_class if sc else None
+        return None
 
     def get_full_name(self, obj):
         parts = [p for p in [obj.surname, obj.name, obj.father_name] if p]
