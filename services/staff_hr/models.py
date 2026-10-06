@@ -1,4 +1,5 @@
 from django.db import models
+from django.conf import settings
 
 
 class Department(models.Model):
@@ -13,7 +14,7 @@ class Department(models.Model):
 
 
 class Staff(models.Model):
-    user = models.ForeignKey("auth_identity.CustomUser", on_delete=models.CASCADE)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="staff_hr_profile")
     department = models.ForeignKey(Department, on_delete=models.SET_NULL, null=True, blank=True)
     employee_id = models.CharField(max_length=50, unique=True)
     staff_name = models.CharField(max_length=100)
