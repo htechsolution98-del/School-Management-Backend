@@ -1,49 +1,65 @@
-  name: School-Management-Backend
+name: School-Management-Backend
 
-  on:
-    push:
-      branches:
-        - stg
+on:
+  push:
+    branches:
+      - stg
 
-  jobs:
-    deploy:
-      runs-on: ubuntu-latest
-      steps:
-        - name: Checkout Repository
-          uses: actions/checkout@v5
-              
-        - name: Install SSH Key
-          run: |
-            mkdir -p ~/.ssh
-            echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
-            chmod 600 ~/.ssh/id_rsa
-            ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
+concurrency:
+  group: backend-stg-deploy
+  cancel-in-progress: false
 
-        - name: Deploy Backend
-          run: |
-            ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} << 'SSHEOF'
-              set -e
-              cd ${{ secrets.BACKEND_WORK_DIR }} 
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v5
 
-              echo "=== Git Pull ==="
-              git pull origin ${{ secrets.BACKEND_BRANCH }}
+      - name: Install SSH Key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
 
-              echo "=== Install/Update Dependencies ==="
-              docker exec ${{ secrets.BACKEND_CONT_NAME }} pip install --no-cache-dir -r requirements.txt
+      - name: Deploy Backend
+        run: |
+          ssh -T "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" << 'SSHEOF'
+            set -e
+            cd -- "${{ secrets.BACKEND_WORK_DIR }}"
 
-              echo "=== Run Migrations ==="
-              docker exec ${{ secrets.BACKEND_CONT_NAME }} python manage.py archive_legacy_migration
-              docker exec ${{ secrets.BACKEND_CONT_NAME }} python manage.py migrate --noinput
+            # Keep the server's compose configuration outside the checkout when
+            # it is untracked, so the incoming tracked file can be checked out.
+            if ! git ls-files --error-unmatch -- docker-compose.yml >/dev/null 2>&1; then
+              if [ -e docker-compose.yml ]; then
+                backup_root="${DEPLOY_BACKUP_ROOT:-$HOME/.local/state/school-management-deploy/backend}"
+                mkdir -p -- "$backup_root"
+                backup_dir=$(mktemp -d "$backup_root/$(date -u +%Y%m%dT%H%M%SZ)-XXXXXX")
+                mv -- docker-compose.yml "$backup_dir/docker-compose.yml"
+                echo "Saved server compose configuration in $backup_dir"
+              fi
+            fi
 
-              echo "=== Collect Static Files ==="
-              docker exec ${{ secrets.BACKEND_CONT_NAME }} python manage.py collectstatic --noinput
+            echo "=== Git Pull ==="
+            git pull --ff-only origin "${{ secrets.BACKEND_BRANCH }}"
 
-              echo "=== Restart Container ==="
-              docker restart ${{ secrets.BACKEND_CONT_NAME }}
+            echo "=== Install/Update Dependencies ==="
+            docker exec ${{ secrets.BACKEND_CONT_NAME }} pip install --no-cache-dir -r requirements.txt
 
-              echo "=== Deployment Successful... DevOps Team==="
-            SSHEOF
+            echo "=== Run Migrations ==="
+            docker exec ${{ secrets.BACKEND_CONT_NAME }} python manage.py archive_legacy_migration
+            docker exec ${{ secrets.BACKEND_CONT_NAME }} python manage.py migrate --noinput
 
-        - name: Cleanup SSH
-          if: always()
-          run: rm -rf ~/.ssh
+            echo "=== Collect Static Files ==="
+            docker exec ${{ secrets.BACKEND_CONT_NAME }} python manage.py collectstatic --noinput
+
+            echo "=== Restart Container ==="
+            docker restart ${{ secrets.BACKEND_CONT_NAME }}
+
+            echo "=== Deployment Successful... DevOps Team==="
+          SSHEOF
+
+      - name: Cleanup SSH
+        if: always()
+        run: rm -rf ~/.ssh

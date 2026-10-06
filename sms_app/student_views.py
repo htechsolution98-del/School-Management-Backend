@@ -21,6 +21,9 @@ from django.db import transaction
 from django.db.models import Q
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.decorators import action
+from .student_profile_actions import StudentProfileActionsMixin
+from .student_profile_serializers import StudentProfileSerializer
+from .student_profile_services import profile_queryset, completion
 
 class AdmissionFormViewSet(ModelViewSet):
     queryset = AdmissionForm.objects.all()
@@ -1171,6 +1174,142 @@ class AssignRollNumberAPIView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+class StudentViewSet(StudentProfileActionsMixin, ModelViewSet):
+    queryset = Student.objects.all()
+    serializer_class = StudentProfileSerializer
+    http_method_names = ["get", "post", "patch", "put", "delete", "head", "options"]
+
+    def get_permissions(self):
+        if self.action in ["list", "retrieve", "my_profile"]:
+            return [IsAuthenticated()]
+        return [IsAuthenticated(), IsCLerk()]
+
+    def get_queryset(self):
+        user = self.request.user
+        school = getattr(user, "school", None)
+        if not school:
+            student = Student.objects.filter(user=user).first()
+            if student:
+                school = student.school
+        if not school:
+            staff = getattr(user, "staff", None)
+            if staff and staff.school:
+                school = staff.school
+
+        if user.is_superuser and not school:
+            qs = Student.objects.all()
+        elif school:
+            qs = Student.objects.filter(school=school)
+        else:
+            return Student.objects.none()
+
+        class_id = self.request.query_params.get("class_id") or self.request.query_params.get("school_class")
+        if class_id:
+            if str(class_id).isdigit():
+                qs = qs.filter(school_class_id=int(class_id))
+            else:
+                qs = qs.filter(school_class__school_class__iexact=str(class_id).strip())
+
+        academic_year = self.request.query_params.get("academic_year")
+        if academic_year:
+            if str(academic_year).isdigit():
+                qs = qs.filter(academic_year_id=int(academic_year))
+            else:
+                qs = qs.filter(academic_year__name__icontains=str(academic_year).strip())
+
+        division = self.request.query_params.get("division")
+        if division:
+            qs = qs.filter(division__iexact=str(division).strip())
+
+        is_verified = self.request.query_params.get("is_verified")
+        if is_verified is not None:
+            if str(is_verified).lower() in ["true", "1"]:
+                qs = qs.filter(is_verified=True)
+            elif str(is_verified).lower() in ["false", "0"]:
+                qs = qs.filter(is_verified=False)
+
+        search = self.request.query_params.get("search") or self.request.query_params.get("q")
+        if search:
+            search = str(search).strip()
+            for term in search.split():
+                qs = qs.filter(
+                    Q(name__icontains=term) | Q(surname__icontains=term)
+                    | Q(father_name__icontains=term) | Q(mother_name__icontains=term)
+                    | Q(gr_no__icontains=term) | Q(roll_no__icontains=term)
+                    | Q(abc_id__icontains=term) | Q(udise_no__icontains=term)
+                    | Q(aadhar_number__icontains=term) | Q(mobile__icontains=term)
+                    | Q(user__email__icontains=term)
+                )
+
+        missing = self.request.query_params.get("missing")
+        if missing == "ids":
+            qs = qs.filter(Q(abc_id__isnull=True) | Q(abc_id="") | Q(udise_no__isnull=True) | Q(udise_no="") | Q(aadhar_number__isnull=True) | Q(aadhar_number=""))
+        elif missing == "documents":
+            ids = [student.id for student in profile_queryset(qs) if completion(student)["missing_documents"] or not completion(student)["document_count"]]
+            qs = qs.filter(pk__in=ids)
+        return profile_queryset(qs).order_by("school_class", "roll_no", "id")
+
+    def get_object(self):
+        student = super().get_object()
+        if self.action in {"profile_documents", "profile_document"} and student.school_id != getattr(self.request.user, "school_id", None):
+            from rest_framework.exceptions import NotFound
+            raise NotFound("Student not found in your school.")
+        return student
+
+    def paginate_queryset(self, queryset):
+        # Existing Classes clients expect an array. Pagination is opt-in on this same endpoint.
+        if "page" in self.request.query_params or "page_size" in self.request.query_params:
+            from rest_framework.pagination import PageNumberPagination
+            paginator = PageNumberPagination()
+            paginator.page_size = 50
+            paginator.page_size_query_param = "page_size"
+            paginator.max_page_size = 200
+            self._profile_paginator = paginator
+            return paginator.paginate_queryset(queryset, self.request, view=self)
+        return super().paginate_queryset(queryset)
+
+    def get_paginated_response(self, data):
+        paginator = getattr(self, "_profile_paginator", None)
+        return paginator.get_paginated_response(data) if paginator else super().get_paginated_response(data)
+
+    def perform_update(self, serializer):
+        is_verified = serializer.validated_data.get("is_verified")
+        instance = serializer.instance
+        update_kwargs = {}
+
+        if is_verified is True:
+            if not instance.is_verified or not instance.verified_by:
+                update_kwargs["verified_by"] = self.request.user
+                update_kwargs["verified_at"] = timezone.now()
+        elif is_verified is False:
+            update_kwargs["verified_by"] = None
+            update_kwargs["verified_at"] = None
+
+        serializer.save(**update_kwargs)
+
+    @action(detail=True, methods=["post", "patch"], url_path="verify")
+    def verify(self, request, pk=None):
+        student = self.get_object()
+        student.is_verified = True
+        student.verified_by = request.user
+        student.verified_at = timezone.now()
+        student.save(update_fields=["is_verified", "verified_by", "verified_at"])
+        serializer = self.get_serializer(student)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=["get"], url_path="me")
+    def my_profile(self, request):
+        student = Student.objects.filter(user=request.user).first()
+        if not student:
+            return Response({"error": "Student profile not found"}, status=404)
+        serializer = self.get_serializer(student)
+        return Response(serializer.data)
+
+
+StudentGetView = StudentViewSet
+
 
 
 
