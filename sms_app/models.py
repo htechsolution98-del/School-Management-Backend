@@ -11,6 +11,7 @@ from django.db.models import Sum
 from django.utils import timezone
 from datetime import timedelta
 from decimal import Decimal
+from sms_app.storage import get_raw_document_storage
 
 class OTP(models.Model):
     email = models.EmailField(null=True, blank=True)
@@ -899,7 +900,7 @@ class Syllabus(models.Model):
     division = models.ForeignKey("Division", on_delete=models.CASCADE, related_name="syllabi")
     
     subject = models.ForeignKey("Subject", on_delete=models.CASCADE, related_name="syllabi")
-    syllabus_file = models.FileField(upload_to="syllabus/")
+    syllabus_file = models.FileField(upload_to="syllabus/", storage=get_raw_document_storage)
     created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     def __str__(self):

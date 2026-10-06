@@ -404,13 +404,24 @@ class SetSubjectView(ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        qs = Subject.objects.filter(school=self.request.user.school)
+        user = self.request.user
+        school = getattr(user, "school", None)
+        qs = Subject.objects.filter(school=school) if school else Subject.objects.all()
         
-        user_groups = list(self.request.user.groups.values_list('name', flat=True)) if self.request.user else []
-        is_admin_or_clerk = any(role in user_groups for role in ["PRINCIPAL", "CLERK", "admin(trustee)"])
+        user_groups = [g.upper() for g in user.groups.values_list('name', flat=True)] if user else []
+        user_role = str(getattr(user, "role", "") or "").strip().upper()
+        staff = getattr(user, "staff", None)
+        staff_cat = str(getattr(staff, "category", "") or "").strip().upper() if staff else ""
+
+        is_admin_or_clerk = (
+            getattr(user, "is_superuser", False)
+            or getattr(user, "is_staff", False)
+            or user_role in ["PRINCIPAL", "CLERK", "ADMIN", "SUPERADMIN", "ADMIN(TRUSTEE)", "TRUSTEE"]
+            or staff_cat in ["CLERK", "PRINCIPAL"]
+            or any(r in user_groups for r in ["PRINCIPAL", "CLERK", "ADMIN(TRUSTEE)", "ADMIN"])
+        )
         
         if not is_admin_or_clerk:
-            staff = getattr(self.request.user, "staff", None)
             if staff:
                 from .models import AssignClass
                 assigned_subjects = AssignClass.objects.filter(teacher=staff).values_list('subject_id', flat=True)
@@ -442,10 +453,11 @@ class SetSubjectView(ModelViewSet):
 
     # ✅ LIST
     def list(self, request, *args, **kwargs):
-        school_id = request.user.school.id
+        school_id = request.user.school.id if getattr(request.user, "school", None) else "all"
         school_class = request.query_params.get("SchoolClass")
+        user_id = request.user.id if request.user else "anon"
 
-        cache_key = f"subjects_{school_id}_{school_class if school_class else 'all'}"
+        cache_key = f"subjects_{school_id}_{school_class if school_class else 'all'}_{user_id}"
 
         # 🔐 SAFE CACHE GET
         try:
@@ -607,6 +619,107 @@ class SyllabusView(ModelViewSet):
         cache.set(cache_key, serializer.data, timeout=60 * 10)
 
         return Response({"message": "Data fetched from DB", "data": serializer.data})
+
+    # ✅ SERVE / STREAM FILE SAFELY
+    @action(detail=True, methods=["get"], url_path="file")
+    def get_file(self, request, pk=None):
+        syllabus = self.get_object()
+        if not syllabus.syllabus_file:
+            return Response({"error": "No file attached"}, status=status.HTTP_404_NOT_FOUND)
+
+        import mimetypes
+        import io
+        import os
+        import zipfile
+        import requests
+        from django.http import HttpResponse, FileResponse
+        from django.conf import settings
+
+        filename = os.path.basename(syllabus.syllabus_file.name) or "syllabus_document"
+
+        def sniff_mimetype(magic_bytes, name="", header_type=None):
+            if magic_bytes:
+                if magic_bytes.startswith(b"%PDF"):
+                    return "application/pdf", ".pdf"
+                if magic_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+                    return "image/png", ".png"
+                if magic_bytes.startswith(b"\xff\xd8\xff"):
+                    return "image/jpeg", ".jpg"
+                if magic_bytes.startswith(b"GIF87a") or magic_bytes.startswith(b"GIF89a"):
+                    return "image/gif", ".gif"
+                if len(magic_bytes) >= 12 and magic_bytes.startswith(b"RIFF") and magic_bytes[8:12] == b"WEBP":
+                    return "image/webp", ".webp"
+            if header_type and header_type not in ("application/octet-stream", "binary/octet-stream"):
+                clean = header_type.split(";")[0].strip().lower()
+                if clean == "application/pdf":
+                    return "application/pdf", ".pdf"
+                if clean in ("image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif"):
+                    ext = ".png" if clean == "image/png" else (".jpg" if "jpeg" in clean or "jpg" in clean else ".webp")
+                    return clean, ext
+            if name:
+                guessed, _ = mimetypes.guess_type(name)
+                if guessed and guessed != "application/octet-stream":
+                    _, ext = os.path.splitext(name)
+                    return guessed, ext
+            return "application/pdf", ".pdf"
+
+        # 1. Try local/direct storage open if available
+        try:
+            f = syllabus.syllabus_file.open("rb")
+            magic = f.read(32)
+            f.seek(0)
+            c_type, ext = sniff_mimetype(magic, name=filename)
+            disp_name = filename if (ext and filename.lower().endswith(ext)) else f"{filename}{ext}"
+            resp = FileResponse(f, content_type=c_type)
+            resp["Content-Disposition"] = f'inline; filename="{disp_name}"'
+            return resp
+        except Exception:
+            pass
+
+        # 2. Try proxying raw bytes directly from syllabus_file.url
+        try:
+            url = syllabus.syllabus_file.url
+            res = requests.get(url, timeout=15)
+            if res.status_code == 200:
+                raw_bytes = res.content
+                c_type, ext = sniff_mimetype(raw_bytes[:32], name=filename, header_type=res.headers.get("Content-Type"))
+                disp_name = filename if (ext and filename.lower().endswith(ext)) else f"{filename}{ext}"
+                response = HttpResponse(raw_bytes, content_type=c_type)
+                response["Content-Disposition"] = f'inline; filename="{disp_name}"'
+                return response
+            elif res.status_code == 401:
+                # 3. Cloudinary returned 401 (Restricted PDF/ZIP delivery on public CDN).
+                # Retrieve authenticated archive and extract raw bytes in memory
+                import cloudinary.utils
+                name = syllabus.syllabus_file.name.replace("\\", "/").lstrip("/")
+                prefix = getattr(settings, 'CLOUDINARY_STORAGE', {}).get('PREFIX', 'media')
+                public_id = f"{prefix}/{name}" if not name.startswith(prefix) else name
+
+                guessed_type, _ = mimetypes.guess_type(filename)
+                res_type = "raw" if (guessed_type == "application/pdf" or filename.lower().endswith(".pdf")) else "image"
+                for rt in [res_type, "raw", "image"]:
+                    try:
+                        arch_url = cloudinary.utils.download_archive_url(
+                            public_ids=[public_id],
+                            resource_type=rt
+                        )
+                        r_arch = requests.get(arch_url, timeout=15)
+                        if r_arch.status_code == 200:
+                            zf = zipfile.ZipFile(io.BytesIO(r_arch.content))
+                            names = zf.namelist()
+                            if names:
+                                data = zf.read(names[0])
+                                c_type, ext = sniff_mimetype(data[:32], name=filename)
+                                disp_name = filename if (ext and filename.lower().endswith(ext)) else f"{filename}{ext}"
+                                response = HttpResponse(data, content_type=c_type)
+                                response["Content-Disposition"] = f'inline; filename="{disp_name}"'
+                                return response
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        return Response({"error": "File not found or inaccessible in storage"}, status=status.HTTP_404_NOT_FOUND)
 
     # ✅ UPDATE
     def perform_update(self, serializer):

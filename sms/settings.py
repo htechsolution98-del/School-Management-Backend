@@ -334,11 +334,11 @@ is_cloudinary_configured = bool(
 )
 
 if is_cloudinary_configured:
-    DEFAULT_FILE_STORAGE = "cloudinary_storage.storage.MediaCloudinaryStorage"
+    DEFAULT_FILE_STORAGE = "sms_app.storage.SmartMediaCloudinaryStorage"
     STATICFILES_STORAGE = "whitenoise.storage.CompressedStaticFilesStorage"
     STORAGES = {
         "default": {
-            "BACKEND": "cloudinary_storage.storage.MediaCloudinaryStorage",
+            "BACKEND": "sms_app.storage.SmartMediaCloudinaryStorage",
         },
         "staticfiles": {
             "BACKEND": "whitenoise.storage.CompressedStaticFilesStorage",
