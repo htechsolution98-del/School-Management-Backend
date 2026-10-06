@@ -185,6 +185,7 @@ router.register(r'student-fee-payment', StudentFeePaymentViewSet, basename='stud
 router.register(r'board-meetings', BoardMeetingViewSet, basename='board-meetings')
 router.register(r'homework', HomeworkViewSet, basename='homework')
 router.register(r'homework-submission', HomeworkSubmissionViewSet, basename='homework-submission')
+router.register(r'students', StudentViewSet, basename='students')
 router.register(r'studentget', StudentGetView, basename='studentget')
 
 

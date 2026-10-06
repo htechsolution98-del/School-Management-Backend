@@ -620,8 +620,17 @@ class Student(models.Model):
     )
 
     aadhar_number = models.CharField(max_length=50, null=True, blank=True)
-    roll_no = models.CharField(max_length=50, blank=True, null=True)
-    is_rte = models.BooleanField(default=False)
+    abc_id = models.CharField(max_length=50, blank=True, null=True)
+    udise_no = models.CharField(max_length=50, blank=True, null=True)
+    is_verified = models.BooleanField(default=False)
+    verified_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="verified_students",
+    )
+    verified_at = models.DateTimeField(null=True, blank=True)
 
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
