@@ -1730,6 +1730,8 @@ class StudentGetSerializer(AadhaarValidationMixin, serializers.ModelSerializer):
     )
     class_name = serializers.SerializerMethodField()
     academic_year_name = serializers.SerializerMethodField()
+    admission_date = serializers.SerializerMethodField()
+    address = serializers.SerializerMethodField()
     full_name = serializers.SerializerMethodField()
     email = serializers.SerializerMethodField()
     verified_by_name = serializers.SerializerMethodField()
@@ -1756,6 +1758,7 @@ class StudentGetSerializer(AadhaarValidationMixin, serializers.ModelSerializer):
             'academic_year',
             'academic_year_name',
             'admission_date',
+            'address',
             'aadhar_number',
             'abc_id',
             'udise_no',
@@ -1787,7 +1790,48 @@ class StudentGetSerializer(AadhaarValidationMixin, serializers.ModelSerializer):
     def get_academic_year_name(self, obj):
         if obj.academic_year:
             return obj.academic_year.name
+        if hasattr(obj, "admission") and obj.admission:
+            ay = getattr(obj.admission, "academic_year", None)
+            if ay:
+                return ay.name
+        if getattr(obj, "school_id", None):
+            ay = AcademicYear.objects.filter(school_id=obj.school_id, is_active=True).first()
+            if ay:
+                return ay.name
         return None
+
+    def get_admission_date(self, obj):
+        if obj.admission_date:
+            return obj.admission_date
+        if hasattr(obj, "admission") and obj.admission and obj.admission.created_at:
+            return obj.admission.created_at.date()
+        if obj.created_at:
+            return obj.created_at.date()
+        return None
+
+    def get_address(self, obj):
+        addr = None
+        city = None
+        state = None
+        pincode = None
+        fvs = list(obj.field_values.select_related("field").all())
+        if not fvs and hasattr(obj, "admission") and obj.admission:
+            fvs = list(obj.admission.field_values.select_related("field").all())
+        for fv in fvs:
+            label = (fv.field.label or "").lower()
+            val = (fv.value or "").strip()
+            if not val:
+                continue
+            if "address" in label and not addr:
+                addr = val
+            elif ("city" in label or "village" in label) and not city:
+                city = val
+            elif "state" in label and not state:
+                state = val
+            elif ("pincode" in label or "pin" in label) and not pincode:
+                pincode = val
+        parts = [p for p in [addr, city, state, pincode] if p]
+        return ", ".join(parts) if parts else (addr or None)
 
     def get_full_name(self, obj):
         parts = [p for p in [obj.name, obj.father_name, obj.surname] if p]
