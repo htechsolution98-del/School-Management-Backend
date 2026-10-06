@@ -66,6 +66,15 @@ class ArchiveLegacyMigrationTests(SimpleTestCase):
         self.assertTrue(self.legacy.exists())
         self.assertEqual(self.backup.read_text(), 'earlier backup')
 
+    def test_archives_alter_staffremainingleave_month_file(self):
+        target = self.directory / "0021_leaverequest_status_alter_staffremainingleave_month.py"
+        target.write_text(LEGACY)
+        self.command.handle()
+        self.assertFalse(target.exists())
+        backup_target = self.root / "legacy-migration-backups" / target.name
+        self.assertTrue(backup_target.exists())
+        self.assertEqual(backup_target.read_text(), LEGACY)
+
 
 class StatusColumnCompatibilityTests(SimpleTestCase):
     def test_real_database_preserves_legacy_status_data(self):
