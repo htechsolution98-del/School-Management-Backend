@@ -3,6 +3,8 @@
   "venv": "venv",
   "pythonVersion": "3.14",
   "extraPaths": [
-    "."
+    ".",
+    "venv/Lib/site-packages",
+    "sms_shared_core"
   ]
 }
