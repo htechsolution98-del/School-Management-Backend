@@ -1,1 +1,0 @@
-{"school_id":8,"school_slug":"uma-shixan-tirth","roles":["admin(trustee)"],"modules":[]}

@@ -1,0 +1,141 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: sms_redis
+    ports:
+      - "6379:6379"
+
+  auth-identity-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sms_auth_identity
+    command: gunicorn services.auth_identity.wsgi:application --bind 0.0.0.0:8001
+    ports:
+      - "8001:8001"
+    environment:
+      - PORT=8001
+      - REDIS_URL=redis://sms_redis:6379/0
+    depends_on:
+      - redis
+
+  tenant-subscription-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sms_tenant_subscription
+    command: gunicorn services.tenant_subscription.wsgi:application --bind 0.0.0.0:8002
+    ports:
+      - "8002:8002"
+    environment:
+      - PORT=8002
+      - REDIS_URL=redis://sms_redis:6379/0
+    depends_on:
+      - redis
+
+  academic-timetable-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sms_academic_timetable
+    command: gunicorn services.academic_timetable.wsgi:application --bind 0.0.0.0:8003
+    ports:
+      - "8003:8003"
+    environment:
+      - PORT=8003
+    depends_on:
+      - redis
+
+  student-admission-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sms_student_admission
+    command: gunicorn services.student_admission.wsgi:application --bind 0.0.0.0:8004
+    ports:
+      - "8004:8004"
+    environment:
+      - PORT=8004
+    depends_on:
+      - redis
+
+  staff-hr-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sms_staff_hr
+    command: gunicorn services.staff_hr.wsgi:application --bind 0.0.0.0:8005
+    ports:
+      - "8005:8005"
+    environment:
+      - PORT=8005
+    depends_on:
+      - redis
+
+  examination-result-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sms_examination_result
+    command: gunicorn services.examination_result.wsgi:application --bind 0.0.0.0:8006
+    ports:
+      - "8006:8006"
+    environment:
+      - PORT=8006
+    depends_on:
+      - redis
+
+  finance-accounting-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sms_finance_accounting
+    command: gunicorn services.finance_accounting.wsgi:application --bind 0.0.0.0:8007
+    ports:
+      - "8007:8007"
+    environment:
+      - PORT=8007
+    depends_on:
+      - redis
+
+  library-management-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sms_library_management
+    command: gunicorn services.library_management.wsgi:application --bind 0.0.0.0:8008
+    ports:
+      - "8008:8008"
+    environment:
+      - PORT=8008
+    depends_on:
+      - redis
+
+  inventory-asset-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sms_inventory_asset
+    command: gunicorn services.inventory_asset.wsgi:application --bind 0.0.0.0:8009
+    ports:
+      - "8009:8009"
+    environment:
+      - PORT=8009
+    depends_on:
+      - redis
+
+  notification-messaging-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sms_notification_messaging
+    command: daphne -b 0.0.0.0 -p 8010 services.notification_messaging.asgi:application
+    ports:
+      - "8010:8010"
+    environment:
+      - PORT=8010
+      - REDIS_URL=redis://sms_redis:6379/0
+    depends_on:
+      - redis
