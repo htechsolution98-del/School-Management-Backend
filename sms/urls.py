@@ -32,6 +32,7 @@ from django.conf.urls.static import static
 from sms_app.views import *
 from sms_app.auth_views import CustomLoginView, InitDatabaseView, CookieTokenRefreshView
 from sms_app.finance_ledger_views import *
+from sms_app.finance_views import RTESummaryView, BulkCollectStudentFeePaymentView
 from sms_app.library_leave_views import *
 from sms_app.subscription_views import (
     SubscriptionPlanViewSet,
@@ -311,12 +312,20 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     path('health/', health_check, name='health_check'),
     path('api/init-db/', InitDatabaseView.as_view(), name='init_db'),
+    path('api/student-fee-payment/bulk-collect/', BulkCollectStudentFeePaymentView.as_view(), name='bulk-collect-student-fee'),
+    path('student-fee-payment/bulk-collect/', BulkCollectStudentFeePaymentView.as_view()),
+    path('api/student-ledger/schedule/', StudentLedgerScheduleView.as_view()),
+    path('api/student-ledger/generate-fee/', GenerateSingleStudentFeeView.as_view()),
     path('api/',include(router.urls)),
 
     path('api/dashboard-count/', DashboardCountAPIView.as_view(), name='dashboard-count'),
     path('api/access/',CustomLoginView.as_view()),  
     
     path('api/refresh/', CookieTokenRefreshView.as_view(), name='token_refresh'),
+    path('api/rte/summary/', RTESummaryView.as_view(), name='rte-summary'),
+    path('api/finance/rte-summary/', RTESummaryView.as_view(), name='finance-rte-summary'),
+    path('rte/summary/', RTESummaryView.as_view(), name='rte-summary-direct'),
+    path('finance/rte-summary/', RTESummaryView.as_view(), name='finance-rte-summary-direct'),
     
     #FOR ATTENDANCE LOCATION
     path('api/get-location/', GetLocationView.as_view()),
@@ -371,6 +380,8 @@ urlpatterns = [
     path('api/student-fee/razor/verify/', StudentFeeRazorpayVerifyView.as_view()),
     path('api/student-ledger/schedule/', StudentLedgerScheduleView.as_view()),
     path('api/student-ledger/generate-fee/', GenerateSingleStudentFeeView.as_view()),
+    path('api/student-fee-payment/bulk-collect/', BulkCollectStudentFeePaymentView.as_view(), name='bulk-collect-student-fee'),
+    path('student-fee-payment/bulk-collect/', BulkCollectStudentFeePaymentView.as_view()),
     path('api/offline/payment/',OffilinePaymentView.as_view()),
     path('api/get_receipt/<int:student_id>/<int:form_id>/',get_receipt),
     path('api/schoollist/',SchoolListView.as_view()),
