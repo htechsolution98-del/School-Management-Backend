@@ -1,6 +1,7 @@
 import random
 from rest_framework import serializers
 from django.db import transaction
+from django.db.models import Q
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
 from .models import *
@@ -1352,6 +1353,8 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
                 value = field_value.value
 
                 if not field.map_to_student_field:
+                    if not student.name and "name" in (field.label or "").lower() and not any(k in (field.label or "").lower() for k in ["father", "mother", "surname"]):
+                        student.name = value
                     continue
 
                 if field.map_to_student_field not in ALLOWED_STUDENT_FIELD_MAPPINGS:
@@ -1378,7 +1381,7 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
                         if school_class is None and value_str:
                             school_class = SchoolClass.objects.filter(
                                 school=student.school,
-                                school_class=value_str,
+                                school_class__iexact=value_str,
                             ).first()
 
                     if school_class:
@@ -1711,10 +1714,52 @@ from .models import StudentAttendance
 
 
 class StudentGetSerializer(serializers.ModelSerializer):
-    class_name = serializers.CharField(source = "school_class.school_class",read_only = True)
+    class_name = serializers.SerializerMethodField()
+    school_class = serializers.SerializerMethodField()
+    name = serializers.SerializerMethodField()
+
     class Meta:
         model = Student
         fields = ['id', 'gr_no', 'surname', 'name', 'father_name', 'mother_name', 'school_class', 'class_name', 'is_rte', 'created_at']
+
+    def get_school_class(self, obj):
+        if obj.school_class_id:
+            return obj.school_class_id
+        if hasattr(obj, "admission") and obj.admission:
+            fv = obj.admission.field_values.filter(
+                Q(field__map_to_student_field="school_class") | Q(field__label__icontains="class")
+            ).first()
+            if fv and fv.value:
+                val = str(fv.value).strip()
+                sc = SchoolClass.objects.filter(school=obj.school, school_class__iexact=val).first()
+                if sc:
+                    obj.school_class = sc
+                    obj.save(update_fields=["school_class"])
+                    return sc.id
+        return None
+
+    def get_class_name(self, obj):
+        if obj.school_class:
+            return obj.school_class.school_class
+        sc_id = self.get_school_class(obj)
+        if sc_id:
+            sc = SchoolClass.objects.filter(id=sc_id).first()
+            return sc.school_class if sc else None
+        return None
+
+    def get_name(self, obj):
+        if obj.name:
+            return obj.name
+        if hasattr(obj, "admission") and obj.admission:
+            fv = obj.admission.field_values.filter(
+                Q(field__map_to_student_field="name") |
+                (Q(field__label__icontains="name") & ~Q(field__label__icontains="father") & ~Q(field__label__icontains="mother") & ~Q(field__label__icontains="surname"))
+            ).first()
+            if fv and fv.value:
+                obj.name = fv.value
+                obj.save(update_fields=["name"])
+                return fv.value
+        return ""
 
 
 

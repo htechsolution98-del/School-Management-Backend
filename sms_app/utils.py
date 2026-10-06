@@ -359,6 +359,46 @@ def is_before_time(current_time, rule_time):
     return bool(rule_time and current_time < rule_time)
 
 
+def get_student_fee_for_online_payment(user, student_fee_id):
+    student = Student.objects.filter(user=user).select_related("school").first()
+
+    if student:
+        student_fee = StudentFee.objects.select_related(
+            "student", "feetype", "school"
+        ).get(id=student_fee_id, student=student, school=student.school)
+        return student_fee, student.school
+
+    school = getattr(user, "school", None)
+    if not school:
+        raise StudentFee.DoesNotExist
+
+    student_fee = StudentFee.objects.select_related("student", "feetype", "school").get(
+        id=student_fee_id, school=school
+    )
+    return student_fee, school
+
+
+def get_student_fee_payment_for_online_verify(user, order_id):
+    student = Student.objects.filter(user=user).select_related("school").first()
+    queryset = StudentFeePayment.objects.select_related(
+        "student_fee",
+        "student_fee__student",
+        "student_fee__feetype",
+        "student",
+        "feetype",
+    ).filter(razorpay_order_id=order_id)
+
+    if student:
+        return queryset.get(student=student, school=student.school)
+
+    school = getattr(user, "school", None)
+    if not school:
+        raise StudentFeePayment.DoesNotExist
+
+    return queryset.get(school=school)
+
+
+
 
 
 
