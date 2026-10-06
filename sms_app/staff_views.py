@@ -38,11 +38,15 @@ User = get_user_model()
 class DepartmentViewSet(ModelViewSet):
     queryset = Department.objects.all()
     serializer_class = DepartmentSerializer
-    permission_classes = [IsAuthenticated, IsClerkOrTrustee]
+    permission_classes = [IsAuthenticated, IsClerkOrTrustee | IsClerkOrPrincipal]
 
     def get_queryset(self):
         user = self.request.user
         school = getattr(user, 'school', None)
+        if not school:
+            staff = getattr(user, 'staff', None)
+            if staff and staff.school:
+                school = staff.school
         if school:
             return Department.objects.filter(school=school)
         return Department.objects.filter(school__login_id=user)
@@ -51,22 +55,33 @@ class DepartmentViewSet(ModelViewSet):
         user = self.request.user
         school = getattr(user, 'school', None)
         if not school:
+            staff = getattr(user, 'staff', None)
+            if staff and staff.school:
+                school = staff.school
+        if not school:
             school = getattr(user, 'managed_school', None)
             if not school:
                 school = School.objects.filter(login_id=user.id).first()
         if not school:
             raise PermissionDenied("You must belong to a school to create a department.")
+        name = serializer.validated_data.get('name')
+        if name and Department.objects.filter(school=school, name__iexact=name).exists():
+            raise serializers.ValidationError({"name": "A department with this name already exists in your school."})
         serializer.save(school=school)
 
 class StaffView(ModelViewSet):
     queryset = Staff.objects.all()
     serializer_class = StaffSerializer
-    permission_classes = [IsAuthenticated, IsClerkOrTrustee]
+    permission_classes = [IsAuthenticated, IsClerkOrTrustee | IsClerkOrPrincipal]
 
     # 🔹 Get staff list filtered by user's school
     def get_queryset(self):
         user = self.request.user
         school = getattr(user, 'school', None)
+        if not school:
+            staff = getattr(user, 'staff', None)
+            if staff and staff.school:
+                school = staff.school
         if school:
             return Staff.objects.filter(school=school)
         # Fallback for trustee who may be the school owner (login_id)

@@ -11,9 +11,12 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
 from pathlib import Path
+import os
+from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(BASE_DIR / ".env")
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
@@ -37,6 +40,8 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "cloudinary_storage",
+    "cloudinary",
     "sms_app",
     
     "rest_framework",
@@ -81,9 +86,7 @@ TEMPLATES = [
         },
     },
 ]
-from dotenv import load_dotenv
-load_dotenv()
-import os
+
 
 
 REDIS_URL = os.getenv("REDIS_URL")
@@ -125,6 +128,7 @@ SIMPLE_JWT = {
 
 CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:8000",
+    "http://localhost:8000",
     "http://127.0.0.1:3000",
     "http://localhost:3000",
     "https://api.vidyapranali.in",
@@ -136,11 +140,20 @@ CSRF_TRUSTED_ORIGINS = [
     "https://vidyapranali.in",
 ]
 
-SESSION_COOKIE_SAMESITE = "None"
-SESSION_COOKIE_SECURE = True
+CSRF_TRUSTED_ORIGINS = [
+    "http://127.0.0.1:8000",
+    "http://localhost:8000",
+    "http://127.0.0.1:3000",
+    "http://localhost:3000",
+    "https://api.vidyapranali.in",
+    "https://vidyapranali.in",
+]
 
-CSRF_COOKIE_SAMESITE = "None"
-CSRF_COOKIE_SECURE = True
+SESSION_COOKIE_SAMESITE = "None" if not DEBUG else "Lax"
+SESSION_COOKIE_SECURE = not DEBUG
+
+CSRF_COOKIE_SAMESITE = "None" if not DEBUG else "Lax"
+CSRF_COOKIE_SECURE = not DEBUG
 
 WSGI_APPLICATION = "sms.wsgi.application"
 
@@ -243,8 +256,81 @@ USE_TZ = True
 
 STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
+WHITENOISE_MANIFEST_STRICT = False
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+
+# ==============================================================================
+# Cloudinary Configuration (Configured via Environment Variables)
+# ==============================================================================
+CLOUDINARY_CLOUD_NAME = os.getenv("CLOUDINARY_CLOUD_NAME")
+CLOUDINARY_API_KEY = os.getenv("CLOUDINARY_API_KEY")
+CLOUDINARY_API_SECRET = os.getenv("CLOUDINARY_API_SECRET")
+CLOUDINARY_URL = os.getenv("CLOUDINARY_URL")
+
+# Safeguard against accidental swap of API key (numeric) and API secret (alphanumeric)
+if (
+    CLOUDINARY_API_KEY
+    and CLOUDINARY_API_SECRET
+    and not CLOUDINARY_API_KEY.isdigit()
+    and CLOUDINARY_API_SECRET.isdigit()
+):
+    CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET = CLOUDINARY_API_SECRET, CLOUDINARY_API_KEY
+
+CLOUDINARY_STORAGE = {
+    "CLOUD_NAME": CLOUDINARY_CLOUD_NAME,
+    "API_KEY": CLOUDINARY_API_KEY,
+    "API_SECRET": CLOUDINARY_API_SECRET,
+    "SECURE": True,
+}
+
+# Automatically use Cloudinary media storage when credentials are provided
+is_cloudinary_configured = bool(
+    (CLOUDINARY_URL and not CLOUDINARY_URL.startswith("cloudinary://<"))
+    or (
+        CLOUDINARY_CLOUD_NAME
+        and CLOUDINARY_API_KEY
+        and CLOUDINARY_API_SECRET
+        and CLOUDINARY_CLOUD_NAME not in ["your_cloud_name", "", None]
+        and CLOUDINARY_API_KEY not in ["your_api_key", "", None]
+        and CLOUDINARY_API_SECRET not in ["your_api_secret", "", None]
+    )
+)
+
+if is_cloudinary_configured:
+    DEFAULT_FILE_STORAGE = "cloudinary_storage.storage.MediaCloudinaryStorage"
+    STATICFILES_STORAGE = "whitenoise.storage.CompressedStaticFilesStorage"
+    STORAGES = {
+        "default": {
+            "BACKEND": "cloudinary_storage.storage.MediaCloudinaryStorage",
+        },
+        "staticfiles": {
+            "BACKEND": "whitenoise.storage.CompressedStaticFilesStorage",
+        },
+    }
+    # pyrefly: ignore [missing-import]
+    import cloudinary
+    if CLOUDINARY_URL and not CLOUDINARY_URL.startswith("cloudinary://<"):
+        cloudinary.config(cloudinary_url=CLOUDINARY_URL, secure=True)
+    else:
+        cloudinary.config(
+            cloud_name=CLOUDINARY_CLOUD_NAME,
+            api_key=CLOUDINARY_API_KEY,
+            api_secret=CLOUDINARY_API_SECRET,
+            secure=True,
+        )
+else:
+    DEFAULT_FILE_STORAGE = "django.core.files.storage.FileSystemStorage"
+    STATICFILES_STORAGE = "whitenoise.storage.CompressedStaticFilesStorage"
+    STORAGES = {
+        "default": {
+            "BACKEND": "django.core.files.storage.FileSystemStorage",
+        },
+        "staticfiles": {
+            "BACKEND": "whitenoise.storage.CompressedStaticFilesStorage",
+        },
+    }
+
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 EMAIL_HOST = 'smtp.gmail.com'
 EMAIL_POST = 587

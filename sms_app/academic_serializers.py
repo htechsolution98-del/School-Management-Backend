@@ -1,5 +1,9 @@
 from rest_framework import serializers
+import math
+from datetime import date
+from django.utils import timezone
 from .models import *
+from .utils import is_inside_radius, is_after_time, is_before_time
 
 class ClassCategorySerializer(serializers.ModelSerializer):
     class Meta:
@@ -16,11 +20,11 @@ class SchoolClassSerializer(serializers.ModelSerializer):
 
     def validate(self, data):
         request = self.context.get("request")
-        school = request.user.school
+        school = getattr(request.user, "school", None) if request and hasattr(request, "user") else None
         school_class = data.get("school_class")
 
         # Prevent duplicate in DB
-        if school_class and SchoolClass.objects.filter(
+        if school and school_class and SchoolClass.objects.filter(
             school=school, school_class__iexact=school_class
         ).exists():
             raise serializers.ValidationError(
@@ -31,12 +35,13 @@ class SchoolClassSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         request = self.context.get("request")
-        school = request.user.school
+        school = getattr(request.user, "school", None) if request and hasattr(request, "user") else None
 
         return SchoolClass.objects.create(
             school=school,
             school_class=validated_data["school_class"],
             category=validated_data.get("category"),
+            is_rte_applicable=validated_data.get("is_rte_applicable", False),
         )
 
 
@@ -1745,45 +1750,40 @@ class HomeworkSerializer(serializers.ModelSerializer):
 #         return super().create(validated_data)
 
 
-# class HomeworkSubmissionDetailSerializer(serializers.ModelSerializer):
-#     """
-#     Detailed serializer for viewing a single submission with all details.
-#     """
+class HomeworkSubmissionDetailSerializer(serializers.ModelSerializer):
+    """
+    Detailed serializer for viewing a single submission with all details.
+    """
 
-#     student_name = serializers.SerializerMethodField()
-#     homework_title = serializers.CharField(source="homework.title", read_only=True)
-#     teacher_name = serializers.CharField(source="checked_by.staff.name", read_only=True)
+    student_name = serializers.SerializerMethodField()
+    homework_title = serializers.CharField(source="homework.title", read_only=True)
 
-#     class Meta:
-#         model = HomeworkSubmission
-#         fields = [
-#             "id",
-#             "homework",
-#             "homework_title",
-#             "student",
-#             "student_name",
-#             "attachment",
-#             "submitted_at",
-#             "status",
-#             "marks",
-#             "teacher_remark",
-#             "checked_by",
-#             "teacher_name",
-#             "checked_at",
-#         ]
-#         read_only_fields = fields
+    class Meta:
+        model = HomeworkSubmissions
+        fields = [
+            "id",
+            "homework",
+            "homework_title",
+            "student",
+            "student_name",
+            "file",
+            "submitted_at",
+        ]
+        read_only_fields = fields
 
-#     def get_student_name(self, obj):
-#         return " ".join(
-#             filter(
-#                 None,
-#                 [
-#                     obj.student.surname,
-#                     obj.student.name,
-#                     obj.student.father_name,
-#                 ],
-#             )
-#         )
+    def get_student_name(self, obj):
+        if not obj.student:
+            return ""
+        return " ".join(
+            filter(
+                None,
+                [
+                    obj.student.surname,
+                    obj.student.name,
+                    obj.student.father_name,
+                ],
+            )
+        )
 
 
 # class CheckHomeworkSubmissionSerializer(serializers.ModelSerializer):
@@ -1909,7 +1909,7 @@ class HomeworkSubmissionSerializer(serializers.ModelSerializer):
 
         homework = attrs.get("homework")
         if homework and homework.due_date:
-            submission_date = now().date()
+            submission_date = timezone.now().date()
             due_date = homework.due_date
             if submission_date > due_date and self.instance is None:
                 raise serializers.ValidationError(
