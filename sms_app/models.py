@@ -559,6 +559,9 @@ class AdmissionDocument(models.Model):
 
     file = models.FileField(upload_to="admission_documents/")
 
+    is_verified = models.BooleanField(default=False)
+    verified_at = models.DateTimeField(null=True, blank=True)
+    verified_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="+")
     uploaded_at = models.DateTimeField(auto_now_add=True)
     created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
@@ -1328,6 +1331,10 @@ class FeeType(models.Model):
     billing_cycle = models.CharField(
         max_length=20, choices=BILLING_CHOICES, null=True, blank=True
     )
+    is_rte_applicable = models.BooleanField(
+        default=False,
+        help_text="If True/Yes, RTE students pay normally. If False/No, RTE students pay ₹0 and the fee is claimed from Government.",
+    )
     created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     def __str__(self):
@@ -1376,6 +1383,12 @@ class StudentFee(models.Model):
         ("paid", "Paid"),
         ("cancelled", "Cancelled"),
     ]
+    RTE_GOVT_STATUS_CHOICES = [
+        ("not_applicable", "Not Applicable"),
+        ("pending", "Pending Claim"),
+        ("partially_received", "Partially Received"),
+        ("received", "Received"),
+    ]
     LATE_FEE_TYPE_CHOICES = [
         ("fixed", "Fixed"),
         ("per_day", "Per Day"),
@@ -1415,6 +1428,14 @@ class StudentFee(models.Model):
     fine_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     paid_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
 
+    # RTE Government Claim Tracking
+    is_rte_govt_claim = models.BooleanField(default=False)
+    rte_govt_claim_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    rte_govt_paid_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    rte_govt_status = models.CharField(
+        max_length=20, choices=RTE_GOVT_STATUS_CHOICES, default="not_applicable"
+    )
+
     due_date = models.DateField(null=True, blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
     payment_mode = models.CharField(max_length=100, null=True, blank=True)
@@ -1428,30 +1449,43 @@ class StudentFee(models.Model):
         unique_together = ("student", "feetype", "academic_year", "billing_period")
 
     @property
+    def is_student_exempt_rte(self):
+        """Returns True if student is RTE and this fee type is NOT marked as RTE applicable."""
+        is_rte_student = getattr(self.student, "is_rte", False)
+        is_fee_rte_applicable = getattr(self.feetype, "is_rte_applicable", False) if self.feetype else False
+        return is_rte_student and not is_fee_rte_applicable
+
+    @property
     def payable_amount(self):
-        if getattr(self.student, "is_rte", False):
+        if self.is_student_exempt_rte:
             return Decimal("0.00")
-        base_amount = self.amount or 0
-        return base_amount + self.fine_amount - self.discount_amount
+        base_amount = self.amount or Decimal("0.00")
+        return max(Decimal("0.00"), base_amount + self.fine_amount - self.discount_amount)
 
     @property
     def balance_amount(self):
-        if getattr(self.student, "is_rte", False):
+        if self.is_student_exempt_rte:
             return Decimal("0.00")
-        return self.payable_amount - self.paid_amount
+        return max(Decimal("0.00"), self.payable_amount - self.paid_amount)
+
+    @property
+    def rte_govt_balance_amount(self):
+        if not self.is_rte_govt_claim:
+            return Decimal("0.00")
+        return max(Decimal("0.00"), self.rte_govt_claim_amount - self.rte_govt_paid_amount)
 
     def calculate_late_fee(self, today=None):
         from datetime import timedelta
         from django.utils import timezone
 
-        if getattr(self.student, "is_rte", False):
+        if self.is_student_exempt_rte:
             return Decimal("0.00")
 
         if (
             not self.late_fee_enabled
             or not self.due_date
         ):
-            return 0
+            return Decimal("0.00")
             
         if self.status in ["paid", "cancelled"]:
             return self.fine_amount
@@ -1460,7 +1494,7 @@ class StudentFee(models.Model):
         penalty_start_date = self.due_date + timedelta(days=self.grace_days)
 
         if today <= penalty_start_date:
-            return 0
+            return Decimal("0.00")
 
         if self.late_fee_type == "fixed":
             late_fee = self.late_fee_amount
@@ -1468,7 +1502,7 @@ class StudentFee(models.Model):
             late_days = (today - penalty_start_date).days
             late_fee = self.late_fee_amount * late_days
         else:
-            late_fee = 0
+            late_fee = Decimal("0.00")
 
         if self.max_late_fee is not None:
             late_fee = min(late_fee, self.max_late_fee)
@@ -1486,21 +1520,49 @@ class StudentFee(models.Model):
         from django.db.models import Sum
         from django.utils import timezone
 
-        if getattr(self.student, "is_rte", False):
-            self.amount = Decimal("0.00")
+        if self.is_student_exempt_rte:
+            self.is_rte_govt_claim = True
+            if not self.rte_govt_claim_amount and self.amount:
+                self.rte_govt_claim_amount = self.amount
+            elif not self.rte_govt_claim_amount and self.fee_wise_class:
+                self.rte_govt_claim_amount = self.fee_wise_class.amount or Decimal("0.00")
+
+            # Calculate government payments received
+            total_govt_paid = (
+                self.payments.filter(payer_type="government", is_bounced=False)
+                .filter(Q(is_verified=True) | ~Q(payment_mode="cheque"))
+                .aggregate(total=Sum("amount"))["total"]
+                or Decimal("0.00")
+            )
+            self.rte_govt_paid_amount = total_govt_paid
+            if total_govt_paid >= self.rte_govt_claim_amount and self.rte_govt_claim_amount > 0:
+                self.rte_govt_status = "received"
+                self.status = "paid"
+                if not self.paid_at:
+                    self.paid_at = timezone.now()
+            elif total_govt_paid > 0:
+                self.rte_govt_status = "partially_received"
+                self.status = "partial"
+                self.paid_at = None
+            else:
+                self.rte_govt_status = "pending"
+                self.status = "pending"
+                self.paid_at = None
+
+            # Student portion is completely settled (₹0)
             self.discount_amount = Decimal("0.00")
             self.fine_amount = Decimal("0.00")
             self.paid_amount = Decimal("0.00")
             self.late_fee_enabled = False
             self.late_fee_amount = Decimal("0.00")
             self.max_late_fee = Decimal("0.00")
-            self.status = "paid"
-            self.paid_at = timezone.now()
-            self.payment_mode = None
-            self.transaction_id = None
+
             self.save(
                 update_fields=[
-                    "amount",
+                    "is_rte_govt_claim",
+                    "rte_govt_claim_amount",
+                    "rte_govt_paid_amount",
+                    "rte_govt_status",
                     "discount_amount",
                     "fine_amount",
                     "paid_amount",
@@ -1509,17 +1571,21 @@ class StudentFee(models.Model):
                     "max_late_fee",
                     "status",
                     "paid_at",
-                    "payment_mode",
-                    "transaction_id",
                 ]
             )
             return
 
+        # Normal Student Fee Payment Status Calculation
+        self.is_rte_govt_claim = False
+        self.rte_govt_status = "not_applicable"
+        self.rte_govt_claim_amount = Decimal("0.00")
+        self.rte_govt_paid_amount = Decimal("0.00")
+
         total_paid = (
-            self.payments.filter(is_bounced=False)
+            self.payments.filter(payer_type="student", is_bounced=False)
             .filter(Q(is_verified=True) | ~Q(payment_mode="cheque"))
             .aggregate(total=Sum("amount"))["total"]
-            or 0
+            or Decimal("0.00")
         )
         self.paid_amount = total_paid
 
@@ -1534,7 +1600,7 @@ class StudentFee(models.Model):
             self.paid_at = None
 
         latest_payment = (
-            self.payments.filter(is_bounced=False)
+            self.payments.filter(payer_type="student", is_bounced=False)
             .filter(Q(is_verified=True) | ~Q(payment_mode="cheque"))
             .order_by("-payment_date", "-created_at")
             .first()
@@ -1548,6 +1614,10 @@ class StudentFee(models.Model):
 
         self.save(
             update_fields=[
+                "is_rte_govt_claim",
+                "rte_govt_claim_amount",
+                "rte_govt_paid_amount",
+                "rte_govt_status",
                 "paid_amount",
                 "status",
                 "paid_at",
@@ -1573,15 +1643,26 @@ class StudentFee(models.Model):
         if self.student and not self.school:
             self.school = self.student.school
 
-        if getattr(self.student, "is_rte", False):
-            self.amount = Decimal("0.00")
+        if self.is_student_exempt_rte:
+            self.is_rte_govt_claim = True
+            if self.amount and (not self.rte_govt_claim_amount or self.rte_govt_claim_amount == Decimal("0.00")):
+                self.rte_govt_claim_amount = self.amount
+            elif self.fee_wise_class and (not self.rte_govt_claim_amount or self.rte_govt_claim_amount == Decimal("0.00")):
+                self.rte_govt_claim_amount = self.fee_wise_class.amount or Decimal("0.00")
+            if not self.rte_govt_status or self.rte_govt_status == "not_applicable":
+                self.rte_govt_status = "pending"
             self.discount_amount = Decimal("0.00")
             self.fine_amount = Decimal("0.00")
             self.paid_amount = Decimal("0.00")
             self.late_fee_enabled = False
             self.late_fee_amount = Decimal("0.00")
             self.max_late_fee = Decimal("0.00")
-            self.status = "paid"
+            if self.rte_govt_status == "received":
+                self.status = "paid"
+            elif self.rte_govt_status == "partially_received":
+                self.status = "partial"
+            else:
+                self.status = "pending"
 
         super().save(*args, **kwargs)
 
@@ -1597,6 +1678,11 @@ class StudentFeePayment(models.Model):
         ("bank_transfer", "Bank Transfer"),
         ("upi", "UPI"),
         ("card", "Card"),
+        ("govt_rte", "Government RTE Reimbursement"),
+    ]
+    PAYER_TYPE_CHOICES = [
+        ("student", "Student / Parent"),
+        ("government", "Government RTE Claim"),
     ]
 
     school = models.ForeignKey(School, on_delete=models.CASCADE, null=True, blank=True)
@@ -1608,6 +1694,9 @@ class StudentFeePayment(models.Model):
     )
     feetype = models.ForeignKey(FeeType, on_delete=models.CASCADE)
 
+    payer_type = models.CharField(
+        max_length=20, choices=PAYER_TYPE_CHOICES, default="student"
+    )
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     payment_mode = models.CharField(max_length=20, choices=PAYMENT_MODE_CHOICES)
     transaction_id = models.CharField(max_length=255, null=True, blank=True)
@@ -1648,6 +1737,16 @@ class StudentFeePayment(models.Model):
             self.feetype = self.student_fee.feetype
 
         super().save(*args, **kwargs)
+
+        if self.student_fee:
+            self.student_fee.refresh_payment_status()
+
+    def delete(self, *args, **kwargs):
+        fee = self.student_fee
+        res = super().delete(*args, **kwargs)
+        if fee:
+            fee.refresh_payment_status()
+        return res
 
     def __str__(self):
         return f"{self.student} - {self.feetype} - {self.amount}"
@@ -2435,6 +2534,8 @@ class StudentDocument(models.Model):
         choices=DOCUMENT_TYPES,
     )
 
+    profile_field = models.ForeignKey("SchoolProfileField", on_delete=models.SET_NULL, null=True, blank=True, related_name="documents")
+
     title = models.CharField(max_length=255)
 
     description = models.TextField(
@@ -2457,6 +2558,9 @@ class StudentDocument(models.Model):
         default=True
     )
 
+    is_verified = models.BooleanField(default=False)
+    verified_at = models.DateTimeField(null=True, blank=True)
+    verified_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="+")
     uploaded_at = models.DateTimeField(
         auto_now_add=True
     )
@@ -3208,6 +3312,8 @@ class RTEDocument(models.Model):
     admission = models.ForeignKey(Admission, on_delete=models.CASCADE, related_name="rte_documents", null=True, blank=True)
     document_name = models.CharField(max_length=255)
     document_file = models.FileField(upload_to="rte_documents/")
+    verified_at = models.DateTimeField(null=True, blank=True)
+    verified_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="+")
     uploaded_at = models.DateTimeField(auto_now_add=True)
     is_verified = models.BooleanField(default=False)
     expiry_date = models.DateField(null=True, blank=True)
@@ -3615,3 +3721,20 @@ class SubscriptionSetting(models.Model):
 
 # --- INVENTORY & STUDENT ITEM MANAGEMENT MODULE ---
 from .inventory_models import *
+
+
+class SchoolProfileField(models.Model):
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name="profile_fields")
+    kind = models.CharField(max_length=10, choices=[("ID", "Government ID"), ("DOCUMENT", "Document")])
+    label = models.CharField(max_length=100)
+    key = models.CharField(max_length=100)
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["school", "kind", "key"], name="unique_school_profile_field")]
+
+
+class StudentProfileValue(models.Model):
+    student = models.ForeignKey(Student, on_delete=models.CASCADE, related_name="profile_values")
+    field = models.ForeignKey(SchoolProfileField, on_delete=models.CASCADE)
+    value = models.CharField(max_length=255, blank=True)
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["student", "field"], name="unique_student_profile_value")]

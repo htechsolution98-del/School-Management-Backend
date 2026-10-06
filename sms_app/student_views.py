@@ -21,6 +21,9 @@ from django.db import transaction
 from django.db.models import Q
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.decorators import action
+from .student_profile_actions import StudentProfileActionsMixin
+from .student_profile_serializers import StudentProfileSerializer
+from .student_profile_services import profile_queryset, completion
 
 class AdmissionFormViewSet(ModelViewSet):
     queryset = AdmissionForm.objects.all()
@@ -1173,9 +1176,9 @@ class AssignRollNumberAPIView(APIView):
         )
 
 
-class StudentViewSet(ModelViewSet):
+class StudentViewSet(StudentProfileActionsMixin, ModelViewSet):
     queryset = Student.objects.all()
-    serializer_class = StudentGetSerializer
+    serializer_class = StudentProfileSerializer
     http_method_names = ["get", "post", "patch", "put", "delete", "head", "options"]
 
     def get_permissions(self):
@@ -1230,17 +1233,46 @@ class StudentViewSet(ModelViewSet):
         search = self.request.query_params.get("search") or self.request.query_params.get("q")
         if search:
             search = str(search).strip()
-            qs = qs.filter(
-                Q(name__icontains=search)
-                | Q(surname__icontains=search)
-                | Q(gr_no__icontains=search)
-                | Q(roll_no__icontains=search)
-                | Q(abc_id__icontains=search)
-                | Q(udise_no__icontains=search)
-                | Q(aadhar_number__icontains=search)
-            )
+            for term in search.split():
+                qs = qs.filter(
+                    Q(name__icontains=term) | Q(surname__icontains=term)
+                    | Q(father_name__icontains=term) | Q(mother_name__icontains=term)
+                    | Q(gr_no__icontains=term) | Q(roll_no__icontains=term)
+                    | Q(abc_id__icontains=term) | Q(udise_no__icontains=term)
+                    | Q(aadhar_number__icontains=term) | Q(mobile__icontains=term)
+                    | Q(user__email__icontains=term)
+                )
 
-        return qs.select_related("school_class", "academic_year", "verified_by", "admission", "user").order_by("school_class", "roll_no", "id")
+        missing = self.request.query_params.get("missing")
+        if missing == "ids":
+            qs = qs.filter(Q(abc_id__isnull=True) | Q(abc_id="") | Q(udise_no__isnull=True) | Q(udise_no="") | Q(aadhar_number__isnull=True) | Q(aadhar_number=""))
+        elif missing == "documents":
+            ids = [student.id for student in profile_queryset(qs) if completion(student)["missing_documents"] or not completion(student)["document_count"]]
+            qs = qs.filter(pk__in=ids)
+        return profile_queryset(qs).order_by("school_class", "roll_no", "id")
+
+    def get_object(self):
+        student = super().get_object()
+        if self.action in {"profile_documents", "profile_document"} and student.school_id != getattr(self.request.user, "school_id", None):
+            from rest_framework.exceptions import NotFound
+            raise NotFound("Student not found in your school.")
+        return student
+
+    def paginate_queryset(self, queryset):
+        # Existing Classes clients expect an array. Pagination is opt-in on this same endpoint.
+        if "page" in self.request.query_params or "page_size" in self.request.query_params:
+            from rest_framework.pagination import PageNumberPagination
+            paginator = PageNumberPagination()
+            paginator.page_size = 50
+            paginator.page_size_query_param = "page_size"
+            paginator.max_page_size = 200
+            self._profile_paginator = paginator
+            return paginator.paginate_queryset(queryset, self.request, view=self)
+        return super().paginate_queryset(queryset)
+
+    def get_paginated_response(self, data):
+        paginator = getattr(self, "_profile_paginator", None)
+        return paginator.get_paginated_response(data) if paginator else super().get_paginated_response(data)
 
     def perform_update(self, serializer):
         is_verified = serializer.validated_data.get("is_verified")

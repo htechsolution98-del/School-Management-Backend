@@ -16,6 +16,40 @@ class Migration(migrations.Migration):
 
     operations = [
         migrations.SeparateDatabaseAndState(
+            database_operations=[
+                migrations.RunSQL(
+                    sql="""
+                    DROP TABLE IF EXISTS inventory_purchase_item CASCADE;
+                    DROP TABLE IF EXISTS inventory_purchase CASCADE;
+                    DROP TABLE IF EXISTS inventory_supplier CASCADE;
+                    DROP TABLE IF EXISTS inventory_stock_adjustment_item CASCADE;
+                    DROP TABLE IF EXISTS inventory_stock_adjustment CASCADE;
+                    DROP TABLE IF EXISTS inventory_stock_transaction CASCADE;
+                    DROP TABLE IF EXISTS inventory_student_item_issue_item CASCADE;
+                    DROP TABLE IF EXISTS inventory_student_item_issue CASCADE;
+                    DROP TABLE IF EXISTS inventory_student_item_entitlement CASCADE;
+                    DROP TABLE IF EXISTS inventory_item_pricing CASCADE;
+                    DROP TABLE IF EXISTS inventory_item_size CASCADE;
+                    DROP TABLE IF EXISTS inventory_item_color CASCADE;
+                    DROP TABLE IF EXISTS inventory_item CASCADE;
+                    DROP TABLE IF EXISTS inventory_item_category CASCADE;
+                    DROP TABLE IF EXISTS inventory_audit_log CASCADE;
+                    DROP TABLE IF EXISTS inventory_bundle_item CASCADE;
+                    DROP TABLE IF EXISTS inventory_bundle CASCADE;
+                    DROP TABLE IF EXISTS inventory_return_item CASCADE;
+                    DROP TABLE IF EXISTS inventory_return CASCADE;
+                    DROP TABLE IF EXISTS inventory_stock_balance CASCADE;
+                    DROP TABLE IF EXISTS inventory_opening_stock CASCADE;
+                    DROP TABLE IF EXISTS inventory_warehouse CASCADE;
+                    DROP TABLE IF EXISTS inventory_unit CASCADE;
+                    DROP TABLE IF EXISTS inventory_subcategory CASCADE;
+                    DROP TABLE IF EXISTS inventory_category CASCADE;
+                    DROP TABLE IF EXISTS inventory_budget CASCADE;
+                    DROP TABLE IF EXISTS student_id_card CASCADE;
+                    """,
+                    reverse_sql=""
+                ),
+            ],
             state_operations=[
                 migrations.AlterUniqueTogether(name='inventorybundle', unique_together=None),
                 migrations.AlterUniqueTogether(name='inventorycategory', unique_together=None),
