@@ -43,6 +43,19 @@ INSTALLED_APPS = [
     "cloudinary_storage",
     "cloudinary",
     "sms_app",
+    "sms_shared_core",
+    
+    # Microservice Apps
+    "services.auth_identity",
+    "services.tenant_subscription",
+    "services.academic_timetable",
+    "services.student_admission",
+    "services.staff_hr",
+    "services.examination_result",
+    "services.finance_accounting",
+    "services.library_management",
+    "services.inventory_asset",
+    "services.notification_messaging",
     
     "rest_framework",
     "rest_framework_simplejwt",
@@ -50,7 +63,6 @@ INSTALLED_APPS = [
     
     "corsheaders",
     "drf_yasg",
-    
 ]
 ASGI_APPLICATION = "sms.asgi.application"
 ALLOWED_HOSTS = ['*']  # for testing

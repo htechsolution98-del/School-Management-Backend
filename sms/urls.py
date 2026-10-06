@@ -515,6 +515,18 @@ inventory_router.register(r'reports', InventoryReportViewSet, basename='inventor
 urlpatterns += [
     path('api/inventory/', include(inventory_router.urls)),
     path('inventory/', include(inventory_router.urls)),
+    
+    # Microservice Routes
+    path('', include('services.auth_identity.urls')),
+    path('', include('services.tenant_subscription.urls')),
+    path('', include('services.academic_timetable.urls')),
+    path('', include('services.student_admission.urls')),
+    path('', include('services.staff_hr.urls')),
+    path('', include('services.examination_result.urls')),
+    path('', include('services.finance_accounting.urls')),
+    path('', include('services.library_management.urls')),
+    path('', include('services.inventory_asset.urls')),
+    path('', include('services.notification_messaging.urls')),
 ]
 
 if settings.DEBUG:
