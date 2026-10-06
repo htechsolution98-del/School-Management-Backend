@@ -22,10 +22,12 @@ load_dotenv(BASE_DIR / ".env")
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = "django-insecure-6d4gt&zg%n8(@qd1@=x0lcnrn%49q@r(xd1=fv6rs#8zmll^zj"
+SECRET_KEY = os.getenv(
+    "SECRET_KEY", "django-insecure-6d4gt&zg%n8(@qd1@=x0lcnrn%49q@r(xd1=fv6rs#8zmll^zj"
+)
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.getenv("DEBUG", "True").lower() in ["true", "1", "yes"]
 
 # ALLOWED_HOSTS = []
 
@@ -209,8 +211,8 @@ REST_FRAMEWORK = {
     "DATE_INPUT_FORMATS": ["%d-%m-%Y", "%Y-%m-%d", "iso-8601"],
 }
 
-RAZOR_PAY_KEY_ID = 'rzp_test_SFctsjgfvcrQ6h'
-RAZOR_PAY_SECRET_KEY = 'tOuPZYUHmzksgtc0370q89fO'
+RAZOR_PAY_KEY_ID = os.getenv("RAZOR_PAY_KEY_ID", "rzp_test_SFctsjgfvcrQ6h")
+RAZOR_PAY_SECRET_KEY = os.getenv("RAZOR_PAY_SECRET_KEY", "tOuPZYUHmzksgtc0370q89fO")
 
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
@@ -367,12 +369,13 @@ else:
         },
     }
 
-EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
-EMAIL_HOST = 'smtp.gmail.com'
-EMAIL_POST = 587
-EMAIL_USE_TLS = True
-EMAIL_HOST_USER = 'yash.error.1@gmail.com'
-EMAIL_HOST_PASSWORD = 'zjsartihpvaqfvpi'
+EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+EMAIL_HOST = os.getenv("EMAIL_HOST", "smtp.gmail.com")
+EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
+EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", "True").lower() in ["true", "1", "yes"]
+EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "yash.error.1@gmail.com")
+EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "zjsartihpvaqfvpi")
 DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
-FACEPP_API_KEY='bjE_bVqsDDgX6ekpuqdDjwZnnydn27zG'
-FACEPP_API_SECRET='waQF9vWlZyH-HQtqKJezJlX7vAAjNYY4'
+
+FACEPP_API_KEY = os.getenv("FACEPP_API_KEY", "bjE_bVqsDDgX6ekpuqdDjwZnnydn27zG")
+FACEPP_API_SECRET = os.getenv("FACEPP_API_SECRET", "waQF9vWlZyH-HQtqKJezJlX7vAAjNYY4")
