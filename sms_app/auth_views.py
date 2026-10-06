@@ -53,7 +53,7 @@ class CookieTokenRefreshView(TokenRefreshView):
         if not refresh_token:
             return Response(
                 {"detail": "Refresh token is required.", "code": "token_not_valid"},
-                status=status.HTTP_400_BAD_REQUEST,
+                status=status.HTTP_401_UNAUTHORIZED,
             )
 
         data = request.data.copy() if hasattr(request.data, "copy") else dict(request.data)
