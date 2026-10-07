@@ -5,6 +5,7 @@ from sms_app.staff_views import (
     StaffView,
     StaffListView,
     GetTeacherView,
+    TeacherWorkloadViewSet,
 )
 from sms_app.library_leave_views import (
     LeaveTemplateViewSet,
@@ -18,6 +19,7 @@ router = DefaultRouter()
 router.register(r"departments", DepartmentViewSet, basename="departments")
 router.register(r"staff", StaffView, basename="staff")
 router.register(r"staff-list", StaffListView, basename="staff-list")
+router.register(r"teacher-workload", TeacherWorkloadViewSet, basename="teacher-workload")
 router.register(r"leave-templates", LeaveTemplateViewSet, basename="leave-templates")
 router.register(r"leave-types", LeaveTypeViewSet, basename="leave-types")
 

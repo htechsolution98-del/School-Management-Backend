@@ -565,10 +565,100 @@ from rest_framework.permissions import IsAuthenticated
 # from yourapp.permissions import IsCLerk
 
 
-# ----------------------------
-# Helpers
-# ----------------------------
+from rest_framework.decorators import action
+from django.db.models import Q
 
 
+class TeacherWorkloadViewSet(ModelViewSet):
+    queryset = Staff.objects.all()
+    serializer_class = TeacherWorkloadSerializer
+    permission_classes = [IsAuthenticated]
+    http_method_names = ["get", "patch", "put", "head", "options"]
 
+    def get_school(self):
+        user = self.request.user
+        school = getattr(user, "school", None)
+        if not school:
+            staff = getattr(user, "staff", None)
+            if staff and staff.school:
+                school = staff.school
+        return school
+
+    def get_queryset(self):
+        school = self.get_school()
+        if not school:
+            return Staff.objects.none()
+
+        queryset = (
+            Staff.objects.filter(school=school)
+            .filter(
+                Q(category__iexact="teacher")
+                | Q(user__groups__name__iexact="teacher")
+                | Q(assignclass__isnull=False)
+            )
+            .select_related("department", "user")
+            .distinct()
+            .order_by("name", "id")
+        )
+
+        search = self.request.query_params.get("search")
+        if search:
+            queryset = queryset.filter(
+                Q(name__icontains=search)
+                | Q(email__icontains=search)
+                | Q(department__name__icontains=search)
+            )
+
+        return queryset
+
+    @action(detail=False, methods=["patch", "post"], url_path="bulk-update")
+    def bulk_update(self, request):
+        school = self.get_school()
+        if not school:
+            return Response({"detail": "School not found."}, status=status.HTTP_400_BAD_REQUEST)
+
+        teacher_ids = request.data.get("teacher_ids", [])
+        update_fields = {}
+
+        # Support uniform daily limit
+        uniform_daily = request.data.get("uniform_daily_periods") or request.data.get("max_daily_periods")
+        if uniform_daily is not None:
+            val = int(uniform_daily)
+            if val < 0 or val > 15:
+                return Response({"detail": "Daily limit must be between 0 and 15."}, status=status.HTTP_400_BAD_REQUEST)
+            for d in ["mon", "tue", "wed", "thu", "fri", "sat"]:
+                update_fields[f"max_periods_{d}"] = val
+
+        # Individual day fields
+        for d in ["mon", "tue", "wed", "thu", "fri", "sat"]:
+            f = f"max_periods_{d}"
+            if f in request.data:
+                val = int(request.data[f])
+                if val < 0 or val > 15:
+                    return Response({"detail": f"{d.capitalize()} limit must be between 0 and 15."}, status=status.HTTP_400_BAD_REQUEST)
+                update_fields[f] = val
+
+        max_weekly = request.data.get("max_weekly_periods")
+        max_consecutive = request.data.get("max_consecutive_periods")
+
+        if max_weekly is not None:
+            val = int(max_weekly)
+            if val < 1 or val > 60:
+                return Response({"detail": "Weekly limit must be between 1 and 60."}, status=status.HTTP_400_BAD_REQUEST)
+            update_fields["max_weekly_periods"] = val
+        if max_consecutive is not None:
+            val = int(max_consecutive)
+            if val < 1 or val > 10:
+                return Response({"detail": "Consecutive limit must be between 1 and 10."}, status=status.HTTP_400_BAD_REQUEST)
+            update_fields["max_consecutive_periods"] = val
+
+        if not update_fields:
+            return Response({"detail": "No valid fields provided to update."}, status=status.HTTP_400_BAD_REQUEST)
+
+        qs = self.get_queryset()
+        if teacher_ids:
+            qs = qs.filter(id__in=teacher_ids)
+
+        updated_count = qs.update(**update_fields)
+        return Response({"message": f"Successfully updated {updated_count} teachers.", "count": updated_count})
 

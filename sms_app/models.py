@@ -61,8 +61,8 @@ class School(models.Model):
     updated_at = models.DateTimeField(auto_now=True, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
-    def __str__(self):
-        return self.name
+    def __str__(self) -> str:
+        return self.name or ""
 
     class Meta:
         db_table = "school"
@@ -77,9 +77,6 @@ class School(models.Model):
         print("Slug after:", self.slug)
 
         super().save(*args, **kwargs)
-
-    def __str__(self):
-        return self.name
 
 
 # -----------SCHOLL FEATURE---------
@@ -162,7 +159,7 @@ class CustomUser(AbstractUser):
         School, on_delete=models.CASCADE, null=True, blank=True, related_name="users"
     )
 
-    email = models.EmailField(null=True, blank=True)
+    email = models.EmailField(null=True, blank=True)  # type: ignore
     mobile = models.CharField(max_length=15, unique=True, null=True, blank=True)
 
     USERNAME_FIELD = "username"  # important change
@@ -224,6 +221,15 @@ class Staff(models.Model):
     salary = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     is_active = models.BooleanField(default=True)
 
+    max_periods_mon = models.PositiveIntegerField(default=5)
+    max_periods_tue = models.PositiveIntegerField(default=5)
+    max_periods_wed = models.PositiveIntegerField(default=5)
+    max_periods_thu = models.PositiveIntegerField(default=5)
+    max_periods_fri = models.PositiveIntegerField(default=5)
+    max_periods_sat = models.PositiveIntegerField(default=5)
+    max_weekly_periods = models.PositiveIntegerField(default=25)
+    max_consecutive_periods = models.PositiveIntegerField(default=3)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -268,6 +274,7 @@ class AcademicYear(models.Model):
             year = start_year
             if (
                 self.start_month
+                and self.end_month
                 and self.start_month > self.end_month
                 and month < self.start_month
             ):
@@ -1170,7 +1177,7 @@ class LeaveType(models.Model):
             if (self.category and getattr(self.category, "feature", None))
             else ""
         )
-        return f"{cat_name} - {self.leave_type}" if cat_name else str(self.leave_type or "LeaveType")
+        return f"{cat_name} - {self.leave_type}" if cat_name else (self.leave_type or "LeaveType")
 
     class Meta:
         db_table = "leave_type"
@@ -1628,7 +1635,8 @@ class StudentFee(models.Model):
 
     def save(self, *args, **kwargs):
         if self.fee_wise_class:
-            self.feetype = self.fee_wise_class.feetype
+            if self.fee_wise_class.feetype is not None:
+                self.feetype = self.fee_wise_class.feetype
             if self.amount is None:
                 self.amount = self.fee_wise_class.amount
             if not self.pk:
@@ -1870,7 +1878,8 @@ class StaffSalaryPayment(models.Model):
 
     def save(self, *args, **kwargs):
         if self.staff:
-            self.school = self.staff.school
+            if self.staff.school is not None:
+                self.school = self.staff.school
             self.staff_name = self.staff.name
             self.staff_category = self.staff.category
 
@@ -2324,8 +2333,8 @@ class CertificateType(models.Model):
     school = models.ForeignKey(School, on_delete=models.CASCADE, null=True)
     created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
     
-    def __str__(self):
-        return self.name
+    def __str__(self) -> str:
+        return self.name or ""
     
     class Meta:
         db_table = "certificate_type"
