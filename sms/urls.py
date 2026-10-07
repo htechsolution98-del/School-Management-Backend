@@ -209,6 +209,7 @@ router.register(r'board-meetings', BoardMeetingViewSet, basename='board-meetings
 router.register(r'homework', HomeworkViewSet, basename='homework')
 router.register(r'homework-submission', HomeworkSubmissionViewSet, basename='homework-submission')
 router.register(r'students', StudentViewSet, basename='students')
+router.register(r'student', StudentViewSet, basename='student-singular')
 router.register(r'studentget', StudentGetView, basename='studentget')
 
 
@@ -335,6 +336,8 @@ urlpatterns = [
     
     path('api/api-login/', LoginView.as_view()),
     path('api/me/', CurrentUserProfileView.as_view(), name='current_user_profile'),
+    path('api/profile/', CurrentUserProfileView.as_view(), name='profile_alias'),
+    path('api/user-profile/', CurrentUserProfileView.as_view(), name='user_profile_alias'),
     
     # path('school/<int:school_id>/', school_wise_report, name='school_wise_report'),
     

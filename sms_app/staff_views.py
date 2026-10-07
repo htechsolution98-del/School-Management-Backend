@@ -226,12 +226,38 @@ class StaffView(ModelViewSet):
 class GetTeacherView(ModelViewSet):
     queryset = Staff.objects.all()
     serializer_class = GetTeacherSerializer
-    permission_classes = [IsAuthenticated, IsCLerk]
+    permission_classes = [IsAuthenticated, IsClerkOrPrincipal]
     http_method_names = ["get"]
 
     def get_queryset(self):
-        school = self.request.user.school
-        return Staff.objects.filter(school=school, user__groups__name="TEACHER")
+        user = self.request.user
+        school = getattr(user, 'school', None)
+        if not school:
+            staff = getattr(user, 'staff', None)
+            if staff and staff.school:
+                school = staff.school
+        if not school:
+            school = getattr(user, 'managed_school', None)
+        if not school:
+            school = School.objects.filter(login_id=user.id).first()
+
+        qs = Staff.objects.all()
+        if school:
+            qs = qs.filter(school=school)
+        elif not user.is_superuser:
+            return Staff.objects.none()
+
+        teacher_qs = qs.filter(
+            Q(user__groups__name__icontains="teacher") |
+            Q(category__icontains="teacher") |
+            Q(user__role__icontains="teacher")
+        ).distinct()
+
+        if teacher_qs.exists():
+            return teacher_qs
+
+        active_qs = qs.filter(is_active=True)
+        return active_qs if active_qs.exists() else qs
 
 
 # =============TO ask more=========

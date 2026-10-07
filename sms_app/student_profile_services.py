@@ -13,14 +13,32 @@ from .models import AdmissionDocument, AdmissionFieldValue, DocumentField, RTEDo
 
 logger = logging.getLogger(__name__)
 AADHAAR_ERROR = "Aadhaar number must be exactly 12 digits."
+UDISE_ERROR = "UDISE number must be exactly 11 digits."
+ABC_ID_ERROR = "ABC ID must be exactly 12 digits."
 
 
 def validate_aadhaar(value):
     if value in (None, ""):
         return value
-    if not isinstance(value, str) or not re.fullmatch(r"[0-9]{12}", value):
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9]{12}", value.strip()):
         raise serializers.ValidationError(AADHAAR_ERROR)
-    return value
+    return value.strip()
+
+
+def validate_udise(value):
+    if value in (None, ""):
+        return value
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9]{11}", value.strip()):
+        raise serializers.ValidationError(UDISE_ERROR)
+    return value.strip()
+
+
+def validate_abc_id(value):
+    if value in (None, ""):
+        return value
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9]{12}", value.strip()):
+        raise serializers.ValidationError(ABC_ID_ERROR)
+    return value.strip()
 
 
 def is_aadhaar_field(field):

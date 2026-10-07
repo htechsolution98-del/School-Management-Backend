@@ -497,9 +497,22 @@ class ChangeModuleSerializer(serializers.ModelSerializer):
 
 
 class GetTeacherSerializer(serializers.ModelSerializer):
+    name = serializers.SerializerMethodField()
+
     class Meta:
         model = Staff
-        fields = ["created_at", "id", "name"]
+        fields = ["created_at", "id", "name", "category"]
+
+    def get_name(self, obj):
+        if obj.name and str(obj.name).strip():
+            return str(obj.name).strip()
+        if obj.user:
+            full = f"{obj.user.first_name or ''} {obj.user.last_name or ''}".strip()
+            if full:
+                return full
+            if obj.user.username:
+                return obj.user.username
+        return f"Staff #{obj.id}"
 
 
 # --------FOR MANUAL STUDENT ENRTY-------
