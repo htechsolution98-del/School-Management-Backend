@@ -1,5 +1,6 @@
 from .student_profile_services import AadhaarValidationMixin, DynamicIDValidationMixin, is_aadhaar_field, validate_aadhaar
 import random
+from decimal import Decimal, InvalidOperation
 from rest_framework import serializers
 from django.db import transaction
 from django.db.models import Q
@@ -7,6 +8,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
 from .models import *
 from .academic_serializers import ALLOWED_STUDENT_FIELD_MAPPINGS
+from .admission_validation import validate_admission_value, validate_admission_upload
 
 User = get_user_model()
 
@@ -80,6 +82,29 @@ class AdmissionFieldValueReadSerializer(serializers.ModelSerializer):
 
 
 class FormFieldSerializer(serializers.ModelSerializer):
+    field_type = serializers.ChoiceField(choices=["text", "number", "date", "select", "checkbox", "radio", "email", "tel", "textarea"])
+
+    def validate(self, attrs):
+        label = str(attrs.get("label", "")).strip()
+        if not label:
+            raise serializers.ValidationError({"label": "Field label is required"})
+        attrs["label"] = label
+        if attrs.get("field_type") in ("select", "radio") and attrs.get("map_to_student_field") != "school_class":
+            options = attrs.get("options")
+            if not isinstance(options, list) or not options:
+                raise serializers.ValidationError({"options": "Add at least one option"})
+            values = []
+            labels = []
+            for option in options:
+                value = str(option.get("value", "")).strip() if isinstance(option, dict) else str(option).strip()
+                option_label = str(option.get("label", "")).strip() if isinstance(option, dict) else str(option).strip()
+                if not value or not option_label:
+                    raise serializers.ValidationError({"options": "Every option needs a label and value"})
+                values.append(value.casefold())
+                labels.append(option_label.casefold())
+            if len(set(values)) != len(values) or len(set(labels)) != len(labels):
+                raise serializers.ValidationError({"options": "Option labels and values must be unique"})
+        return attrs
     class Meta:
         model = FormField
         fields = [
@@ -396,6 +421,7 @@ class AdmissionReceiptDataSerializer(serializers.ModelSerializer):
 
 
 class AdmissionFormSerializer(serializers.ModelSerializer):
+    document_fields_config = serializers.ListField(child=serializers.DictField(), required=False, write_only=True)
     sections = FormSectionSerializer(many=True, write_only=True, required=False)
 
     document_fields = serializers.ListField(
@@ -423,6 +449,7 @@ class AdmissionFormSerializer(serializers.ModelSerializer):
             "fee_type",
             "fee_structures_input",
             "document_fields",
+            "document_fields_config",
             "created_at"
         ]
         read_only_fields = ["unique_link"]
@@ -432,7 +459,32 @@ class AdmissionFormSerializer(serializers.ModelSerializer):
         fee_type = data.get("fee_type")
         fee_structures = data.get("fee_structures_input") or []
 
-        if fee_type == "individual" and not fee_structures:
+        title = str(data.get("title", "")).strip()
+        if not title:
+            raise serializers.ValidationError({"title": "Form title is required"})
+        data["title"] = title
+        sections = data.get("sections") or []
+        if not sections or any(not section.get("title", "").strip() or not section.get("fields") for section in sections):
+            raise serializers.ValidationError({"sections": "Every section needs a title and at least one field"})
+        section_names = [section["title"].strip().casefold() for section in sections]
+        labels = [field["label"].strip().casefold() for section in sections for field in section["fields"]]
+        if len(set(section_names)) != len(section_names) or len(set(labels)) != len(labels):
+            raise serializers.ValidationError({"sections": "Section titles and field labels must be unique"})
+        documents = data.get("document_fields") or []
+        if any(not label.strip() for label in documents) or len({label.strip().casefold() for label in documents}) != len(documents):
+            raise serializers.ValidationError({"document_fields": "Document names must be non-empty and unique"})
+        for item in data.get("document_fields_config", []):
+            if item.get("label") not in documents or not isinstance(item.get("is_required", False), bool):
+                raise serializers.ValidationError({"document_fields_config": "Document requirements must match configured documents"})
+        if data.get("fees_enable"):
+            amounts = [data.get("fees")] if fee_type != "individual" else [item.get("fee_amount") for item in fee_structures]
+            try:
+                if any(not Decimal(str(amount)).is_finite() or Decimal(str(amount)) <= 0 or Decimal(str(amount)) > Decimal("9999999.99") or Decimal(str(amount)).as_tuple().exponent < -2 for amount in amounts):
+                    raise serializers.ValidationError({"fees": "Enter a positive fee with at most two decimal places"})
+            except (InvalidOperation, TypeError, ValueError):
+                raise serializers.ValidationError({"fees": "Enter a valid fee amount"})
+
+        if data.get("fees_enable") and fee_type == "individual" and not fee_structures:
             raise serializers.ValidationError(
                 "fee_structures_input is required when fee_type is 'individual'"
             )
@@ -444,6 +496,7 @@ class AdmissionFormSerializer(serializers.ModelSerializer):
         with transaction.atomic():
 
             document_fields = validated_data.pop("document_fields", [])
+            document_config = validated_data.pop("document_fields_config", [])
             sections_data = validated_data.pop("sections", [])
             fee_data = validated_data.pop("fee_structures_input", [])
 
@@ -476,7 +529,8 @@ class AdmissionFormSerializer(serializers.ModelSerializer):
 
             # ---------------- document fields ----------------
             for label in document_fields:
-                DocumentField.objects.create(form=form, school=school, label=label)
+                required = next((item.get("is_required", False) for item in document_config if item.get("label") == label), False)
+                DocumentField.objects.create(form=form, school=school, label=label, is_required=required)
                 print(label)
 
             # ---------------- fee structures ----------------
@@ -586,7 +640,7 @@ class AdmissionSubmissionSerializer(serializers.ModelSerializer):
             "fee_type",
             "fee_amount",
             "payment_status",
-            "created_at"
+            "created_at",
             "is_rte",
         ]
         read_only_fields = [
@@ -624,25 +678,43 @@ class AdmissionSubmissionSerializer(serializers.ModelSerializer):
         school = getattr(user, "school", None) or getattr(form, "school", None)
         data["school"] = school
 
+        if not school or form.school_id != school.id:
+            raise serializers.ValidationError("Select an admission form belonging to your school")
+        if not form.is_active:
+            raise serializers.ValidationError("This admission form is no longer active. Refresh and select an active form.")
+
         form_fields = {
             field.id: field
             for section in form.sections.all()
             for field in section.fields.all()
         }
 
+        supplied_ids = set()
+        field_errors = {}
         for item in field_values:
             field_obj = item["field"]
             valid_field = form_fields.get(field_obj.id)
 
             if not valid_field:
                 raise serializers.ValidationError(f"Invalid field: {field_obj}")
-
-            if valid_field.is_required and not item.get("value"):
-                raise serializers.ValidationError(f"{valid_field.label} is required")
+            if field_obj.id in supplied_ids:
+                raise serializers.ValidationError("Duplicate field values are not allowed")
+            supplied_ids.add(field_obj.id)
+            value, error = validate_admission_value(valid_field, item.get("value"))
+            item["value"] = value
+            if error:
+                field_errors[str(field_obj.id)] = error
+        for field_id, field in form_fields.items():
+            if field.is_required and field_id not in supplied_ids:
+                field_errors[str(field_id)] = f"{field.label} is required"
+        if field_errors:
+            raise serializers.ValidationError({"field_values": field_errors})
 
         resolved_school_class = school_class or self._extract_school_class_from_fields(
             form, field_values
         )
+        if not resolved_school_class and any(item["field"].map_to_student_field == "school_class" and item.get("value") for item in field_values):
+            raise serializers.ValidationError({"school_class": "Select an available school class"})
 
         if (
             resolved_school_class
@@ -660,6 +732,8 @@ class AdmissionSubmissionSerializer(serializers.ModelSerializer):
             ).first()
 
         if existing_admission:
+            if existing_admission.school_id != school.id:
+                raise serializers.ValidationError("Invalid admission reference")
             if (
                 existing_admission.fee_verified
                 and existing_admission.fee_verified == True
@@ -836,6 +910,12 @@ class AdmissionSubmissionSerializer(serializers.ModelSerializer):
 
 class AdmissionDocumentItemSerializer(serializers.ModelSerializer):
 
+    def validate_file(self, value):
+        error = validate_admission_upload(value)
+        if error:
+            raise serializers.ValidationError(error)
+        return value
+
     class Meta:
         model = AdmissionDocument
         fields = ["document_field", "file",
@@ -898,6 +978,9 @@ class AdmissionDocumentSubmissionSerializer(serializers.ModelSerializer):
 
         if not admission:
             raise serializers.ValidationError({"message": "Admission not found"})
+
+        if any(item["document_field"].form_id != admission.form_id for item in documents):
+            raise serializers.ValidationError({"documents": "Select documents belonging to this admission form"})
 
         return data
 
@@ -1970,6 +2053,11 @@ class StudentNotificationSerializer(serializers.ModelSerializer):
         ]
 
 class RTEDocumentSerializer(serializers.ModelSerializer):
+    def validate_document_file(self, value):
+        error = validate_admission_upload(value)
+        if error:
+            raise serializers.ValidationError(error)
+        return value
     class Meta:
         model = RTEDocument
         fields = '__all__'

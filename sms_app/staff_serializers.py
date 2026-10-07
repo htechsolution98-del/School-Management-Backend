@@ -20,23 +20,34 @@ class StaffSerializer(serializers.ModelSerializer):
         fields = "__all__"
         read_only_fields = ["user", "school"]
 
+    def validate_name(self, value):
+        if not value or len(value.strip()) < 2:
+            raise serializers.ValidationError("Full name must be at least 2 characters.")
+        if len(value.strip()) > 100:
+            raise serializers.ValidationError("Full name must not exceed 100 characters.")
+        return value.strip()
+
     def validate_email(self, value):
-        qs = User.objects.filter(email=value)
+        if not value or not value.strip():
+            raise serializers.ValidationError("Email address is required.")
+        value = value.strip().lower()
+        import re
+        if not re.match(r"^[^\s@]+@[^\s@]+\.[^\s@]+$", value):
+            raise serializers.ValidationError("Enter a valid email address.")
+        qs = User.objects.filter(email__iexact=value)
         if self.instance and self.instance.user:
             qs = qs.exclude(pk=self.instance.user.pk)
         if qs.exists():
-            raise serializers.ValidationError({"message": "Email is already exists."})
+            raise serializers.ValidationError("Email is already registered.")
         return value
 
     def validate_mobile(self, value):
-        value = validate_mobile(value)
-        if not value:
-            return value
+        value = validate_mobile(value, required=True)
         qs = User.objects.filter(mobile=value)
         if self.instance and self.instance.user:
             qs = qs.exclude(pk=self.instance.user.pk)
         if qs.exists():
-            raise serializers.ValidationError({"message": "Mobile number is already exists."})
+            raise serializers.ValidationError("Mobile number is already registered.")
         return value
 
     def validate_date_of_birth(self, value):
@@ -52,11 +63,22 @@ class StaffSerializer(serializers.ModelSerializer):
 
 
 class GetTeacherSerializer(serializers.ModelSerializer):
+    name = serializers.SerializerMethodField()
+
     class Meta:
         model = Staff
-        fields = ["id", "name",
-            "created_at"
-        ]
+        fields = ["id", "name", "category", "created_at"]
+
+    def get_name(self, obj):
+        if obj.name and str(obj.name).strip():
+            return str(obj.name).strip()
+        if obj.user:
+            full = f"{obj.user.first_name or ''} {obj.user.last_name or ''}".strip()
+            if full:
+                return full
+            if obj.user.username:
+                return obj.user.username
+        return f"Staff #{obj.id}"
 
 
 # --------FOR MANUAL STUDENT ENRTY-------

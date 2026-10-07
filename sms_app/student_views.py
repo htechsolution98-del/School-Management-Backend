@@ -23,6 +23,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.decorators import action
 from .student_profile_actions import StudentProfileActionsMixin
 from .student_profile_serializers import StudentProfileSerializer
+from .admission_validation import validate_admission_upload
 from .student_profile_services import profile_queryset, completion
 
 class AdmissionFormViewSet(ModelViewSet):
@@ -76,12 +77,7 @@ class AdmissionFormViewSet(ModelViewSet):
             serializer.is_valid(raise_exception=True)
             instance = serializer.save()
 
-        return Response(
-            {
-                "message": "Form created successfully",
-            },
-            status=status.HTTP_201_CREATED,
-        )
+        return Response(AdmissionFormViewSerializer(instance, context={"request": request}).data, status=status.HTTP_201_CREATED)
 
 
 class FormStatus(ModelViewSet):
@@ -253,6 +249,13 @@ class FormSubmissionViewSet(ModelViewSet):
 
         serializer = self.get_serializer(data=data_dict)
         serializer.is_valid(raise_exception=True)
+        pending_uploads, configured_documents = self._extract_uploaded_documents(request, serializer.validated_data["form"])
+        for item in pending_uploads:
+            if str(item["document_field"]).isdigit() and int(item["document_field"]) not in configured_documents:
+                return Response({"documents": "Document does not belong to this admission form"}, status=status.HTTP_400_BAD_REQUEST)
+            error = validate_admission_upload(item["file"])
+            if error:
+                return Response({"documents": error}, status=status.HTTP_400_BAD_REQUEST)
         admission = serializer.save()
 
         form = getattr(admission, "form", None)
