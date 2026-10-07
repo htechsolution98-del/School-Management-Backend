@@ -33,12 +33,22 @@ def validate_admission_value(field, raw_value, today=None):
     if len(value) > (2000 if kind == "textarea" else 255):
         return value, f"{label} is too long"
     aadhaar = bool(re.search(r"aadh?aar|aadhar", descriptor))
+    udise = bool(re.search(r"udise|udisecode|udise_code", descriptor))
+    abc = bool(re.search(r"\b(abc|abc_id|apaar|apaar_id)\b", descriptor))
     phone = kind == "tel" or bool(re.search(r"mobile|phone|contact.number|whatsapp", descriptor))
     pincode = bool(re.search(r"pin\s*code|pincode|postal", label, re.I))
     if aadhaar:
         value = re.sub(r"[\s-]", "", value)
         if not re.fullmatch(r"\d{12}", value):
-            return value, "Aadhaar must contain exactly 12 digits"
+            return value, "Aadhaar number must contain exactly 12 digits"
+    if udise:
+        value = re.sub(r"[\s-]", "", value)
+        if not re.fullmatch(r"\d{11}", value):
+            return value, "UDISE number must contain exactly 11 digits"
+    if abc:
+        value = re.sub(r"[\s-]", "", value)
+        if not re.fullmatch(r"\d{12}", value):
+            return value, "ABC ID / APAAR ID must contain exactly 12 digits"
     if phone:
         value = re.sub(r"[\s()-]", "", value)
         if re.fullmatch(r"\+91\d{10}", value):

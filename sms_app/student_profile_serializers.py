@@ -3,7 +3,7 @@ from django.db import transaction
 from rest_framework import serializers
 from .models import Student, StudentExtraData, SchoolProfileField, StudentProfileValue
 from .student_serializers import StudentGetSerializer
-from .student_profile_services import completion, documents_data, file_url, profile_sections, document_records, validate_aadhaar, is_aadhaar_field
+from .student_profile_services import completion, documents_data, file_url, profile_sections, document_records, validate_aadhaar, validate_udise, validate_abc_id, is_aadhaar_field
 
 
 class StudentProfileSerializer(StudentGetSerializer):
@@ -22,6 +22,12 @@ class StudentProfileSerializer(StudentGetSerializer):
 
     def validate_aadhar_number(self, value):
         return validate_aadhaar(value)
+
+    def validate_udise_no(self, value):
+        return validate_udise(value)
+
+    def validate_abc_id(self, value):
+        return validate_abc_id(value)
 
     def validate(self, attrs):
         request = self.context.get("request")
