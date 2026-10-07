@@ -79,7 +79,7 @@ router.register(r'changefeaturestatus',ChangeFeatureStatusVIew, basename='change
 router.register(r'getmodule',ModuleView,basename='getmodule')
 
 router.register(r'SchoolView',SchoolView, basename='SchoolView') # DONE
-from sms_app.staff_views import DepartmentViewSet
+from sms_app.staff_views import DepartmentViewSet, TeacherWorkloadViewSet
 
 router.register(r'departments', DepartmentViewSet, basename='departments')
 router.register(r'StaffView',StaffView, basename='StaffView') # DONE
@@ -149,6 +149,7 @@ router.register(r'divisionlist', ListDivisionView, basename='divisionlist') #For
 
 router.register(r'syllabus', SyllabusView, basename='syllabus') # For CLerk add syllabus METHOD [GET,POST,PUT,DELETE]   ----API Need---  api/schoolclass , setSubject for drop down
 router.register(r'getteacher', GetTeacherView, basename='getteacher') # For teacher dwop down METHOD [GET]
+router.register(r'teacher-workload', TeacherWorkloadViewSet, basename='teacher-workload')
 
 router.register(r'assignClass', AssignClassView, basename='assignClass') # For CLerk assign Class METHOD [GET,POST,PUT,DELETE] ----API Need---  api/divisionSet/ , api/setSubject/ , api/getteacher/  for drop down
 

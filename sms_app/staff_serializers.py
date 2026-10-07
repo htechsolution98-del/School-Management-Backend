@@ -6,6 +6,7 @@ from django.contrib.auth import get_user_model
 from .validators import validate_mobile
 import numpy as np
 import cv2
+import cv2.data
 
 User = get_user_model()
 class DepartmentSerializer(serializers.ModelSerializer):
@@ -427,7 +428,8 @@ class ChangeLeavePerDaySerializer(serializers.ModelSerializer):
                     f"No leave template found for {leave_type}."
                 )
 
-            if remaining_data.remaining_leaves <= 0:
+            rem_leaves = remaining_data.remaining_leaves if remaining_data.remaining_leaves is not None else 0
+            if rem_leaves <= 0:
                 raise serializers.ValidationError(
                     f"Insufficient {leave_type} leaves. Remaining: {remaining_data.remaining_leaves}"
                 )
@@ -449,14 +451,14 @@ class ChangeLeavePerDaySerializer(serializers.ModelSerializer):
 
         # ✅ Case 1: PENDING/REJECTED → APPROVED (consume leaves)
         if new_status == "APPROVED" and old_status != "APPROVED":
-            if remaining_data:
-                remaining_data.remaining_leaves -= 1
+            if remaining_data and remaining_data.remaining_leaves is not None:
+                remaining_data.remaining_leaves = max(0, remaining_data.remaining_leaves - 1)
                 remaining_data.save()
             instance.approved_at = timezone.now()
 
         # ✅ Case 2: APPROVED → REJECTED/CANCELLED (restore leaves)
         elif old_status == "APPROVED" and new_status in ["REJECTED", "CANCELLED"]:
-            if remaining_data:
+            if remaining_data and remaining_data.remaining_leaves is not None:
                 remaining_data.remaining_leaves += 1
                 remaining_data.save()
             instance.approved_at = None
@@ -513,3 +515,108 @@ class StaffListSirializer(serializers.ModelSerializer):
             "created_at"
         ]
         read_only_fields = fields
+
+
+class TeacherWorkloadSerializer(serializers.ModelSerializer):
+    department_name = serializers.CharField(source="department.name", read_only=True, default=None)
+    assigned_classes_count = serializers.SerializerMethodField()
+
+    DAY_FIELDS = [
+        "max_periods_mon",
+        "max_periods_tue",
+        "max_periods_wed",
+        "max_periods_thu",
+        "max_periods_fri",
+        "max_periods_sat",
+    ]
+
+    class Meta:
+        model = Staff
+        fields = [
+            "id",
+            "name",
+            "email",
+            "mobile",
+            "category",
+            "department",
+            "department_name",
+            "max_periods_mon",
+            "max_periods_tue",
+            "max_periods_wed",
+            "max_periods_thu",
+            "max_periods_fri",
+            "max_periods_sat",
+            "max_weekly_periods",
+            "max_consecutive_periods",
+            "assigned_classes_count",
+            "is_active",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "id",
+            "name",
+            "email",
+            "mobile",
+            "category",
+            "department",
+            "department_name",
+            "assigned_classes_count",
+            "is_active",
+            "created_at",
+            "updated_at",
+        ]
+
+    def get_assigned_classes_count(self, obj):
+        try:
+            return obj.assignclass_set.count()
+        except Exception:
+            return 0
+
+    def validate_max_weekly_periods(self, value):
+        if value < 1 or value > 60:
+            raise serializers.ValidationError("Max weekly periods must be between 1 and 60.")
+        return value
+
+    def validate_max_consecutive_periods(self, value):
+        if value < 1 or value > 10:
+            raise serializers.ValidationError("Max consecutive periods must be between 1 and 10.")
+        return value
+
+    def validate(self, attrs):
+        for field in self.DAY_FIELDS:
+            val = attrs.get(
+                field, getattr(self.instance, field, 5) if self.instance else 5
+            )
+            if val is not None and (val < 0 or val > 15):
+                raise serializers.ValidationError({
+                    field: "Daily period limit must be between 0 and 15."
+                })
+
+        weekly = attrs.get(
+            "max_weekly_periods",
+            getattr(self.instance, "max_weekly_periods", 25) if self.instance else 25,
+        )
+        consecutive = attrs.get(
+            "max_consecutive_periods",
+            getattr(self.instance, "max_consecutive_periods", 3) if self.instance else 3,
+        )
+
+        daily_vals = [
+            attrs.get(f, getattr(self.instance, f, 5) if self.instance else 5)
+            for f in self.DAY_FIELDS
+        ]
+        max_daily_allowed = max(daily_vals) if daily_vals else 5
+        total_daily_sum = sum(daily_vals)
+
+        if consecutive > max_daily_allowed and max_daily_allowed > 0:
+            raise serializers.ValidationError({
+                "max_consecutive_periods": f"Consecutive periods limit ({consecutive}) cannot exceed highest daily periods limit ({max_daily_allowed})."
+            })
+        if weekly > total_daily_sum:
+            raise serializers.ValidationError({
+                "max_weekly_periods": f"Weekly limit ({weekly}) cannot exceed the sum of all daily limits ({total_daily_sum})."
+            })
+        return attrs
+
+

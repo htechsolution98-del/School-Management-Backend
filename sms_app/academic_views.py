@@ -1339,30 +1339,106 @@ class TimeTableViewSet(ModelViewSet):
             sc["start_str"] = format_minutes(sc["start_m"])
             sc["end_str"] = format_minutes(sc["end_m"])
 
-        # 3. Schedule Generation Algorithm with Teacher Conflict Prevention
-        draft_timetables = []
+        # 3. State Tracking Initialization & Workload Constraint Engine
+        all_teachers_map = {}
+        for div_assigns in assignments_by_division.values():
+            for a in div_assigns:
+                if a.teacher:
+                    all_teachers_map[a.teacher.id] = a.teacher
+
+        for ct in ct_by_division.values():
+            if ct.teacher:
+                all_teachers_map[ct.teacher.id] = ct.teacher
+
+        teacher_workload_tracker = {
+            t_id: {
+                "weekly_count": 0,
+                "daily_count": 0,
+                "current_consecutive_count": 0,
+                "teacher": t_obj,
+            }
+            for t_id, t_obj in all_teachers_map.items()
+        }
+
+        def get_tracker(teacher):
+            if teacher.id not in teacher_workload_tracker:
+                teacher_workload_tracker[teacher.id] = {
+                    "weekly_count": 0,
+                    "daily_count": 0,
+                    "current_consecutive_count": 0,
+                    "teacher": teacher,
+                }
+            return teacher_workload_tracker[teacher.id]
+
+        def get_teacher_daily_limit(teacher, day_name):
+            day_key = str(day_name).lower().strip()
+            if "mon" in day_key:
+                return getattr(teacher, "max_periods_mon", 5)
+            elif "tue" in day_key:
+                return getattr(teacher, "max_periods_tue", 5)
+            elif "wed" in day_key:
+                return getattr(teacher, "max_periods_wed", 5)
+            elif "thu" in day_key:
+                return getattr(teacher, "max_periods_thu", 5)
+            elif "fri" in day_key:
+                return getattr(teacher, "max_periods_fri", 5)
+            elif "sat" in day_key:
+                return getattr(teacher, "max_periods_sat", 5)
+            return 5
+
         booked_teachers = {
             day: {slot_num: set() for slot_num in range(1, total_slot_count + 1)}
             for day in days_to_generate
         }
 
+        def is_teacher_eligible(teacher, day_name, slot_number):
+            if not teacher:
+                return False
+
+            # Prevent double-booking across different divisions in the same period slot
+            if teacher.id in booked_teachers[day_name][slot_number]:
+                return False
+
+            tracker = get_tracker(teacher)
+            max_weekly = getattr(teacher, "max_weekly_periods", 25)
+            max_consecutive = getattr(teacher, "max_consecutive_periods", 3)
+            current_day_limit = get_teacher_daily_limit(teacher, day_name)
+
+            # Pre-Placement Constraint Checks:
+            # 1. Weekly capacity
+            if tracker["weekly_count"] + 1 > max_weekly:
+                return False
+            # 2. Daily capacity for current day
+            if tracker["daily_count"] + 1 > current_day_limit:
+                return False
+            # 3. Consecutive teaching threshold
+            if tracker["current_consecutive_count"] + 1 > max_consecutive:
+                return False
+
+            return True
+
+        draft_timetables = []
+
         for day in days_to_generate:
-            for div in divisions:
-                div_id = div.id
-                ct_assign = ct_by_division[div_id]
-                ct_teacher = ct_assign.teacher
-                ct_subject = ct_assign.subject
+            # Reset daily_count and current_consecutive_count at the start of each new day
+            for t_id, tracker in teacher_workload_tracker.items():
+                tracker["daily_count"] = 0
+                tracker["current_consecutive_count"] = 0
 
-                all_div_assigns = assignments_by_division[div_id]
+            slots_by_division = {div.id: [] for div in divisions}
 
-                slots_list = []
+            for slot_num, sc in enumerate(slot_configs, start=1):
+                s_start = sc["start_str"]
+                s_end = sc["end_str"]
 
-                for slot_num, sc in enumerate(slot_configs, start=1):
-                    s_start = sc["start_str"]
-                    s_end = sc["end_str"]
+                if sc["is_break"]:
+                    # Non-instructional slots safely bypass teacher assignment
+                    # and properly reset consecutive counter for all teachers
+                    for t_id, tracker in teacher_workload_tracker.items():
+                        tracker["current_consecutive_count"] = 0
 
-                    if sc["is_break"]:
-                        slots_list.append({
+                    for div in divisions:
+                        slots_by_division[div.id].append({
                             "slot_number": slot_num,
                             "is_lecture": False,
                             "is_break": True,
@@ -1373,54 +1449,100 @@ class TimeTableViewSet(ModelViewSet):
                             "subject": None,
                             "subject_name": "Recess / Lunch Break",
                         })
-                    else:
-                        lec_num = sc["lecture_num"]
-                        if lec_num == 1:
-                            # RULE 1: Lecture 1 MUST be Class Teacher
+                else:
+                    lec_num = sc["lecture_num"]
+                    placed_in_this_slot = set()
+
+                    for div in divisions:
+                        div_id = div.id
+                        ct_assign = ct_by_division.get(div_id)
+                        ct_teacher = ct_assign.teacher if ct_assign else None
+                        ct_subject = ct_assign.subject if ct_assign else None
+
+                        all_div_assigns = assignments_by_division.get(div_id, [])
+
+                        chosen_teacher = None
+                        chosen_subject = None
+
+                        if (
+                            lec_num == 1
+                            and ct_teacher
+                            and is_teacher_eligible(ct_teacher, day, slot_num)
+                        ):
+                            # RULE 1: Lecture 1 is Class Teacher if eligible
                             chosen_teacher = ct_teacher
-                            chosen_subject = ct_subject or (all_div_assigns[0].subject if all_div_assigns else None)
-                            if chosen_teacher:
-                                booked_teachers[day][slot_num].add(chosen_teacher.id)
+                            chosen_subject = ct_subject or (
+                                all_div_assigns[0].subject if all_div_assigns else None
+                            )
                         else:
-                            # RULE 2: Select non-conflicting teacher
-                            available_assigns = [
-                                a for a in all_div_assigns
-                                if a.teacher_id not in booked_teachers[day][slot_num]
+                            # Fallback: find next eligible subject/teacher for that slot
+                            eligible_assigns = [
+                                a
+                                for a in all_div_assigns
+                                if a.teacher
+                                and is_teacher_eligible(a.teacher, day, slot_num)
                             ]
 
-                            if available_assigns:
-                                chosen = random.choice(available_assigns)
+                            if eligible_assigns:
+                                chosen = random.choice(eligible_assigns)
                                 chosen_teacher = chosen.teacher
                                 chosen_subject = chosen.subject
                             else:
-                                chosen = random.choice(all_div_assigns)
-                                chosen_teacher = chosen.teacher
-                                chosen_subject = chosen.subject
+                                # All fail: leave slot unassigned
+                                chosen_teacher = None
+                                chosen_subject = None
 
-                            if chosen_teacher:
-                                booked_teachers[day][slot_num].add(chosen_teacher.id)
+                        if chosen_teacher:
+                            booked_teachers[day][slot_num].add(chosen_teacher.id)
+                            placed_in_this_slot.add(chosen_teacher.id)
 
-                        slots_list.append({
-                            "slot_number": slot_num,
-                            "is_lecture": True,
-                            "is_break": False,
-                            "slot_start_time": s_start,
-                            "slot_end_time": s_end,
-                            "teacher": chosen_teacher.id if chosen_teacher else None,
-                            "teacher_name": chosen_teacher.name if chosen_teacher else "",
-                            "subject": chosen_subject.id if chosen_subject else None,
-                            "subject_name": chosen_subject.name if chosen_subject else "",
-                        })
+                            # Upon successful placement, increment counts
+                            tracker = get_tracker(chosen_teacher)
+                            tracker["daily_count"] += 1
+                            tracker["weekly_count"] += 1
+                            tracker["current_consecutive_count"] += 1
 
+                            slots_by_division[div_id].append({
+                                "slot_number": slot_num,
+                                "is_lecture": True,
+                                "is_break": False,
+                                "slot_start_time": s_start,
+                                "slot_end_time": s_end,
+                                "teacher": chosen_teacher.id,
+                                "teacher_name": chosen_teacher.name or "Teacher",
+                                "subject": chosen_subject.id if chosen_subject else None,
+                                "subject_name": chosen_subject.name if chosen_subject else "",
+                            })
+                        else:
+                            # Slot left unassigned
+                            slots_by_division[div_id].append({
+                                "slot_number": slot_num,
+                                "is_lecture": True,
+                                "is_break": False,
+                                "slot_start_time": s_start,
+                                "slot_end_time": s_end,
+                                "teacher": None,
+                                "teacher_name": "Free Period / Unassigned",
+                                "subject": None,
+                                "subject_name": "Self Study / Free Period",
+                            })
+
+                    # Any teacher not teaching during this lecture slot resets consecutive streak
+                    for t_id, tracker in teacher_workload_tracker.items():
+                        if t_id not in placed_in_this_slot:
+                            tracker["current_consecutive_count"] = 0
+
+            # Compile timetable preview entries for each division
+            for div in divisions:
                 draft_timetables.append({
                     "class_division": div.id,
                     "class_name": div.SchoolClass.school_class if div.SchoolClass else "",
                     "division_name": div.division,
                     "day": day,
-                    "total_lecture": len(slots_list),
+                    "total_lecture": len(slots_by_division[div.id]),
                     "start_time": start_time_str,
                     "end_time": end_time_str,
-                    "slots": slots_list,
+                    "slots": slots_by_division[div.id],
                 })
 
         return Response({

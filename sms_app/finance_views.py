@@ -16,6 +16,7 @@ from .serializer import *
 from .permissions import *
 from .utils import *
 import datetime
+from decimal import Decimal
 import re
 from django.core.cache import cache
 from django.db import transaction
@@ -91,10 +92,9 @@ class RazorpayOrderView(APIView):
             with transaction.atomic():
                 # print(admission.form.fee_type)
                 if admission.is_rte:
-                    fee_amount = 0.0
-                elif admission.form.fee_type == "general":
-                    fee_amount = admission.form.fees
-                    fee_amount = float(fee_amount)
+                    fee_amount = Decimal("0.00")
+                elif admission.form and admission.form.fee_type == "general":
+                    fee_amount = Decimal(str(admission.form.fees)) if admission.form.fees else Decimal("0.00")
 
                 else:
                     # Get class field value
@@ -105,7 +105,7 @@ class RazorpayOrderView(APIView):
                     ).first()
 
                     fee_structure = None
-                    val = str(value_obj.value).strip() if value_obj and value_obj.value else ""
+                    val = value_obj.value.strip() if value_obj and value_obj.value else ""
 
                     if val.isdigit():
                         fee_structure = AdmissionFeeStructure.objects.filter(
@@ -136,11 +136,11 @@ class RazorpayOrderView(APIView):
                         ).first()
 
                     if fee_structure and fee_structure.fee_amount is not None:
-                        fee_amount = float(fee_structure.fee_amount)
+                        fee_amount = Decimal(str(fee_structure.fee_amount))
                     elif admission.form and admission.form.fees:
-                        fee_amount = float(admission.form.fees)
+                        fee_amount = Decimal(str(admission.form.fees))
                     else:
-                        fee_amount = 0.0
+                        fee_amount = Decimal("0.00")
 
                 # Convert to paise for Razorpay
                 razorpay_amount = int(fee_amount * 100)
@@ -157,11 +157,11 @@ class RazorpayOrderView(APIView):
 
                 if not admission_fee:
                     admission_fee = AdmissionFee.objects.create(
-                        amount=fee_amount,
+                        amount=int(fee_amount),
                         admission_number=admission_number,
                     )
                 else:
-                    admission_fee.amount = fee_amount
+                    admission_fee.amount = int(fee_amount)
                     admission_fee.save()
 
                 #   ============FOR INDIVIDUAL SCHOOL =============
@@ -1222,8 +1222,11 @@ class DueFeesView(APIView):
         )
 
         total_due = sum(
-            fee.amount - fee.paid_amount
-            for fee in fees
+            (
+                (fee.amount or Decimal("0.00")) - (fee.paid_amount or Decimal("0.00"))
+                for fee in fees
+            ),
+            Decimal("0.00"),
         )
 
         serializer = StudentFeeSerializer(
@@ -1299,7 +1302,7 @@ class FeesPaymentView(APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
 
-        amount_due = fee.amount - fee.paid_amount
+        amount_due = (fee.amount or Decimal("0.00")) - (fee.paid_amount or Decimal("0.00"))
 
         if amount_due <= 0:
             return Response(
@@ -1383,7 +1386,7 @@ class VerifypaymentView(APIView):
                 status=400
             )
 
-        amount_due = fee.amount - fee.paid_amount
+        amount_due = (fee.amount or Decimal("0.00")) - (fee.paid_amount or Decimal("0.00"))
 
         with transaction.atomic():
 
@@ -1405,7 +1408,7 @@ class VerifypaymentView(APIView):
 
             fee.paid_amount += amount_due
 
-            if fee.paid_amount >= fee.amount:
+            if fee.paid_amount >= (fee.amount or Decimal("0.00")):
                 fee.status = "paid"
             elif fee.paid_amount > 0:
                 fee.status = "partial"

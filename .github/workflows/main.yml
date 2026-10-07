@@ -41,8 +41,12 @@ jobs:
               fi
             fi
 
-            echo "=== Git Pull ==="
-            git pull --ff-only origin "${{ secrets.BACKEND_BRANCH }}"
+            echo "=== Resetting Working Tree ==="
+            git reset --hard HEAD 2>/dev/null || true
+
+            echo "=== Sync Remote Branch ==="
+            git fetch origin "${{ secrets.BACKEND_BRANCH }}"
+            git reset --hard "origin/${{ secrets.BACKEND_BRANCH }}"
 
             echo "=== Install/Update Dependencies ==="
             docker exec ${{ secrets.BACKEND_CONT_NAME }} pip install --no-cache-dir -r requirements.txt
