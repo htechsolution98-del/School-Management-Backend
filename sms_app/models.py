@@ -194,6 +194,7 @@ class Staff(models.Model):
     department = models.ForeignKey(
         Department, on_delete=models.SET_NULL, null=True, blank=True
     )
+    designation = models.CharField(max_length=100, null=True, blank=True)
 
     # STAFF_CATEGORIES = [
     #     ("TEACHER", "Teacher"),
@@ -216,7 +217,18 @@ class Staff(models.Model):
 
     address = models.TextField(null=True, blank=True)
     date_of_birth = models.DateField(null=True, blank=True)
-    joining_date = models.DateField(auto_now_add=True)
+    joining_date = models.DateField(null=True, blank=True)
+    exit_date = models.DateField(null=True, blank=True)
+
+    attendance_setting = models.ForeignKey(
+        'AttendanceSetting', on_delete=models.SET_NULL, null=True, blank=True, related_name="staff_members"
+    )
+    leave_template = models.ForeignKey(
+        'LeaveTemplate', on_delete=models.SET_NULL, null=True, blank=True, related_name="staff_members"
+    )
+    salary_structure = models.ForeignKey(
+        'SalaryStructure', on_delete=models.SET_NULL, null=True, blank=True, related_name="staff_members"
+    )
 
     salary = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     is_active = models.BooleanField(default=True)
@@ -1071,6 +1083,67 @@ class Time_table(models.Model):
         db_table = "time_table"
 
 
+# =========================================================
+# DYNAMIC ATTENDANCE MODELS
+# =========================================================
+
+
+class AttendanceSetting(models.Model):
+    school = models.ForeignKey(
+        School, on_delete=models.CASCADE, related_name="attendance_settings", db_index=True
+    )
+    name = models.CharField(max_length=100, default="Default Shift")
+    check_in_time = models.TimeField()
+    check_out_time = models.TimeField()
+    grace_period_mins = models.PositiveIntegerField(default=15)
+    half_day_threshold_mins = models.PositiveIntegerField(default=120)
+    geo_required = models.BooleanField(default=True)
+    geo_radius_meters = models.DecimalField(max_digits=10, decimal_places=2, default=100.0)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True, null=True, blank=True)
+
+    class Meta:
+        db_table = "attendance_setting"
+
+    def __str__(self):
+        return f"{self.school} - {self.name}"
+
+
+class AttendanceRegularization(models.Model):
+    STATUS_CHOICES = (
+        ("Pending", "Pending"),
+        ("Approved", "Approved"),
+        ("Rejected", "Rejected"),
+    )
+
+    staff = models.ForeignKey(
+        Staff, on_delete=models.CASCADE, related_name="attendance_regularizations", db_index=True
+    )
+    attendance_date = models.DateField()
+    requested_check_in = models.TimeField(null=True, blank=True)
+    requested_check_out = models.TimeField(null=True, blank=True)
+    reason = models.TextField()
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="Pending")
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="approved_regularizations",
+    )
+    audit_log = models.JSONField(default=list, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True, null=True, blank=True)
+
+    class Meta:
+        db_table = "attendance_regularization"
+        ordering = ["-attendance_date", "-created_at"]
+
+    def __str__(self):
+        return f"{self.staff} - {self.attendance_date} ({self.status})"
+
+
 class AttendanceTimeRule(models.Model):
 
     school = models.ForeignKey(
@@ -1115,6 +1188,11 @@ class Attendance(models.Model):
     date_time = models.DateTimeField(null=True, blank=True)
     is_present = models.BooleanField(default=False)
     is_half_day = models.BooleanField(default=False)
+    is_late = models.BooleanField(default=False)
+    is_early_exit = models.BooleanField(default=False)
+    working_hours = models.DecimalField(
+        max_digits=5, decimal_places=2, default=Decimal("0.00"), null=True, blank=True
+    )
     check_in = models.DateTimeField(null=True, blank=True)
     check_out = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
@@ -1135,10 +1213,39 @@ class Attendance(models.Model):
             )
         ]
 
+    @property
+    def is_missing_punch(self):
+        """Returns True if staff has checked in but not checked out."""
+        return bool(self.check_in and not self.check_out)
+
     def __str__(self):
         return f"{self.name} - {self.attendance_date}"
     
     
+
+# =========================================================
+# DYNAMIC LEAVE MODELS
+# =========================================================
+
+
+class LeaveCycle(models.Model):
+    school = models.ForeignKey(
+        School, on_delete=models.CASCADE, related_name="leave_cycles", db_index=True
+    )
+    name = models.CharField(max_length=100)  # e.g., "2026-2027"
+    start_date = models.DateField()
+    end_date = models.DateField()
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True, null=True, blank=True)
+
+    class Meta:
+        db_table = "leave_cycle"
+        unique_together = ("school", "name")
+
+    def __str__(self):
+        return f"{self.school} - {self.name}"
+
 
 class LeaveTemplate(models.Model):
     TIMELINE_CHOICES = [
@@ -1147,29 +1254,62 @@ class LeaveTemplate(models.Model):
         ("SEMI_ANNUAL", "Semi-Annual"),
         ("ANNUAL", "Annual"),
     ]
-    # name = models.CharField(max_length=100, null=True, blank=True)
+    name = models.CharField(max_length=100, null=True, blank=True)
     time_line = models.CharField(max_length=20, choices=TIMELINE_CHOICES, null=True, blank=True)
     school = models.ForeignKey(School, on_delete=models.CASCADE, null=True)
+    is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
     
     def __str__(self):
-        return f"{self.school} - {self.time_line}"
+        return self.name or f"{self.school} - {self.time_line}"
     
     class Meta:
         db_table = "leave_template"
 
 
 class LeaveType(models.Model):
+    ALLOCATION_PERIOD_CHOICES = [
+        ("Monthly", "Monthly"),
+        ("Quarterly", "Quarterly"),
+        ("Yearly", "Yearly"),
+    ]
 
-
-    leave_type = models.CharField(max_length=100, null=True)
-    leave_template = models.ForeignKey(LeaveTemplate, on_delete=models.CASCADE, null=True, related_name="leave_types")
+    leave_type = models.CharField(max_length=100, null=True, blank=True)
+    leave_template = models.ForeignKey(LeaveTemplate, on_delete=models.CASCADE, null=True, blank=True, related_name="leave_types")
     leave_num = models.IntegerField(null=True, blank=True)
-    category = models.ForeignKey(SchoolFeature, on_delete=models.CASCADE, null=True)
+    category = models.ForeignKey(SchoolFeature, on_delete=models.CASCADE, null=True, blank=True)
     is_carry_forward = models.BooleanField(default=False)
+
+    name = models.CharField(max_length=100, null=True, blank=True)
+    code = models.CharField(max_length=20, null=True, blank=True)
+    is_paid = models.BooleanField(default=True)
+    allocation_count = models.DecimalField(max_digits=6, decimal_places=2, default=0)
+    allocation_period = models.CharField(max_length=20, choices=ALLOCATION_PERIOD_CHOICES, default="Yearly")
+    carry_forward = models.BooleanField(default=False)
+    max_carry_forward = models.PositiveIntegerField(default=0)
+    allow_encashment = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
-    
-    
+
+    @property
+    def template(self):
+        return self.leave_template
+
+    @template.setter
+    def template(self, value):
+        self.leave_template = value
+
+    def save(self, *args, **kwargs):
+        if self.name and not self.leave_type:
+            self.leave_type = self.name
+        elif self.leave_type and not self.name:
+            self.name = self.leave_type
+        if self.allocation_count and not self.leave_num:
+            self.leave_num = int(self.allocation_count)
+        elif self.leave_num and not self.allocation_count:
+            self.allocation_count = Decimal(str(self.leave_num))
+        if self.carry_forward is not None:
+            self.is_carry_forward = self.carry_forward
+        super().save(*args, **kwargs)
 
     def __str__(self):
         cat_name = (
@@ -1177,15 +1317,14 @@ class LeaveType(models.Model):
             if (self.category and getattr(self.category, "feature", None))
             else ""
         )
-        return f"{cat_name} - {self.leave_type}" if cat_name else (self.leave_type or "LeaveType")
+        display_name = self.name or self.leave_type or "LeaveType"
+        return f"{cat_name} - {display_name}" if cat_name else display_name
 
     class Meta:
         db_table = "leave_type"
         
         constraints = [
             models.UniqueConstraint(
-                # FIX: original referenced "school" and "staff" which don't exist on this model.
-                # Correct unique combination: same leave type + category within one template.
                 fields=["leave_template", "leave_type", "category"],
                 name="unique_leave_type_per_template_category",
             )
@@ -1199,22 +1338,41 @@ class LeaveRequest(models.Model):
     staff = models.ForeignKey(Staff, on_delete=models.CASCADE, null=True, blank=True)
     # leave_type = models.CharField(max_length=100, null=True, blank=True)
     leave_type = models.ForeignKey(LeaveType, on_delete=models.CASCADE, null=True)
+    dynamic_leave_type = models.ForeignKey(
+        LeaveType,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="dynamic_leave_requests",
+    )
     start_date = models.DateField(null=True, blank=True)
     end_date = models.DateField(null=True, blank=True)
 
-    total_days = models.IntegerField(null=True, blank=True)
+    total_days = models.DecimalField(
+        max_digits=5, decimal_places=1, default=Decimal("1.0"), null=True, blank=True
+    )
     reason = models.TextField(null=True, blank=True)
     status = models.CharField(max_length=20, default="PENDING", null=True, blank=True)
 
     updated_at = models.DateTimeField(
         auto_now=True, null=True, blank=True
-    )  # at a time no nedd this
-    is_paid = models.BooleanField(default=False, help_text="If True, salary will be deducted for approved days of this leave request.")
+    )
+    is_paid = models.BooleanField(
+        default=True,
+        help_text="If True, paid leave (no deduction). If False, unpaid/LOP (salary deducted).",
+    )
     created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
+    def save(self, *args, **kwargs):
+        if self.dynamic_leave_type and not self.leave_type:
+            self.leave_type = self.dynamic_leave_type
+        elif self.leave_type and not self.dynamic_leave_type:
+            self.dynamic_leave_type = self.leave_type
+        super().save(*args, **kwargs)
+
     def __str__(self):
-        # return f"{self.staff.name} - {self.leave_type} - {self.status}"
-        return f"{self.staff.name} - {self.leave_type} - {self.total_days} "
+        type_str = self.dynamic_leave_type or self.leave_type
+        return f"{self.staff.name if self.staff else 'Staff'} - {type_str} - {self.total_days}"
 
     class Meta:
         db_table = "leave_request"
@@ -1280,6 +1438,39 @@ class StaffRemainingLeave(models.Model):
 
     class Meta:
         db_table = "staff_remaining_leave"
+
+
+class LeaveBalance(models.Model):
+    staff = models.ForeignKey(
+        Staff, on_delete=models.CASCADE, related_name="leave_balances", db_index=True
+    )
+    leave_type = models.ForeignKey(
+        LeaveType, on_delete=models.CASCADE, related_name="leave_balances", db_index=True
+    )
+    leave_cycle = models.ForeignKey(
+        LeaveCycle, on_delete=models.CASCADE, related_name="leave_balances", db_index=True
+    )
+    allocated = models.DecimalField(max_digits=6, decimal_places=2, default=0.0)
+    carry_forward = models.DecimalField(max_digits=6, decimal_places=2, default=0.0)
+    used = models.DecimalField(max_digits=6, decimal_places=2, default=0.0)
+    pending = models.DecimalField(max_digits=6, decimal_places=2, default=0.0)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True, null=True, blank=True)
+
+    class Meta:
+        db_table = "leave_balance"
+        unique_together = ("staff", "leave_type", "leave_cycle")
+
+    def __str__(self):
+        return f"{self.staff} - {self.leave_type} ({self.leave_cycle}): rem={self.remaining}"
+
+    @property
+    def remaining(self):
+        alloc = Decimal(str(self.allocated or 0))
+        cf = Decimal(str(self.carry_forward or 0))
+        u = Decimal(str(self.used or 0))
+        p = Decimal(str(self.pending or 0))
+        return (alloc + cf) - (u + p)
 
 
 # class Announcement(models.Model):
@@ -1764,19 +1955,112 @@ class StudentFeePayment(models.Model):
 
 
 class SalaryComponent(models.Model):
+    TYPE_CHOICES = (
+        ("Earning", "Earning"),
+        ("Deduction", "Deduction"),
+    )
+    CALC_TYPE_CHOICES = (
+        ("Fixed", "Fixed"),
+        ("Percentage", "Percentage"),
+        ("Formula", "Formula"),
+    )
     COMPONENT_TYPE = (
         ("earning", "Earning"),
         ("deduction", "Deduction"),
     )
 
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name="salary_components", db_index=True)
     name = models.CharField(max_length=255)  # DA, HRA, PF
-    component_type = models.CharField(max_length=20, choices=COMPONENT_TYPE) # Deduction,Earning
+    component_type = models.CharField(max_length=20, choices=COMPONENT_TYPE, default="earning")  # legacy
+    type = models.CharField(max_length=20, choices=TYPE_CHOICES, default="Earning")
+    calc_type = models.CharField(max_length=20, choices=CALC_TYPE_CHOICES, default="Fixed")
+    calc_base = models.CharField(max_length=100, null=True, blank=True)
+    value = models.DecimalField(max_digits=12, decimal_places=2, default=0.0)
     is_active = models.BooleanField(default=True)
-    school = models.ForeignKey(School, on_delete=models.CASCADE)
     created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True, null=True, blank=True)
+
+    def save(self, *args, **kwargs):
+        if self.type:
+            self.component_type = self.type.lower()
+        elif self.component_type:
+            self.type = self.component_type.capitalize()
+        super().save(*args, **kwargs)
 
     class Meta:
         db_table = "salary_component"
+
+    def __str__(self):
+        return f"{self.name} ({self.type} - {self.calc_type}: {self.value})"
+
+
+class SalaryStructure(models.Model):
+    school = models.ForeignKey(
+        School, on_delete=models.CASCADE, related_name="salary_structures", db_index=True
+    )
+    name = models.CharField(max_length=255)
+    components = models.ManyToManyField(SalaryComponent, related_name="salary_structures", blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True, null=True, blank=True)
+
+    class Meta:
+        db_table = "salary_structure"
+        unique_together = ("school", "name")
+
+    def __str__(self):
+        return f"{self.school} - {self.name}"
+
+
+class PayrollRun(models.Model):
+    STATUS_CHOICES = (
+        ("Draft", "Draft"),
+        ("Generated", "Generated"),
+        ("Approved", "Approved"),
+        ("Locked", "Locked"),
+    )
+
+    school = models.ForeignKey(
+        School, on_delete=models.CASCADE, related_name="payroll_runs", db_index=True
+    )
+    salary_month = models.DateField()
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="Draft")
+    total_processed = models.PositiveIntegerField(default=0)
+    generated_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True, null=True, blank=True)
+
+    class Meta:
+        db_table = "payroll_run"
+        unique_together = ("school", "salary_month")
+
+    def __str__(self):
+        return f"{self.school} - {self.salary_month} ({self.status})"
+
+
+class PayrollPayslip(models.Model):
+    staff = models.ForeignKey(
+        Staff, on_delete=models.CASCADE, related_name="payslips", db_index=True
+    )
+    payroll_run = models.ForeignKey(
+        PayrollRun, on_delete=models.CASCADE, related_name="payslips", db_index=True
+    )
+    present_days = models.DecimalField(max_digits=5, decimal_places=2, default=0.0)
+    paid_leaves = models.DecimalField(max_digits=5, decimal_places=2, default=0.0)
+    unpaid_leaves = models.DecimalField(max_digits=5, decimal_places=2, default=0.0)
+    gross_earnings = models.DecimalField(max_digits=12, decimal_places=2, default=0.0)
+    total_deductions = models.DecimalField(max_digits=12, decimal_places=2, default=0.0)
+    net_salary = models.DecimalField(max_digits=12, decimal_places=2, default=0.0)
+    component_breakdown = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True, null=True, blank=True)
+
+    class Meta:
+        db_table = "payroll_payslip"
+        unique_together = ("staff", "payroll_run")
+
+    def __str__(self):
+        return f"{self.staff} - {self.payroll_run.salary_month} (Net: {self.net_salary})"
 
 
 
@@ -1882,8 +2166,20 @@ class StaffSalaryPayment(models.Model):
                 self.school = self.staff.school
             self.staff_name = self.staff.name
             self.staff_category = self.staff.category
-
         super().save(*args, **kwargs)
+
+    @property
+    def component_breakdown(self):
+        try:
+            payslip = PayrollPayslip.objects.filter(
+                staff=self.staff,
+                payroll_run__salary_month__startswith=self.salary_month,
+            ).first()
+            if payslip:
+                return payslip.component_breakdown
+        except Exception:
+            pass
+        return None
 
 
 #  ITS FOR TIME TABLE

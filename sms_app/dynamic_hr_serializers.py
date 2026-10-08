@@ -1,0 +1,225 @@
+from rest_framework import serializers
+from .models import (
+    Staff,
+    AttendanceSetting,
+    AttendanceRegularization,
+    LeaveCycle,
+    LeaveTemplate,
+    LeaveType,
+    LeaveBalance,
+    SalaryComponent,
+    SalaryStructure,
+    PayrollRun,
+    PayrollPayslip,
+)
+
+
+class AttendanceSettingSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AttendanceSetting
+        fields = [
+            "id",
+            "school",
+            "name",
+            "check_in_time",
+            "check_out_time",
+            "grace_period_mins",
+            "half_day_threshold_mins",
+            "geo_required",
+            "geo_radius_meters",
+            "is_active",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "school", "created_at", "updated_at"]
+
+
+class AttendanceRegularizationSerializer(serializers.ModelSerializer):
+    staff_name = serializers.CharField(source="staff.name", read_only=True, default=None)
+    approved_by_username = serializers.CharField(source="approved_by.username", read_only=True, default=None)
+
+    class Meta:
+        model = AttendanceRegularization
+        fields = [
+            "id",
+            "staff",
+            "staff_name",
+            "attendance_date",
+            "requested_check_in",
+            "requested_check_out",
+            "reason",
+            "status",
+            "approved_by",
+            "approved_by_username",
+            "audit_log",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "approved_by", "audit_log", "created_at", "updated_at"]
+
+
+class LeaveCycleSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = LeaveCycle
+        fields = [
+            "id",
+            "school",
+            "name",
+            "start_date",
+            "end_date",
+            "is_active",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "school", "created_at", "updated_at"]
+
+
+class DynamicLeaveTemplateSerializer(serializers.ModelSerializer):
+    leave_types = serializers.SerializerMethodField(read_only=True)
+
+    class Meta:
+        model = LeaveTemplate
+        fields = [
+            "id",
+            "school",
+            "name",
+            "time_line",
+            "is_active",
+            "created_at",
+            "leave_types",
+        ]
+        read_only_fields = ["id", "school", "created_at"]
+
+    def get_leave_types(self, obj):
+        if hasattr(obj, "leavetype_set"):
+            return DynamicLeaveTypeSerializer(obj.leavetype_set.all(), many=True).data
+        return []
+
+
+class DynamicLeaveTypeSerializer(serializers.ModelSerializer):
+    template_name = serializers.CharField(source="leave_template.name", read_only=True, default=None)
+
+    class Meta:
+        model = LeaveType
+        fields = [
+            "id",
+            "leave_template",
+            "template_name",
+            "name",
+            "code",
+            "leave_type",
+            "is_paid",
+            "allocation_count",
+            "allocation_period",
+            "carry_forward",
+            "max_carry_forward",
+            "allow_encashment",
+            "category",
+            "created_at",
+        ]
+        read_only_fields = ["id", "created_at"]
+
+
+class LeaveBalanceSerializer(serializers.ModelSerializer):
+    staff_name = serializers.CharField(source="staff.name", read_only=True, default=None)
+    leave_type_name = serializers.CharField(source="leave_type.name", read_only=True, default=None)
+    leave_cycle_name = serializers.CharField(source="leave_cycle.name", read_only=True, default=None)
+    remaining = serializers.DecimalField(max_digits=6, decimal_places=2, read_only=True)
+
+    class Meta:
+        model = LeaveBalance
+        fields = [
+            "id",
+            "staff",
+            "staff_name",
+            "leave_type",
+            "leave_type_name",
+            "leave_cycle",
+            "leave_cycle_name",
+            "allocated",
+            "carry_forward",
+            "used",
+            "pending",
+            "remaining",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "remaining", "created_at", "updated_at"]
+
+
+class DynamicSalaryComponentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SalaryComponent
+        fields = [
+            "id",
+            "school",
+            "name",
+            "type",
+            "component_type",
+            "calc_type",
+            "calc_base",
+            "value",
+            "is_active",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "school", "created_at", "updated_at"]
+
+
+class SalaryStructureSerializer(serializers.ModelSerializer):
+    components_detail = DynamicSalaryComponentSerializer(source="components", many=True, read_only=True)
+
+    class Meta:
+        model = SalaryStructure
+        fields = [
+            "id",
+            "school",
+            "name",
+            "components",
+            "components_detail",
+            "is_active",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "school", "created_at", "updated_at"]
+
+
+class PayrollRunSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PayrollRun
+        fields = [
+            "id",
+            "school",
+            "salary_month",
+            "status",
+            "total_processed",
+            "generated_at",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "school", "created_at", "updated_at"]
+
+
+class PayrollPayslipSerializer(serializers.ModelSerializer):
+    staff_name = serializers.CharField(source="staff.name", read_only=True, default=None)
+    salary_month = serializers.DateField(source="payroll_run.salary_month", read_only=True, default=None)
+
+    class Meta:
+        model = PayrollPayslip
+        fields = [
+            "id",
+            "staff",
+            "staff_name",
+            "payroll_run",
+            "salary_month",
+            "present_days",
+            "paid_leaves",
+            "unpaid_leaves",
+            "gross_earnings",
+            "total_deductions",
+            "net_salary",
+            "component_breakdown",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "salary_month", "created_at", "updated_at"]

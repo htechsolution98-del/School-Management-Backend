@@ -9,7 +9,12 @@ from django.utils import timezone
 from django.shortcuts import get_object_or_404
 from .models import *
 from .serializer import *
-from .academic_serializers import AssignClassSerializer, ClassCategorySerializer, HomeworkSubmissionDetailSerializer
+from .academic_serializers import (
+    AssignClassSerializer,
+    ClassCategorySerializer,
+    HomeworkSubmissionDetailSerializer,
+    AttendanceSerializer,
+)
 from .permissions import *
 from .utils import *
 import datetime
@@ -933,6 +938,9 @@ class TodayAttendanceStatusView(APIView):
                     "check_out": None,
                     "is_present": False,
                     "is_half_day": False,
+                    "is_late": False,
+                    "is_early_exit": False,
+                    "working_hours": 0.0,
                 },
                 status=status.HTTP_200_OK,
             )
@@ -946,6 +954,9 @@ class TodayAttendanceStatusView(APIView):
                 "check_out": attendance.check_out,
                 "is_present": attendance.is_present,
                 "is_half_day": attendance.is_half_day,
+                "is_late": getattr(attendance, "is_late", False),
+                "is_early_exit": getattr(attendance, "is_early_exit", False),
+                "working_hours": float(getattr(attendance, "working_hours", 0.0) or 0.0),
             },
             status=status.HTTP_200_OK,
         )

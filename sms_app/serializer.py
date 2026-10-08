@@ -30,6 +30,8 @@ from django.contrib.auth import get_user_model
 from sms_app.library_leave_views import get_approved_paid_leave_days
 import numpy as np
 import cv2
+import cv2.data
+from typing import Any
 from django.utils.timezone import now
 
 User = get_user_model()
@@ -42,7 +44,8 @@ class SendOTPSerializer(serializers.Serializer):
     def validate_mobile(self, value):
         return validate_mobile(value)
 
-    def validate(self, data):
+    def validate(self, attrs):
+        data = attrs
         email = data.get("email")
         mobile = data.get("mobile")
 
@@ -65,7 +68,8 @@ class VerifyOTPSerializer(serializers.Serializer):
     school_id = serializers.CharField(write_only=True, required=False)
     school_slug = serializers.CharField(write_only=True, required=False)
 
-    def validate(self, data):
+    def validate(self, attrs):
+        data = attrs
         email = data.get("email")
         mobile = data.get("mobile")
         otp = data.get("otp")
@@ -150,7 +154,8 @@ class LoginSerializer(serializers.Serializer):
     username = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     password = serializers.CharField(write_only=True)
 
-    def validate(self, data):
+    def validate(self, attrs):
+        data = attrs
         email = data.get("email")
         mobile = data.get("mobile")
         username = data.get("username")
@@ -216,7 +221,7 @@ class LoginSerializer(serializers.Serializer):
 class CustomeLoginSerializer(TokenObtainPairSerializer):
 
     def validate(self, attrs):
-        data = super().validate(attrs)
+        data: dict[str, Any] = dict(super().validate(attrs))
         user = self.user
 
         role = user.groups.values_list("name", flat=True)
@@ -244,7 +249,8 @@ class SchoolFeatureSerializer(serializers.ModelSerializer):
         fields = ["created_at", "id", "school", "feature", "feature_name", "is_enabled"]
         read_only_fields = ["is_enabled", "feature_name"]
 
-    def validate(self, data):
+    def validate(self, attrs):
+        data = attrs
         school = data.get("school")
         feature = data.get("feature")
 
@@ -323,6 +329,20 @@ class StaffSerializer(serializers.ModelSerializer):
             if age < 18:
                 raise serializers.ValidationError("Staff member must be at least 18 years old.")
         return value
+
+    def validate_joining_date(self, value):
+        if value:
+            if value.year < 1900:
+                raise serializers.ValidationError("Enter a valid joining date.")
+        return value
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        dob = attrs.get("date_of_birth") or (self.instance.date_of_birth if self.instance else None)
+        joining = attrs.get("joining_date") or (self.instance.joining_date if self.instance else None)
+        if dob and joining and joining < dob:
+            raise serializers.ValidationError({"joining_date": "Joining date cannot be earlier than date of birth."})
+        return attrs
 
 
 class UserListSerialzer(serializers.ModelSerializer):
@@ -678,7 +698,8 @@ class SchoolClassSerializer(serializers.ModelSerializer):
         model = SchoolClass
         fields = ['id', 'school_class', 'category', 'is_rte_applicable', 'created_at']
 
-    def validate(self, data):
+    def validate(self, attrs):
+        data = attrs
         request = self.context.get("request")
         school = getattr(request.user, "school", None) if request and hasattr(request, "user") else None
         school_class = data.get("school_class")
@@ -809,7 +830,8 @@ class AdmissionFormSerializer(serializers.ModelSerializer):
         read_only_fields = ["unique_link"]
 
     # ================= VALIDATION =================
-    def validate(self, data):
+    def validate(self, attrs):
+        data = attrs
         fee_type = data.get("fee_type")
         fee_structures = data.get("fee_structures_input") or []
 
@@ -977,7 +999,8 @@ class AdmissionSubmissionSerializer(serializers.ModelSerializer):
 
         return super().to_internal_value(data)
 
-    def validate(self, data):
+    def validate(self, attrs):
+        data = attrs
         form = data["form"]
         field_values = data["field_values"]
         school_class = data.get("school_class")
@@ -1218,7 +1241,8 @@ class AdmissionDocumentSubmissionSerializer(serializers.ModelSerializer):
         fields = ["created_at", "admission_number", "documents"]
         read_only_fields = ["school"]
 
-    def validate(self, data):
+    def validate(self, attrs):
+        data = attrs
         admission_number = data.get("admission_number")
         documents = data.get("documents") or []
 
@@ -2017,7 +2041,8 @@ class AssignClassSerializer(serializers.ModelSerializer):
 
         read_only_fields = ["teacher_name", "subject_name", "division_name", "class_name"]
 
-    def validate(self, data):
+    def validate(self, attrs):
+        data = attrs
         request = self.context.get("request")
         school = request.user.school if request and hasattr(request.user, "school") else None
 
@@ -2317,7 +2342,8 @@ class Tt_yearSerializer(serializers.ModelSerializer):
 
         read_only_fields = ["year"]
 
-    def validate(self, data):
+    def validate(self, attrs):
+        data = attrs
         start = data.get("start_year")
         end = data.get("end_year")
 
@@ -2390,7 +2416,8 @@ class Time_tableSerializer(serializers.ModelSerializer):
         ]
         # read_only_fields = ["year"]
 
-    def validate(self, data):
+    def validate(self, attrs):
+        data = attrs
         slot_data = data.get("slot", [])
         class_div = data.get("class_div") or data.get("division")
         year = data.get("year")
@@ -2739,13 +2766,13 @@ def is_before_time(current_time, rule_time):
 
 class AttendanceSerializer(serializers.ModelSerializer):
 
-    latitude = serializers.CharField(write_only=True)
-    longitude = serializers.CharField(write_only=True)
-    # radius = serializers.CharField(write_only=True)
+    latitude = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    longitude = serializers.CharField(write_only=True, required=False, allow_blank=True)
 
     class Meta:
         model = Attendance
-        fields = ["created_at", "id",
+        fields = [
+            "id",
             "latitude",
             "longitude",
             "school",
@@ -2756,8 +2783,12 @@ class AttendanceSerializer(serializers.ModelSerializer):
             "category",
             "is_present",
             "is_half_day",
+            "is_late",
+            "is_early_exit",
+            "working_hours",
             "check_in",
             "check_out",
+            "created_at",
         ]
 
         read_only_fields = [
@@ -2770,27 +2801,35 @@ class AttendanceSerializer(serializers.ModelSerializer):
             "category",
             "is_present",
             "is_half_day",
+            "is_late",
+            "is_early_exit",
+            "working_hours",
             "check_in",
             "check_out",
+            "created_at",
         ]
 
     def validate_latitude(self, value):
+        if value in (None, ""):
+            return None
         try:
-            value = float(value)
+            val = float(value)
         except (TypeError, ValueError):
             raise serializers.ValidationError("Latitude must be a valid number.")
-        if value < -90 or value > 90:
+        if val < -90 or val > 90:
             raise serializers.ValidationError("Latitude must be between -90 and 90.")
-        return value
+        return val
 
     def validate_longitude(self, value):
+        if value in (None, ""):
+            return None
         try:
-            value = float(value)
+            val = float(value)
         except (TypeError, ValueError):
             raise serializers.ValidationError("Longitude must be a valid number.")
-        if value < -180 or value > 180:
+        if val < -180 or val > 180:
             raise serializers.ValidationError("Longitude must be between -180 and 180.")
-        return value
+        return val
 
     def validate(self, attrs):
         request = self.context.get("request")
@@ -2803,19 +2842,26 @@ class AttendanceSerializer(serializers.ModelSerializer):
         if not school:
             raise serializers.ValidationError("User school is not configured.")
 
-        attendance_location = AttendanceLocation.objects.filter(
-            school=school.id
-        ).first()
-        if not attendance_location:
-            raise serializers.ValidationError(
-                "Attendance location is not configured for this school."
-            )
-
         staff = Staff.objects.filter(user=request.user).first()
         if not staff:
             raise serializers.ValidationError(
                 "Staff profile not found for current user."
             )
+
+        policy = getattr(staff, "attendance_setting", None)
+        if not policy:
+            policy = AttendanceSetting.objects.filter(school=school, is_active=True).first()
+
+        geo_required = policy.geo_required if policy else True
+
+        if geo_required:
+            attendance_location = AttendanceLocation.objects.filter(
+                school=school.id
+            ).first()
+            if not attendance_location:
+                raise serializers.ValidationError(
+                    "Attendance location is not configured for this school."
+                )
 
         today = timezone.localdate()
         attendance = Attendance.objects.filter(
@@ -2836,50 +2882,107 @@ class AttendanceSerializer(serializers.ModelSerializer):
         latitude = validated_data.pop("latitude", None)
         longitude = validated_data.pop("longitude", None)
 
-        attendance_location = AttendanceLocation.objects.filter(
-            school=school.id
-        ).first()
+        staff = Staff.objects.filter(user=user).first()
+        if not staff:
+            raise serializers.ValidationError("Staff profile not found for current user.")
 
-        loc_latitude = attendance_location.latitude
-        loc_longitude = attendance_location.longitude
-        loc_radius = attendance_location.radius
+        # 1. Dynamic Policy Retrieval (staff assigned -> school active -> fallback)
+        policy = getattr(staff, "attendance_setting", None)
+        if not policy:
+            policy = AttendanceSetting.objects.filter(school=school, is_active=True).first()
 
-        is_inside = is_inside_radius(
-            float(latitude),
-            float(longitude),
-            float(loc_latitude),
-            float(loc_longitude),
-            float(loc_radius),
-        )
+        # Legacy fallback
+        attendance_rule = AttendanceTimeRule.objects.filter(school=school).first()
 
-        if not is_inside:
-            raise serializers.ValidationError(
-                "You are not within the attendance radius."
+        # 2. Dynamic Geo-validation
+        geo_required = policy.geo_required if policy else True
+        if geo_required:
+            attendance_location = AttendanceLocation.objects.filter(
+                school=school.id
+            ).first()
+            if not attendance_location:
+                raise serializers.ValidationError(
+                    "Attendance location is not configured for this school."
+                )
+
+            if latitude in (None, "") or longitude in (None, ""):
+                raise serializers.ValidationError(
+                    "Latitude and longitude coordinates are required for attendance check."
+                )
+
+            loc_latitude = attendance_location.latitude
+            loc_longitude = attendance_location.longitude
+
+            allowed_radius = (
+                float(policy.geo_radius_meters)
+                if (policy and policy.geo_radius_meters is not None)
+                else float(attendance_location.radius)
             )
 
-        staff = Staff.objects.filter(user=user).first()
-        attendance_rule = AttendanceTimeRule.objects.filter(school=school).first()
+            is_inside = is_inside_radius(
+                float(latitude),
+                float(longitude),
+                float(loc_latitude),
+                float(loc_longitude),
+                allowed_radius,
+            )
+
+            if not is_inside:
+                raise serializers.ValidationError(
+                    "You are not within the attendance radius."
+                )
+
         now = timezone.localtime()
         current_time = now.time()
 
         with transaction.atomic():
             today = timezone.localdate()
-            rule_start_time = attendance_rule.start_time if attendance_rule else None
-            attendance, created = Attendance.objects.select_for_update().get_or_create(
-                staff=staff,
-                attendance_date=today,
-                defaults={
-                    "school": school,
-                    "category": staff.category,
-                    "name": staff.name,
-                    "is_present": True,
-                    "date_time": now,
-                    "check_in": now,
-                    "is_half_day": is_after_time(current_time, rule_start_time),
-                },
+            attendance = (
+                Attendance.objects.select_for_update()
+                .filter(staff=staff, attendance_date=today)
+                .first()
             )
 
-            if not created:
+            if not attendance:
+                # 3. Dynamic Late & Half-Day Calculation (Check-in)
+                is_late = False
+                is_half_day = False
+
+                if policy and policy.check_in_time:
+                    curr_sec = current_time.hour * 3600 + current_time.minute * 60 + current_time.second
+                    target_sec = policy.check_in_time.hour * 3600 + policy.check_in_time.minute * 60 + policy.check_in_time.second
+                    diff_mins = (curr_sec - target_sec) / 60.0
+
+                    if diff_mins > policy.grace_period_mins:
+                        is_late = True
+                    if diff_mins > policy.half_day_threshold_mins:
+                        is_half_day = True
+                elif attendance_rule:
+                    rule_start_time = attendance_rule.start_time
+                    rule_half_time = attendance_rule.half_day_time
+                    if rule_start_time and current_time > rule_start_time:
+                        is_late = True
+                    if rule_half_time and current_time > rule_half_time:
+                        is_half_day = True
+                    elif rule_start_time and is_after_time(current_time, rule_start_time):
+                        is_half_day = True
+
+                attendance = Attendance.objects.create(
+                    school=school,
+                    staff=staff,
+                    category=staff.category,
+                    name=staff.name,
+                    attendance_date=today,
+                    date_time=now,
+                    check_in=now,
+                    is_present=True,
+                    is_late=is_late,
+                    is_half_day=is_half_day,
+                )
+                return attendance
+
+            else:
+                # 4. Early Exit Calculation & Working Hours (Check-out)
                 if attendance.check_out:
                     raise serializers.ValidationError(
                         "Check-out has already been recorded for today."
@@ -2888,15 +2991,40 @@ class AttendanceSerializer(serializers.ModelSerializer):
                 attendance.check_out = now
                 update_fields = ["check_out"]
 
-                rule_end_time = attendance_rule.end_time if attendance_rule else None
-                if is_before_time(current_time, rule_end_time):
-                    attendance.is_half_day = True
-                    update_fields.append("is_half_day")
+                # Working hours calculation
+                if attendance.check_in:
+                    duration = attendance.check_out - attendance.check_in
+                    total_seconds = max(0.0, duration.total_seconds())
+                    working_hours = round(Decimal(str(total_seconds)) / Decimal("3600.0"), 2)
+                    attendance.working_hours = working_hours
+                    update_fields.append("working_hours")
+
+                # Early Exit calculation
+                is_early_exit = False
+                if policy and policy.check_out_time:
+                    curr_sec = current_time.hour * 3600 + current_time.minute * 60 + current_time.second
+                    target_sec = policy.check_out_time.hour * 3600 + policy.check_out_time.minute * 60 + policy.check_out_time.second
+                    early_diff_mins = (target_sec - curr_sec) / 60.0
+
+                    if early_diff_mins > (policy.grace_period_mins or 0):
+                        is_early_exit = True
+                    if early_diff_mins > policy.half_day_threshold_mins:
+                        attendance.is_half_day = True
+                        if "is_half_day" not in update_fields:
+                            update_fields.append("is_half_day")
+                elif attendance_rule:
+                    rule_end_time = attendance_rule.end_time
+                    if rule_end_time and current_time < rule_end_time:
+                        is_early_exit = True
+                        attendance.is_half_day = True
+                        if "is_half_day" not in update_fields:
+                            update_fields.append("is_half_day")
+
+                attendance.is_early_exit = is_early_exit
+                update_fields.append("is_early_exit")
 
                 attendance.save(update_fields=update_fields)
                 return attendance
-
-            return attendance
 
 
 class LeaveTemplateSerializer(serializers.ModelSerializer):
@@ -3123,9 +3251,10 @@ class ChangeLeavePerDaySerializer(serializers.ModelSerializer):
                     f"No leave template found for {leave_type}."
                 )
 
-            if remaining_data.remaining_leaves <= 0:
+            current_leaves = remaining_data.remaining_leaves or 0
+            if current_leaves <= 0:
                 raise serializers.ValidationError(
-                    f"Insufficient {leave_type} leaves. Remaining: {remaining_data.remaining_leaves}"
+                    f"Insufficient {leave_type} leaves. Remaining: {current_leaves}"
                 )
 
         return attrs
@@ -3146,14 +3275,16 @@ class ChangeLeavePerDaySerializer(serializers.ModelSerializer):
         # ✅ Case 1: PENDING/REJECTED → APPROVED (consume leaves)
         if new_status == "APPROVED" and old_status != "APPROVED":
             if remaining_data:
-                remaining_data.remaining_leaves -= 1
+                current_rem = remaining_data.remaining_leaves or 0
+                remaining_data.remaining_leaves = max(0, current_rem - 1)
                 remaining_data.save()
             instance.approved_at = timezone.now()
 
         # ✅ Case 2: APPROVED → REJECTED/CANCELLED (restore leaves)
         elif old_status == "APPROVED" and new_status in ["REJECTED", "CANCELLED"]:
             if remaining_data:
-                remaining_data.remaining_leaves += 1
+                current_rem = remaining_data.remaining_leaves or 0
+                remaining_data.remaining_leaves = current_rem + 1
                 remaining_data.save()
             instance.approved_at = None
 
@@ -3490,7 +3621,11 @@ class SalaryComponentSerializer(serializers.ModelSerializer):
         fields = ["created_at", "id",
             "school",
             "name",
+            "type",
             "component_type",
+            "calc_type",
+            "calc_base",
+            "value",
             "is_active",
         ]
         read_only_fields = ["school"]
@@ -4541,7 +4676,7 @@ class StaffListSirializer(serializers.ModelSerializer):
             "category",
             # "address",
             # "date_of_birth",
-            # "joining_date",
+            "joining_date",
             # "salary",
             # "is_active",
             # "created_at",

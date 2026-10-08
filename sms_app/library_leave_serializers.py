@@ -1,3 +1,8 @@
+from decimal import Decimal
+from datetime import date, timedelta
+from django.db import transaction
+from django.db.models import F
+from django.utils import timezone
 from .models import *
 from rest_framework import serializers
 
@@ -83,62 +88,251 @@ from datetime import timedelta
 
 
 class LeaveRequestSerializer(serializers.ModelSerializer):
-    leave_type_name = serializers.CharField(
-        source="leave_type.name", read_only=True
+    leave_type_name = serializers.SerializerMethodField()
+    dynamic_leave_type_name = serializers.SerializerMethodField()
+    available_balance = serializers.SerializerMethodField()
+
+    dynamic_leave_type = serializers.PrimaryKeyRelatedField(
+        queryset=LeaveType.objects.all(), required=False, allow_null=True
     )
+    leave_type = serializers.PrimaryKeyRelatedField(
+        queryset=LeaveType.objects.all(), required=False, allow_null=True
+    )
+
     class Meta:
         model = LeaveRequest
-        fields = ["id","start_date","end_date", "total_days","reason", "created_at", "updated_at","school", "staff","leave_type","leave_type_name"]
-        read_only_fields = ["school", "staff", "total_days", "approved_by"]
+        fields = [
+            "id",
+            "start_date",
+            "end_date",
+            "total_days",
+            "reason",
+            "created_at",
+            "updated_at",
+            "school",
+            "staff",
+            "leave_type",
+            "dynamic_leave_type",
+            "leave_type_name",
+            "dynamic_leave_type_name",
+            "is_paid",
+            "status",
+            "available_balance",
+        ]
+        read_only_fields = [
+            "school",
+            "staff",
+            "is_paid",
+            "status",
+            "available_balance",
+            "created_at",
+            "updated_at",
+        ]
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-
         request = self.context.get("request")
         if request and getattr(request.user, "school", None):
             school = request.user.school
             qs = LeaveType.objects.filter(leave_template__school=school)
             staff = Staff.objects.filter(user=request.user, school=school).first()
-            if staff and getattr(staff, "category", None):
+            if staff and getattr(staff, "leave_template", None):
+                tpl_qs = qs.filter(leave_template=staff.leave_template)
+                if tpl_qs.exists():
+                    qs = tpl_qs
+            elif staff and getattr(staff, "category", None):
                 cat_qs = qs.filter(category__feature__name=staff.category)
                 if cat_qs.exists():
                     qs = cat_qs
             self.fields["leave_type"].queryset = qs
-    
+            self.fields["dynamic_leave_type"].queryset = qs
+
+    def get_leave_type_name(self, obj):
+        lt = obj.dynamic_leave_type or obj.leave_type
+        if lt:
+            return getattr(lt, "name", None) or getattr(lt, "leave_type", None) or str(lt)
+        return "Leave"
+
+    def get_dynamic_leave_type_name(self, obj):
+        return self.get_leave_type_name(obj)
+
+    def get_available_balance(self, obj):
+        if not obj.staff:
+            return None
+        lt = obj.dynamic_leave_type or obj.leave_type
+        if not lt:
+            return None
+        cycle = LeaveCycle.objects.filter(
+            school=obj.school,
+            start_date__lte=obj.start_date,
+            end_date__gte=obj.start_date,
+        ).first() or LeaveCycle.objects.filter(school=obj.school, is_active=True).first()
+        if not cycle:
+            return None
+        bal = LeaveBalance.objects.filter(
+            staff=obj.staff, leave_type=lt, leave_cycle=cycle
+        ).first()
+        if bal:
+            return float(bal.remaining)
+        return float(lt.allocation_count or lt.leave_num or 0)
+
+    def validate(self, attrs):
+        start_date = attrs.get("start_date")
+        end_date = attrs.get("end_date")
+        if start_date and end_date and end_date < start_date:
+            raise serializers.ValidationError("End date cannot be before start date.")
+
+        request = self.context.get("request")
+        user = request.user if request else None
+        if not user:
+            raise serializers.ValidationError("Authentication required.")
+
+        staff = Staff.objects.filter(user=user).first()
+        if not staff:
+            raise serializers.ValidationError("Staff profile not found for user.")
+
+        leave_type = attrs.get("dynamic_leave_type") or attrs.get("leave_type")
+        if not leave_type:
+            raise serializers.ValidationError("Leave type is required.")
+
+        # Reject overlapping date ranges or multiple leave types on the same date
+        overlapping = LeaveRequest.objects.filter(
+            staff=staff,
+            status__in=["PENDING", "APPROVED"],
+            start_date__lte=end_date,
+            end_date__gte=start_date,
+        )
+        if self.instance:
+            overlapping = overlapping.exclude(id=self.instance.id)
+
+        if overlapping.exists():
+            ol = overlapping.first()
+            raise serializers.ValidationError(
+                f"You already have a {ol.status.lower()} leave request ({ol.start_date} to {ol.end_date}) overlapping with this date range."
+            )
+
+        overlapping_days = LeavePerDay.objects.filter(
+            leave__staff=staff,
+            status__in=["PENDING", "APPROVED"],
+            date__range=(start_date, end_date),
+        )
+        if self.instance:
+            overlapping_days = overlapping_days.exclude(leave=self.instance)
+
+        if overlapping_days.exists():
+            raise serializers.ValidationError(
+                f"A leave request is already pending or approved for date: {overlapping_days.first().date}."
+            )
+
+        # 1. Identify active LeaveCycle
+        school = user.school or staff.school
+        cycle = LeaveCycle.objects.filter(
+            school=school,
+            start_date__lte=start_date,
+            end_date__gte=start_date,
+        ).first() or LeaveCycle.objects.filter(school=school, is_active=True).first()
+
+        if not cycle:
+            cycle = LeaveCycle.objects.filter(school=school).order_by("-start_date").first()
+
+        if not cycle:
+            cycle, _ = LeaveCycle.objects.get_or_create(
+                school=school,
+                name=f"{start_date.year}-{start_date.year + 1}",
+                defaults={
+                    "start_date": date(start_date.year, 1, 1),
+                    "end_date": date(start_date.year, 12, 31),
+                    "is_active": True,
+                }
+            )
+
+        # 2. Fetch user's LeaveBalance
+        balance, _ = LeaveBalance.objects.get_or_create(
+            staff=staff,
+            leave_type=leave_type,
+            leave_cycle=cycle,
+            defaults={
+                "allocated": Decimal(str(leave_type.allocation_count or leave_type.leave_num or 0)),
+                "carry_forward": Decimal("0.0"),
+                "used": Decimal("0.0"),
+                "pending": Decimal("0.0"),
+            }
+        )
+
+        # 3. Calculate available balance = (allocated + carry_forward) - (used + pending)
+        available_balance = Decimal(str(balance.remaining))
+
+        # 4. Calculate requested_days (support 0.5 for half-days)
+        passed_days = attrs.get("total_days")
+        if passed_days is not None and Decimal(str(passed_days)) > 0:
+            requested_days = Decimal(str(passed_days))
+        else:
+            requested_days = Decimal((end_date - start_date).days + 1)
+
+        # 5. Overdraft validation:
+        # IF requested_days > available_balance AND the LeaveType does not explicitly allow unpaid/LOP overdrafts,
+        # raise a serializers.ValidationError("Insufficient leave balance")
+        if leave_type.is_paid and requested_days > available_balance:
+            raise serializers.ValidationError(
+                f"Insufficient leave balance. You have {available_balance} days available, but requested {requested_days} days."
+            )
+
+        attrs["_school"] = school
+        attrs["_staff"] = staff
+        attrs["_cycle"] = cycle
+        attrs["_balance"] = balance
+        attrs["_requested_days"] = requested_days
+
+        return attrs
+
     def create(self, validated_data):
         start_date = validated_data.get("start_date")
         end_date = validated_data.get("end_date")
-        request = self.context.get("request")
-        user = request.user if request else None
+        school = validated_data.pop("_school", None)
+        staff = validated_data.pop("_staff", None)
+        balance = validated_data.pop("_balance", None)
+        requested_days = validated_data.pop("_requested_days", None)
+        validated_data.pop("_cycle", None)
 
-        if end_date < start_date:
-            raise serializers.ValidationError("End date cannot be before start date.")
+        if not school or not staff or not balance or requested_days is None:
+            # Fallback in case validate wasn't called directly
+            request = self.context.get("request")
+            user = request.user if request else None
+            staff = staff or Staff.objects.filter(user=user).first()
+            school = school or (user.school if user else None) or (staff.school if staff else None)
+            leave_type = validated_data.get("dynamic_leave_type") or validated_data.get("leave_type")
+            cycle = LeaveCycle.objects.filter(school=school, is_active=True).first()
+            balance, _ = LeaveBalance.objects.get_or_create(staff=staff, leave_type=leave_type, leave_cycle=cycle)
+            requested_days = Decimal(str(validated_data.get("total_days") or 1.0))
 
-        # ✅ calculate total days
-        total_days = (end_date - start_date).days + 1
-        validated_data["total_days"] = total_days
-
-        staff = Staff.objects.filter(user=user).first() if user else None
-        school = (user.school if user and getattr(user, "school", None) else None) or (staff.school if staff else None)
+        leave_type = validated_data.get("dynamic_leave_type") or validated_data.get("leave_type")
 
         validated_data["school"] = school
         validated_data["staff"] = staff
+        validated_data["total_days"] = requested_days
+        validated_data["leave_type"] = leave_type
+        validated_data["dynamic_leave_type"] = leave_type
+        validated_data["is_paid"] = leave_type.is_paid
+        validated_data["status"] = "PENDING"
 
-        validated_data.pop("status", None)
+        with transaction.atomic():
+            # Immediately increment pending amount on LeaveBalance
+            balance.pending = F("pending") + requested_days
+            balance.save(update_fields=["pending", "updated_at"])
+            balance.refresh_from_db()
 
-        # ✅ create main LeaveRequest first
-        leave_request = LeaveRequest.objects.create(status="PENDING", **validated_data)
+            leave_request = LeaveRequest.objects.create(**validated_data)
 
-        # ✅ now create LeavePerDay entries
-        current = start_date
-        while current <= end_date:
-            LeavePerDay.objects.create(
-                school=school,
-                leave=leave_request,
-                date=current,
-                status="PENDING",
-            )
-            current += timedelta(days=1)
+            # Create LeavePerDay entries
+            current = start_date
+            while current <= end_date:
+                LeavePerDay.objects.create(
+                    school=school,
+                    leave=leave_request,
+                    date=current,
+                    status="PENDING",
+                )
+                current += timedelta(days=1)
 
         return leave_request
 
@@ -169,6 +363,7 @@ class GetLeaveRequestSerializer(serializers.ModelSerializer):
     remaining_leaves = serializers.SerializerMethodField()
     staff_name = serializers.CharField(source="staff.name", read_only=True)
     leave_type_name = serializers.SerializerMethodField()
+    dynamic_leave_type_name = serializers.SerializerMethodField()
     status = serializers.SerializerMethodField()
 
     class Meta:
@@ -178,7 +373,10 @@ class GetLeaveRequestSerializer(serializers.ModelSerializer):
             "staff",
             "staff_name",
             "leave_type",
+            "dynamic_leave_type",
             "leave_type_name",
+            "dynamic_leave_type_name",
+            "is_paid",
             "reason",
             "total_days",
             "start_date",
@@ -193,15 +391,24 @@ class GetLeaveRequestSerializer(serializers.ModelSerializer):
             "school",
             "staff",
             "leave_type",
+            "dynamic_leave_type",
+            "is_paid",
             "total_days",
             "leave_days",
             "remaining_leaves",
         ]
 
     def get_leave_type_name(self, obj):
+        if obj.dynamic_leave_type:
+            return obj.dynamic_leave_type.name or obj.dynamic_leave_type.leave_type
         if obj.leave_type:
             return getattr(obj.leave_type, "leave_type", str(obj.leave_type))
         return "Casual Leave"
+
+    def get_dynamic_leave_type_name(self, obj):
+        if obj.dynamic_leave_type:
+            return obj.dynamic_leave_type.name or obj.dynamic_leave_type.leave_type
+        return None
 
     def get_status(self, obj):
         if hasattr(obj, "status") and obj.status:
@@ -214,30 +421,44 @@ class GetLeaveRequestSerializer(serializers.ModelSerializer):
     def to_representation(self, instance):
         data = super().to_representation(instance)
         # Ensure leave_type is represented as a name string if expected by frontend
-        if instance.leave_type:
+        if instance.dynamic_leave_type:
+            data["leave_type"] = instance.dynamic_leave_type.name or instance.dynamic_leave_type.leave_type
+        elif instance.leave_type:
             data["leave_type"] = getattr(instance.leave_type, "leave_type", str(instance.leave_type))
         return data
 
     def get_remaining_leaves(self, obj):
-        queryset = StaffRemainingLeave.objects.filter(
-            staff=obj.staff
-        )
-        return StaffRemainingLeaveSerializer(queryset, many=True).data
+        queryset = LeaveBalance.objects.filter(staff=obj.staff).select_related("leave_type", "leave_cycle")
+        if queryset.exists():
+            return [
+                {
+                    "id": b.id,
+                    "staff": b.staff_id,
+                    "leave_type": b.leave_type_id,
+                    "leave_type_name": b.leave_type.name or b.leave_type.leave_type,
+                    "allocated": float(b.allocated),
+                    "used": float(b.used),
+                    "pending": float(b.pending),
+                    "remaining": float(b.remaining),
+                    "remaining_leaves": float(b.remaining),
+                }
+                for b in queryset
+            ]
+        old_qs = StaffRemainingLeave.objects.filter(staff=obj.staff)
+        return StaffRemainingLeaveSerializer(old_qs, many=True).data
     
     
     def validate(self, attrs):
-        staff = attrs["staff"]
-        leave_type = attrs["leave_type"]
+        staff = attrs.get("staff")
+        leave_type = attrs.get("leave_type")
 
-        if leave_type.category.feature.name != staff.category:
-            raise serializers.ValidationError(
-                "This leave type is not available for the selected staff category."
-            )
+        if leave_type and staff and getattr(leave_type, "category", None) and getattr(staff, "category", None):
+            if leave_type.category.feature.name != staff.category:
+                raise serializers.ValidationError(
+                    "This leave type is not available for the selected staff category."
+                )
 
         return attrs
-
-
-from django.db.models import F
 
 
 class ChangeLeavePerDaySerializer(serializers.ModelSerializer):
@@ -261,35 +482,13 @@ class ChangeLeavePerDaySerializer(serializers.ModelSerializer):
         new_status = attrs.get("status")
         instance = self.instance
 
-        #  Check if status is already in a final state
         if instance.status in ["CANCELLED"]:
             raise serializers.ValidationError(
                 f"Cannot change status from {instance.status}. This leave is already finalized."
             )
 
-        #  Check invalid transitions
         if instance.status == "REJECTED" and new_status in ["APPROVED"]:
             raise serializers.ValidationError("Cannot approve a rejected leave.")
-
-        #  If changing to APPROVED, validate remaining leaves
-        if new_status == "APPROVED" and instance.status != "APPROVED":
-            leave_request = instance.leave
-            staff = leave_request.staff
-            leave_type = leave_request.leave_type
-
-            remaining_data = StaffRemainingLeave.objects.filter(
-                leave_type=leave_type, staff=staff
-            ).first()
-
-            if not remaining_data:
-                raise serializers.ValidationError(
-                    f"No leave template found for {leave_type}."
-                )
-
-            # if remaining_data.remaining_leaves <= 0:
-            #     raise serializers.ValidationError(
-            #         f"Insufficient {leave_type} leaves. Remaining: {remaining_data.remaining_leaves}"
-            #     )
 
         return attrs
 
@@ -300,37 +499,51 @@ class ChangeLeavePerDaySerializer(serializers.ModelSerializer):
 
         leave_request = instance.leave
         staff = leave_request.staff
-        leave_type = leave_request.leave_type
+        leave_type = leave_request.dynamic_leave_type or leave_request.leave_type
 
+        # Update dynamic LeaveBalance
+        cycle = LeaveCycle.objects.filter(
+            school=instance.school or getattr(leave_request, "school", None),
+            start_date__lte=instance.date,
+            end_date__gte=instance.date,
+        ).first() or LeaveCycle.objects.filter(school=instance.school or getattr(leave_request, "school", None), is_active=True).first()
+
+        balance = LeaveBalance.objects.filter(
+            staff=staff, leave_type=leave_type, leave_cycle=cycle
+        ).first() if (staff and leave_type and cycle) else None
+
+        one_day = Decimal("1.0")
+        if balance:
+            if new_status == "APPROVED" and old_status != "APPROVED":
+                if old_status == "PENDING":
+                    balance.pending = max(Decimal("0.0"), balance.pending - one_day)
+                balance.used = balance.used + one_day
+                balance.save(update_fields=["pending", "used", "updated_at"])
+            elif old_status == "PENDING" and new_status in ["REJECTED", "CANCELLED"]:
+                balance.pending = max(Decimal("0.0"), balance.pending - one_day)
+                balance.save(update_fields=["pending", "updated_at"])
+            elif old_status == "APPROVED" and new_status in ["REJECTED", "CANCELLED"]:
+                balance.used = max(Decimal("0.0"), balance.used - one_day)
+                balance.save(update_fields=["used", "updated_at"])
+
+        # Also maintain legacy table for backward compatibility
         remaining_data = StaffRemainingLeave.objects.filter(
             leave_type=leave_type, staff=staff
         ).first()
-
-        # Case 1: PENDING/REJECTED → APPROVED (consume leaves)
-        if new_status == "APPROVED" and old_status != "APPROVED":
-            if remaining_data:
-                if remaining_data.remaining_leaves <= 0:
-                    leave_request.is_paid = True
-                    leave_request.save()
-                    
-                else:
-                    remaining_data.remaining_leaves -= 1
+        if remaining_data:
+            current_rem = remaining_data.remaining_leaves or 0
+            if new_status == "APPROVED" and old_status != "APPROVED":
+                if current_rem > 0:
+                    remaining_data.remaining_leaves = current_rem - 1
                     remaining_data.save()
-                
-                
-            instance.approved_at = timezone.now()
-
-        # Case 2: APPROVED → REJECTED/CANCELLED (restore leaves)
-        elif old_status == "APPROVED" and new_status in ["REJECTED", "CANCELLED"]:
-            if remaining_data:
-                remaining_data.remaining_leaves += 1
+            elif old_status == "APPROVED" and new_status in ["REJECTED", "CANCELLED"]:
+                remaining_data.remaining_leaves = current_rem + 1
                 remaining_data.save()
-            instance.approved_at = None
 
-        #Case 3: Any other transition to REJECTED/CANCELLED (no leaves to restore)
+        if new_status == "APPROVED":
+            instance.approved_at = timezone.now()
         elif new_status in ["REJECTED", "CANCELLED"]:
             instance.approved_at = None
-            
 
         instance.status = new_status
         instance.save()
@@ -579,7 +792,7 @@ class ClerkCertificateRequestSerializer(serializers.ModelSerializer):
         
 class CertificateTemplateFieldSerializer(serializers.ModelSerializer):
 
-    value = serializers.SerializerMethodField()
+    value = serializers.SerializerMethodField("get_field_value")
 
     STUDENT_FIELD_MAP = {
         "surname": "surname",
@@ -603,8 +816,8 @@ class CertificateTemplateFieldSerializer(serializers.ModelSerializer):
             "value",
         ]
 
-    def get_value(self, obj):
-        student = self.context["student"]
+    def get_field_value(self, obj):
+        student = self.context.get("student")
 
         field = self.STUDENT_FIELD_MAP.get(obj.field_name)
 
@@ -690,12 +903,20 @@ class NewLeaveTypeSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "leave_type",
+            "name",
+            "code",
             "leave_template",
             "leave_num",
+            "allocation_count",
+            "allocation_period",
+            "is_paid",
+            "carry_forward",
+            "max_carry_forward",
+            "allow_encashment",
             "category",
             "category_name",
             "created_at",
-            "is_carry_forward"
+            "is_carry_forward",
         ]
         read_only_fields = ["id", "created_at"]
  
@@ -774,8 +995,7 @@ class NewLeaveTemplateSerializer(serializers.ModelSerializer):
  
     class Meta:
         model = LeaveTemplate
-        # Removed "name" — template is identified by time_line + school, name is redundant
-        fields = ["created_at", "id", "time_line", "school", "leave_types"]
+        fields = ["created_at", "id", "name", "time_line", "is_active", "school", "leave_types"]
         read_only_fields = ["id", "school"]
  
     def validate(self, attrs):

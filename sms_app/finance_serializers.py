@@ -195,7 +195,11 @@ class SalaryComponentSerializer(serializers.ModelSerializer):
             "id",
             "school",
             "name",
+            "type",
             "component_type",
+            "calc_type",
+            "calc_base",
+            "value",
             "is_active",
             "created_at",
         ]
@@ -317,6 +321,7 @@ class StaffSalaryPaymentSerializer(serializers.ModelSerializer):
     staff_name = serializers.CharField(read_only=True)
     staff_category = serializers.CharField(read_only=True)
     paid_by_username = serializers.CharField(source="paid_by.username", read_only=True)
+    component_breakdown = serializers.JSONField(read_only=True)
 
     class Meta:
         model = StaffSalaryPayment
@@ -352,6 +357,7 @@ class StaffSalaryPaymentSerializer(serializers.ModelSerializer):
             "half_days",
             "attendance_deduction",
             "component_snapshot",
+            "component_breakdown",
             "created_at",
             "updated_at",
         ]
@@ -359,6 +365,7 @@ class StaffSalaryPaymentSerializer(serializers.ModelSerializer):
             "school",
             "staff_name",
             "staff_category",
+            "component_breakdown",
             "paid_by",
             "paid_by_username",
             "created_at",
@@ -523,6 +530,15 @@ class GenerateStaffSalaryPaymentSerializer(serializers.ModelSerializer):
                 {"message": "Salary payment already exists for this staff and month."}
             )
 
+        salary_month = attrs.get("salary_month")
+        year, month = [int(part) for part in salary_month.split("-")]
+        month_start = date(year, month, 1)
+        payroll_run = PayrollRun.objects.filter(school=school, salary_month=month_start).first()
+        if payroll_run and payroll_run.status == "Locked":
+            raise serializers.ValidationError(
+                {"message": f"Payroll for {salary_month} is Locked and cannot be modified."}
+            )
+
         return attrs
 
     def calculate_component_amount(self, component, basic_salary):
@@ -535,106 +551,31 @@ class GenerateStaffSalaryPaymentSerializer(serializers.ModelSerializer):
 
     @transaction.atomic
     def create(self, validated_data):
-        request = self.context.get("request")
-        user = request.user if request and request.user.is_authenticated else None
         staff = validated_data["staff"]
         salary_month = validated_data["salary_month"]
-        print(salary_month)
-
         year, month = [int(part) for part in salary_month.split("-")]
-        working_days = calendar.monthrange(year, month)[1]
-        month_start = date(year, month, 1)
-        month_end = date(year, month, working_days)
-
-        basic_salary = staff.salary or Decimal("0.00")
-        per_day_salary = (
-            basic_salary / Decimal(working_days) if working_days else Decimal("0.00")
-        )
-
-        attendance_qs = Attendance.objects.filter(
-            staff=staff,
-            attendance_date__gte=month_start,
-            attendance_date__lte=month_end,
-        )
-        present_count = attendance_qs.filter(is_present=True, is_half_day=False).count()
-        half_days = attendance_qs.filter(is_present=True, is_half_day=True).count()
-        absent_days = max(working_days - present_count - half_days, 0)
-        present_days = Decimal(present_count) + (Decimal(half_days) / Decimal("2"))
-        # attendance_deduction = (
-        #     (Decimal(absent_days) * per_day_salary)
-        #     + (Decimal(half_days) * per_day_salary / Decimal("2"))
-        # ).quantize(Decimal("0.01"))
         
-        approved_paid_days = get_approved_paid_leave_days(staff, month_start, month_end)
-        attendance_deduction = Decimal(approved_paid_days) * per_day_salary
+        from sms_app.services.payroll_service import generate_payslip, MissingPunchError
 
-        total_earnings = Decimal("0.00")
-        component_deductions = Decimal("0.00")
-        component_snapshot = []
-
-        staff_components = StaffSalaryComponent.objects.filter(
-            staff=staff,
-            is_active=True,
-            component__is_active=True,
-        ).select_related("component")
-
-        for staff_component in staff_components:
-            amount = self.calculate_component_amount(staff_component, basic_salary)
-            component_type = staff_component.component.component_type
-
-            if component_type == "earning":
-                total_earnings += amount
-            else:
-                component_deductions += amount
-
-            component_snapshot.append(
-                {
-                    "component_id": staff_component.component_id,
-                    "name": staff_component.component.name,
-                    "component_type": component_type,
-                    "calculation_type": staff_component.calculation_type,
-                    "value": str(staff_component.value),
-                    "amount": str(amount),
-                }
+        try:
+            generate_payslip(
+                staff=staff,
+                month=month,
+                year=year,
+                payment_data=validated_data,
+                raise_on_missing_punch=True
             )
+        except MissingPunchError as e:
+            missing_dates_str = ", ".join(d.strftime("%Y-%m-%d") for d in e.dates)
+            raise serializers.ValidationError({
+                "message": f"Requires Regularization: Staff has unregularized missing check-out punch on {missing_dates_str}.",
+                "missing_punch_dates": [d.strftime("%Y-%m-%d") for d in e.dates],
+                "requires_regularization": True
+            })
 
-        total_deductions = (component_deductions + attendance_deduction).quantize(
-            Decimal("0.01")
-        )
-        net_salary = (basic_salary + total_earnings - total_deductions).quantize(
-            Decimal("0.01")
-        )
-
-        if net_salary < 0:
-            net_salary = Decimal("0.00")
-
-        receipt_number = f"SAL-{salary_month}-{user.school.id}-{user.school.slug}"
-        print("RECEIPT", receipt_number, flush=True)
-        # b = None
-        # payment = None
-        payment = StaffSalaryPayment.objects.create(
-            staff=staff,
-            salary_month=salary_month,
-            basic_salary=basic_salary,
-            total_earnings=total_earnings.quantize(Decimal("0.01")),
-            total_deductions=total_deductions,
-            working_days=working_days,
-            present_days=present_days,
-            absent_days=absent_days,
-            half_days=half_days,
-            attendance_deduction=attendance_deduction,
-            component_snapshot=component_snapshot,
-            net_salary=net_salary,
-            paid_amount=net_salary,
-            payment_mode=validated_data["payment_mode"],
-            payment_status=validated_data.get("payment_status", "paid"),
-            transaction_id=validated_data.get("transaction_id"),
-            receipt_number=receipt_number,
-            payment_date=validated_data.get("payment_date") or timezone.now(),
-            note=validated_data.get("note"),
-            paid_by=user,
-        )
-
+        payment = StaffSalaryPayment.objects.filter(
+            staff=staff, salary_month=salary_month
+        ).first()
         return payment
 
 

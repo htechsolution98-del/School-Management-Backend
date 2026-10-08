@@ -60,6 +60,20 @@ class StaffSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError("Staff member must be at least 18 years old.")
         return value
 
+    def validate_joining_date(self, value):
+        if value:
+            if value.year < 1900:
+                raise serializers.ValidationError("Enter a valid joining date.")
+        return value
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        dob = attrs.get("date_of_birth") or (self.instance.date_of_birth if self.instance else None)
+        joining = attrs.get("joining_date") or (self.instance.joining_date if self.instance else None)
+        if dob and joining and joining < dob:
+            raise serializers.ValidationError({"joining_date": "Joining date cannot be earlier than date of birth."})
+        return attrs
+
 
 
 
@@ -507,7 +521,7 @@ class StaffListSirializer(serializers.ModelSerializer):
             "category",
             # "address",
             # "date_of_birth",
-            # "joining_date",
+            "joining_date",
             # "salary",
             # "is_active",
             # "created_at",
