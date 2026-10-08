@@ -448,6 +448,32 @@ class SchoolView(ModelViewSet):
                 "girls": len(c_stud_ids.intersection(girl_ids)),
             })
 
+        # Students detailed list for filtration in classes view
+        student_list = []
+        for s in sch_students.select_related("school_class", "academic_year").order_by("school_class__school_class", "roll_no", "name"):
+            g_val = "Male" if s.id in boy_ids else ("Female" if s.id in girl_ids else "Other")
+            full_name = " ".join(part for part in [s.name, s.father_name, s.surname] if part).strip() or s.name or "Student"
+            student_list.append({
+                "id": s.id,
+                "name": full_name,
+                "first_name": s.name or "",
+                "surname": s.surname or "",
+                "father_name": s.father_name or "",
+                "mother_name": s.mother_name or "",
+                "class_id": s.school_class_id,
+                "class_name": s.school_class.school_class if s.school_class else "Unassigned",
+                "division": s.division or "",
+                "roll_no": s.roll_no or "—",
+                "gr_no": s.gr_no or "—",
+                "gender": g_val,
+                "mobile": s.mobile or "—",
+                "is_rte": s.is_rte,
+                "is_verified": s.is_verified,
+                "admission_date": str(s.admission_date) if s.admission_date else None,
+                "dob": str(s.date_of_birth) if s.date_of_birth else None,
+                "aadhar_number": s.aadhar_number or "—",
+            })
+
         # Features
         features = []
         for sf in SchoolFeature.objects.filter(school=school).select_related('feature'):
@@ -488,6 +514,7 @@ class SchoolView(ModelViewSet):
                 "total_classes": classes.count(),
             },
             "classes": class_stats,
+            "students": student_list,
             "staff": staff_list,
             "features": features,
         })
