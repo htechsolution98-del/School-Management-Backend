@@ -50,6 +50,18 @@ from sms_app.inventory_views import (
     ReplacementRequestViewSet, StudentItemReturnViewSet,
     InventoryReportViewSet
 )
+from sms_app.dynamic_hr_views import (
+    AttendanceSettingViewSet,
+    AttendanceRegularizationViewSet,
+    LeaveCycleViewSet,
+    LeaveBalanceViewSet,
+    LeaveTemplateViewSet,
+    LeaveTypeViewSet,
+    DynamicSalaryComponentViewSet,
+    SalaryStructureViewSet,
+    PayrollRunViewSet,
+    PayrollPayslipViewSet,
+)
 
 schema_view = get_schema_view(
     openapi.Info(
@@ -248,6 +260,16 @@ router.register(r'leave-request', LeaveRequestView, basename='leave-request')
 router.register(r'get-leave-requests', GetLeaveRequestView, basename='get-leave-requests')# For get leave request for clerk with filter [school filter add remainig]
 
 router.register(r'change-leave-status', ChangeLeaveView, basename='change-leave-status')# For approve leave request for clerk METHOD [PUT]
+
+# Dynamic HR & Payroll Endpoints
+router.register(r'attendance-settings', AttendanceSettingViewSet, basename='attendance-settings')
+router.register(r'attendance-regularizations', AttendanceRegularizationViewSet, basename='attendance-regularizations')
+router.register(r'leave-cycles', LeaveCycleViewSet, basename='leave-cycles')
+router.register(r'leave-balances', LeaveBalanceViewSet, basename='leave-balances')
+router.register(r'dynamic-salary-components', DynamicSalaryComponentViewSet, basename='dynamic-salary-components')
+router.register(r'salary-structures', SalaryStructureViewSet, basename='salary-structures')
+router.register(r'payroll-runs', PayrollRunViewSet, basename='payroll-runs')
+router.register(r'payroll-payslips', PayrollPayslipViewSet, basename='payroll-payslips')
 
 
 

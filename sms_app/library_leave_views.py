@@ -1,3 +1,4 @@
+from decimal import Decimal
 from django.utils import timezone
 from .models import StaffRemainingLeave
 from .models import *
@@ -6,14 +7,14 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView;
 from rest_framework.response import Response
 from rest_framework.permissions import BasePermission
-from .permissions import IsClerkOrPrincipal, IsCLerk, Isprincipal, IsPrincipalOrTrustee
+from .permissions import IsClerkOrPrincipal, IsCLerk, Isprincipal, IsPrincipalOrTrustee, IsClerkOrAdmin
 from .library_leave_serializers import *
 from rest_framework.generics import GenericAPIView, ListCreateAPIView, ListAPIView
 from rest_framework import status
 from rest_framework.exceptions import ValidationError
 from rest_framework.decorators import action
 from uuid import uuid4
-from django.db.models import Count
+from django.db.models import Count, Q
 from django.db.models.functions import TruncMonth
 
 
@@ -771,12 +772,27 @@ from rest_framework.exceptions import PermissionDenied, NotFound
 # Helper
 def get_user_school(request):
     """Return the school for any staff-level user (CLERK, PRINCIPAL, TRUSTEE, ADMIN)."""
-    user = request.user
-    allowed_roles = ["CLERK", "PRINCIPAL", "TRUSTEE", "ADMIN"]
-    role = getattr(user, "role", None)
-    if role not in allowed_roles:
+    user = getattr(request, "user", None)
+    if not user or not user.is_authenticated:
+        raise PermissionDenied("Authentication required.")
+
+    role = str(getattr(user, "role", "") or "").strip().upper()
+    is_admin_or_staff = getattr(user, "is_superuser", False) or getattr(user, "is_staff", False)
+    has_group = user.groups.filter(name__in=[
+        "CLERK", "clerk", "Clerk",
+        "PRINCIPAL", "principal", "Principal",
+        "admin(trustee)", "trustee", "Trustee",
+        "ADMIN", "admin", "Admin",
+        "super_admin", "superadmin", "Super Admin",
+    ]).exists()
+    staff = getattr(user, "staff", None) or Staff.objects.filter(user=user).select_related("school").first()
+    staff_category = str(getattr(staff, "category", "") or "").strip().upper() if staff else ""
+
+    allowed_roles = ["CLERK", "PRINCIPAL", "TRUSTEE", "ADMIN", "SUPERADMIN", "SUPER_ADMIN", "FEES MANAGEMENT"]
+    if not (is_admin_or_staff or role in allowed_roles or staff_category in ["CLERK", "PRINCIPAL", "TRUSTEE", "ADMIN"] or has_group):
         raise PermissionDenied("You do not have permission to perform this action.")
-    school = getattr(user, "school", None)
+
+    school = getattr(user, "school", None) or (staff.school if staff else None)
     if school is None:
         raise PermissionDenied("Your account is not associated with any school.")
     return school
@@ -789,7 +805,7 @@ def get_clerk_school(request):
 
 # LeaveTemplate ViewSet
 class LeaveTemplateViewSet(ModelViewSet):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsClerkOrAdmin]
     serializer_class = NewLeaveTemplateSerializer
  
     def get_queryset(self):
@@ -823,7 +839,7 @@ class LeaveTemplateViewSet(ModelViewSet):
  
 class LeaveTypeViewSet(ModelViewSet):
  
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsClerkOrAdmin]
     serializer_class = NewLeaveTypeSerializer
  
     def get_queryset(self):
@@ -877,21 +893,68 @@ class LeaveRequestView(ModelViewSet): #for requesting leave
     
 
     
-class GetStaffRemainingleave(ListAPIView): # perticular staff remaining leaves
+class GetStaffRemainingleave(APIView): # perticular staff remaining leaves
     permission_classes = [IsAuthenticated]
-    queryset = StaffRemainingLeave.objects.all()
+
     def get(self, request):
-        # leave_template = request.data.get("leave_template")
         user = request.user
-
         staff = Staff.objects.filter(user=user).first()
-        queryset = StaffRemainingLeave.objects.filter(
-            staff=staff, school=user.school
-            # , leave_template=leave_template
-        )
+        if not staff:
+            return Response([])
 
-        serializer = StaffRemainingLeaveSerializer(queryset, many=True)
-        return Response(serializer.data)
+        school = user.school or staff.school
+        today = timezone.localdate()
+        cycle = LeaveCycle.objects.filter(
+            school=school,
+            start_date__lte=today,
+            end_date__gte=today,
+        ).first() or LeaveCycle.objects.filter(school=school, is_active=True).first()
+
+        leave_types = []
+        if staff.leave_template:
+            leave_types = list(staff.leave_template.leave_types.all())
+        if not leave_types and school:
+            leave_types = list(LeaveType.objects.filter(leave_template__school=school))
+
+        results = []
+        for lt in leave_types:
+            balance = None
+            if cycle:
+                balance, _ = LeaveBalance.objects.get_or_create(
+                    staff=staff,
+                    leave_type=lt,
+                    leave_cycle=cycle,
+                    defaults={
+                        "allocated": Decimal(str(lt.allocation_count or lt.leave_num or 0)),
+                        "carry_forward": Decimal("0.0"),
+                        "used": Decimal("0.0"),
+                        "pending": Decimal("0.0"),
+                    }
+                )
+            rem = float(balance.remaining) if balance else float(lt.allocation_count or lt.leave_num or 0)
+            allocated = float(balance.allocated) if balance else float(lt.allocation_count or lt.leave_num or 0)
+            carry_forward = float(balance.carry_forward) if balance else 0.0
+            used = float(balance.used) if balance else 0.0
+            pending = float(balance.pending) if balance else 0.0
+
+            results.append({
+                "id": balance.id if balance else lt.id,
+                "staff": staff.id,
+                "staff_name": staff.name,
+                "leave_type": lt.id,
+                "leave_type_id": lt.id,
+                "leave_type_name": lt.name or lt.leave_type,
+                "leave_template": lt.leave_template_id,
+                "allocated": allocated,
+                "total_levaes": allocated + carry_forward,
+                "carry_forward": carry_forward,
+                "used": used,
+                "pending": pending,
+                "remaining": rem,
+                "remaining_leaves": rem,
+                "is_paid": lt.is_paid,
+            })
+        return Response(results)
     
     
     
@@ -956,7 +1019,10 @@ class ChangeAllLeaveView(APIView): # for APPROVE all day leave — principal/cle
 
     def patch(self, request, pk):
         status_value = request.data.get("status")
+        if not status_value:
+            return Response({"error": "Status is required"}, status=400)
 
+        new_status = status_value.upper()
         leave_request = LeaveRequest.objects.filter(id=pk).first()
 
         if not leave_request:
@@ -966,25 +1032,75 @@ class ChangeAllLeaveView(APIView): # for APPROVE all day leave — principal/cle
             )
 
         with transaction.atomic():
-            leave_request.leave_days.all().update(status=status_value)
-            leave_request.status = status_value
+            old_status = (leave_request.status or "PENDING").upper()
+            if old_status == new_status:
+                return Response({"message": f"Leave is already {new_status}"})
+
+            staff = leave_request.staff
+            leave_type = leave_request.dynamic_leave_type or leave_request.leave_type
+            days = Decimal(str(leave_request.total_days or 1.0))
+
+            cycle = LeaveCycle.objects.filter(
+                school=leave_request.school,
+                start_date__lte=leave_request.start_date,
+                end_date__gte=leave_request.start_date,
+            ).first() or LeaveCycle.objects.filter(school=leave_request.school, is_active=True).first()
+
+            balance = LeaveBalance.objects.filter(
+                staff=staff, leave_type=leave_type, leave_cycle=cycle
+            ).first() if (staff and leave_type and cycle) else None
+
+            if balance:
+                if new_status == "APPROVED":
+                    if old_status == "PENDING":
+                        balance.pending = max(Decimal("0.0"), balance.pending - days)
+                        balance.used = balance.used + days
+                    elif old_status in ["REJECTED", "CANCELLED"]:
+                        balance.used = balance.used + days
+                    balance.save(update_fields=["pending", "used", "updated_at"])
+
+                elif new_status in ["REJECTED", "CANCELLED"]:
+                    if old_status == "PENDING":
+                        balance.pending = max(Decimal("0.0"), balance.pending - days)
+                        balance.save(update_fields=["pending", "updated_at"])
+                    elif old_status == "APPROVED":
+                        balance.used = max(Decimal("0.0"), balance.used - days)
+                        balance.save(update_fields=["used", "updated_at"])
+
+            leave_request.leave_days.all().update(
+                status=new_status,
+                approved_at=timezone.now() if new_status == "APPROVED" else None
+            )
+            leave_request.status = new_status
             leave_request.save(update_fields=["status"])
 
         return Response(
-            {"message": f"All leave days updated to {status_value}"}
+            {"message": f"All leave days updated to {new_status}"}
         )
     
             
 
         
 def get_approved_paid_leave_days(staff, start_date, end_date):
-    """Count approved leave days where is_paid=True"""
+    """
+    Returns count of approved leave days that result in salary deduction.
+    According to standard HR logic:
+      - Paid leaves (is_paid=True): no salary deduction
+      - Unpaid leaves / Loss of Pay (is_paid=False): salary IS deducted
+    This function counts approved days where is_paid=False so callers multiplying
+    by per_day_salary accurately deduct Loss of Pay (LOP) days.
+    """
     return LeavePerDay.objects.filter(
         leave__staff=staff,
         status="APPROVED",
         date__range=(start_date, end_date),
-        leave__is_paid=True  # ← Filter by is_paid on the leave request
+        leave__is_paid=False  # Only unpaid / LOP leaves cause salary deduction
     ).count()
+
+
+def get_approved_unpaid_leave_days(staff, start_date, end_date):
+    """Alias returning approved unpaid/LOP days that cause salary deductions."""
+    return get_approved_paid_leave_days(staff, start_date, end_date)
     
     
     
@@ -1984,27 +2100,27 @@ def _finalize_return(issued: BookIssued, condition="GOOD", remarks="", custom_da
 
     setting = _get_or_create_library_setting(issued.school)
     grace_period_days = setting.grace_period_days or 0
-    per_day_fee = float(setting.fine_per_day or 0)
+    per_day_fee = Decimal(str(setting.fine_per_day or "0"))
 
     grace_deadline = issued.due_date + timezone.timedelta(days=grace_period_days)
 
-    late_fee = 0
+    late_fee = Decimal("0.00")
     if now > grace_deadline:
         issued.is_late = True
         days_past_grace = (now.date() - grace_deadline.date()).days
-        late_fee = max(days_past_grace, 0) * per_day_fee
+        late_fee = Decimal(str(max(days_past_grace, 0))) * per_day_fee
     else:
         issued.is_late = False
-        late_fee = 0
+        late_fee = Decimal("0.00")
 
     issued.late_fees = late_fee
 
-    damage_fee = 0
-    lost_fee = 0
+    damage_fee = Decimal("0.00")
+    lost_fee = Decimal("0.00")
 
     if condition in ["MINOR_DAMAGE", "MAJOR_DAMAGE", "DAMAGED"]:
         issued.status = "DAMAGED"
-        damage_fee = float(custom_damage_fee) if custom_damage_fee is not None else float(setting.damage_penalty or 50.0)
+        damage_fee = Decimal(str(custom_damage_fee)) if custom_damage_fee is not None else Decimal(str(setting.damage_penalty or "50.00"))
         issued.damage_fees = damage_fee
         if issued.book_copy:
             issued.book_copy.status = "DAMAGED"
@@ -2012,9 +2128,9 @@ def _finalize_return(issued: BookIssued, condition="GOOD", remarks="", custom_da
             issued.book_copy.save()
     elif condition == "LOST":
         issued.status = "LOST"
-        book_price = float(issued.book.price or 0)
-        lost_penalty = float(setting.lost_penalty or 100.0)
-        lost_fee = float(custom_lost_fee) if custom_lost_fee is not None else (book_price + lost_penalty)
+        book_price = Decimal(str(issued.book.price or "0"))
+        lost_penalty = Decimal(str(setting.lost_penalty or "100.00"))
+        lost_fee = Decimal(str(custom_lost_fee)) if custom_lost_fee is not None else (book_price + lost_penalty)
         issued.lost_fees = lost_fee
         if issued.book_copy:
             issued.book_copy.status = "LOST"

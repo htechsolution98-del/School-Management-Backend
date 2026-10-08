@@ -190,6 +190,34 @@ class IsClerkOrPrincipal(BasePermission):
 IsClerkOrPrincipalOrAdmin = IsClerkOrPrincipal
 
 
+class IsClerkOrAdmin(BasePermission):
+    """
+    Grants access to Clerk, Principal, Trustee, and Admin users for HR & configurations.
+    """
+    def has_permission(self, request, view):
+        user = getattr(request, "user", None)
+        if not user or not user.is_authenticated:
+            return False
+        if getattr(user, "is_superuser", False) or getattr(user, "is_staff", False):
+            return True
+        role = str(getattr(user, "role", "") or "").strip().upper()
+        if role in ["CLERK", "PRINCIPAL", "TRUSTEE", "ADMIN", "SUPERADMIN", "SUPER_ADMIN", "FEES MANAGEMENT"]:
+            return True
+        staff = getattr(user, "staff", None)
+        if staff and str(getattr(staff, "category", "") or "").strip().upper() in ["CLERK", "PRINCIPAL", "TRUSTEE", "ADMIN"]:
+            return True
+        return (
+            user.groups.filter(name__iexact="CLERK").exists()
+            or user.groups.filter(name__in=[
+                "CLERK", "clerk", "Clerk",
+                "PRINCIPAL", "principal", "Principal",
+                "admin(trustee)", "trustee", "Trustee",
+                "ADMIN", "admin", "Admin",
+                "super_admin", "superadmin", "Super Admin",
+            ]).exists()
+        )
+
+
 class IsPrincipalOrTrustee(BasePermission):
     """Principal, Clerk, Trustee and Admin can approve/reject leave requests."""
     def has_permission(self, request, view):
