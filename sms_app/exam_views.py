@@ -182,8 +182,8 @@ class ExamFullViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         qs = Exam.objects.filter(school=self.request.user.school)
         
-        user_groups = list(self.request.user.groups.values_list('name', flat=True)) if self.request.user else []
-        is_admin_or_clerk = any(role in user_groups for role in ["PRINCIPAL", "CLERK", "admin(trustee)"])
+        user_groups = [r.upper() for r in self.request.user.groups.values_list('name', flat=True)] if self.request.user else []
+        is_admin_or_clerk = any(role in user_groups for role in ["PRINCIPAL", "VICE PRINCIPAL", "CLERK", "ASSISTANT CLERK", "ADMIN(TRUSTEE)", "ADMIN", "SUPERADMIN"])
         
         if not is_admin_or_clerk:
             staff = getattr(self.request.user, "staff", None)
@@ -535,8 +535,8 @@ class SubjectMarksEntryViewSet(viewsets.ModelViewSet):
         staff = getattr(request.user, "staff", None)
 
         if staff:
-            user_groups = list(request.user.groups.values_list('name', flat=True)) if request.user else []
-            is_admin_or_clerk = any(role in user_groups for role in ["PRINCIPAL", "CLERK", "admin(trustee)"])
+            user_groups = [r.upper() for r in request.user.groups.values_list('name', flat=True)] if request.user else []
+            is_admin_or_clerk = any(role in user_groups for role in ["PRINCIPAL", "VICE PRINCIPAL", "CLERK", "ASSISTANT CLERK", "ADMIN(TRUSTEE)", "ADMIN", "SUPERADMIN"])
             
             if not is_admin_or_clerk:
                 from .models import AssignClass
