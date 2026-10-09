@@ -3799,6 +3799,10 @@ class SubscriptionPlan(models.Model):
     max_admin_users = models.PositiveIntegerField(default=5, help_text="0 for unlimited")
     storage_limit_mb = models.PositiveIntegerField(default=5000)
 
+    # GST / Tax Settings
+    gst_included = models.BooleanField(default=False, help_text="Whether GST is applied to this plan")
+    gst_percentage = models.DecimalField(max_digits=5, decimal_places=2, default=18.00)
+
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -3908,7 +3912,13 @@ class SchoolSubscription(models.Model):
 
     def days_remaining(self):
         today = timezone.now().date()
+        if not self.due_date:
+            return 0
         return (self.due_date - today).days
+
+    @property
+    def days_left(self):
+        return self.days_remaining()
 
 
 class SchoolInvoice(models.Model):
