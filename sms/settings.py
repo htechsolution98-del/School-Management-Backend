@@ -103,20 +103,33 @@ TEMPLATES = [
 
 
 
+import urllib.parse
+
 REDIS_URL = os.getenv("REDIS_URL")
+use_redis = False
+if REDIS_URL:
+    try:
+        parsed_redis = urllib.parse.urlparse(REDIS_URL)
+        if parsed_redis.port and isinstance(parsed_redis.port, int):
+            use_redis = True
+    except Exception:
+        use_redis = False
 
-
-if not REDIS_URL:
-    REDIS_URL = "redis://127.0.0.1:6379/1"
-    
-CHANNEL_LAYERS = {
-    "default": {
-        "BACKEND": "channels_redis.core.RedisChannelLayer",
-        "CONFIG": {
-            "hosts": [REDIS_URL]
+if use_redis:
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels_redis.core.RedisChannelLayer",
+            "CONFIG": {
+                "hosts": [REDIS_URL]
+            },
         },
-    },
-}
+    }
+else:
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels.layers.InMemoryChannelLayer"
+        }
+    }
     
 CACHES = {
     "default": {

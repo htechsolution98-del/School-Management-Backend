@@ -50,7 +50,18 @@ class SubscriptionPlanViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=["get"], url_path="public", permission_classes=[IsAuthenticated])
     def public_plans(self, request):
         """Exposes active plans for school subscription selection."""
-        plans = SubscriptionPlan.objects.filter(is_active=True).prefetch_related("plan_modules__module")
+        user = request.user
+        school = getattr(user, "school", None) or getattr(user, "managed_school", None)
+        if not school:
+            school = School.objects.filter(login_id=user.id).first()
+
+        plans = list(SubscriptionPlan.objects.filter(is_active=True).prefetch_related("plan_modules__module"))
+        if school:
+            sub = SchoolSubscription.objects.filter(school=school).first()
+            if sub and sub.plan and sub.plan in plans:
+                plans.remove(sub.plan)
+                plans.insert(0, sub.plan)
+
         serializer = SubscriptionPlanSerializer(plans, many=True)
         return Response(serializer.data)
 
