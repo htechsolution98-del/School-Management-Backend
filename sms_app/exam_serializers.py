@@ -25,6 +25,7 @@ class ResultWeightageComponentSerializer(serializers.ModelSerializer):
 class ResultWeightageConfigSerializer(serializers.ModelSerializer):
     components = ResultWeightageComponentSerializer(many=True, read_only=True)
     academic_year_name = serializers.CharField(source="academic_year.name", read_only=True)
+    school_class_name = serializers.CharField(source="school_class.school_class", read_only=True, default=None)
     total_weightage = serializers.SerializerMethodField()
 
     class Meta:
@@ -34,6 +35,8 @@ class ResultWeightageConfigSerializer(serializers.ModelSerializer):
             "school",
             "academic_year",
             "academic_year_name",
+            "school_class",
+            "school_class_name",
             "title",
             "status",
             "is_active",
@@ -121,7 +124,7 @@ class SeatingAllocationSerializer(serializers.ModelSerializer):
     gr_no = serializers.CharField(source="student.gr_no", read_only=True, default="")
     exam_title = serializers.CharField(source="exam.title", read_only=True, default="")
     room_number = serializers.CharField(source="room.room_number", read_only=True, default="")
-    class_name = serializers.CharField(source="exam.class_group.name", read_only=True, default="")
+    class_name = serializers.CharField(source="exam.class_group.school_class", read_only=True, default="")
     division = serializers.CharField(source="exam.division", read_only=True, default="")
     subject_name = serializers.CharField(source="exam.subject.name", read_only=True, default="")
 
@@ -146,13 +149,19 @@ class SeatingAllocationSerializer(serializers.ModelSerializer):
         ]
 
     def get_student_name(self, obj):
-        return f"{obj.student.surname or ''} {obj.student.name or ''}".strip() or f"Student #{obj.student.id}"
+        if not obj.student:
+            return ""
+        name_parts = [obj.student.name, obj.student.surname]
+        full = " ".join([p for p in name_parts if p]).strip()
+        return full or f"Student #{obj.student.id}"
 
 
 class SubjectMarksEntrySerializer(serializers.ModelSerializer):
     student_name = serializers.SerializerMethodField()
     roll_no = serializers.CharField(source="student.roll_no", read_only=True, default="")
     gr_no = serializers.CharField(source="student.gr_no", read_only=True, default="")
+    entered_by_name = serializers.CharField(source="entered_by.name", read_only=True, default="")
+    entered_by_id = serializers.IntegerField(source="entered_by.id", read_only=True, default=None)
 
     class Meta:
         model = Result
@@ -164,6 +173,8 @@ class SubjectMarksEntrySerializer(serializers.ModelSerializer):
             "roll_no",
             "gr_no",
             "entered_by",
+            "entered_by_id",
+            "entered_by_name",
             "marks_obtained",
             "max_marks",
             "is_absent",

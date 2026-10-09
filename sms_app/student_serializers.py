@@ -962,8 +962,8 @@ class AdmissionDocumentSubmissionSerializer(serializers.ModelSerializer):
             )
 
         temp_user = self.context["request"].user
-        user_role = getattr(temp_user, "role", "")
-        if str(user_role).upper() == "CLERK" and getattr(temp_user, "school", None):
+        user_role = str(getattr(temp_user, "role", "") or "").strip().upper()
+        if user_role in ["CLERK", "ASSISTANT CLERK", "ASSISTANT_CLERK", "ASSISTANTCLERK"] and getattr(temp_user, "school", None):
             admission = Admission.objects.filter(
                 admission_number=admission_number, school=temp_user.school
             ).first()
@@ -989,8 +989,8 @@ class AdmissionDocumentSubmissionSerializer(serializers.ModelSerializer):
         admission_number = validated_data.pop("admission_number")
 
         temp_user = self.context["request"].user
-        user_role = getattr(temp_user, "role", "")
-        if str(user_role).upper() == "CLERK" and getattr(temp_user, "school", None):
+        user_role = str(getattr(temp_user, "role", "") or "").strip().upper()
+        if user_role in ["CLERK", "ASSISTANT CLERK", "ASSISTANT_CLERK", "ASSISTANTCLERK"] and getattr(temp_user, "school", None):
             admission = Admission.objects.filter(
                 admission_number=admission_number, school=temp_user.school
             ).first()
