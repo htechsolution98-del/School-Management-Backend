@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from .models import (
     Staff,
+    Attendance,
     AttendanceSetting,
     AttendanceRegularization,
     LeaveCycle,
@@ -35,8 +36,22 @@ class AttendanceSettingSerializer(serializers.ModelSerializer):
 
 
 class AttendanceRegularizationSerializer(serializers.ModelSerializer):
+    staff = serializers.PrimaryKeyRelatedField(
+        queryset=Staff.objects.all(), required=False, allow_null=True
+    )
     staff_name = serializers.CharField(source="staff.name", read_only=True, default=None)
     approved_by_username = serializers.CharField(source="approved_by.username", read_only=True, default=None)
+    original_check_in = serializers.SerializerMethodField()
+    original_check_out = serializers.SerializerMethodField()
+    attendance_date = serializers.DateField(
+        input_formats=["%Y-%m-%d", "%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%S.%f%z", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S.%fZ", "iso-8601"]
+    )
+    requested_check_in = serializers.TimeField(
+        required=False, allow_null=True, input_formats=["%H:%M:%S", "%H:%M", "%I:%M %p", "%I:%M:%S %p", "iso-8601"]
+    )
+    requested_check_out = serializers.TimeField(
+        required=False, allow_null=True, input_formats=["%H:%M:%S", "%H:%M", "%I:%M %p", "%I:%M:%S %p", "iso-8601"]
+    )
 
     class Meta:
         model = AttendanceRegularization
@@ -52,10 +67,28 @@ class AttendanceRegularizationSerializer(serializers.ModelSerializer):
             "approved_by",
             "approved_by_username",
             "audit_log",
+            "original_check_in",
+            "original_check_out",
             "created_at",
             "updated_at",
         ]
         read_only_fields = ["id", "approved_by", "audit_log", "created_at", "updated_at"]
+        extra_kwargs = {
+            "staff": {"required": False, "allow_null": True},
+            "status": {"required": False},
+        }
+
+    def get_original_check_in(self, obj):
+        att = Attendance.objects.filter(staff=obj.staff, attendance_date=obj.attendance_date).first()
+        if att and att.check_in:
+            return att.check_in.strftime("%H:%M:%S")
+        return None
+
+    def get_original_check_out(self, obj):
+        att = Attendance.objects.filter(staff=obj.staff, attendance_date=obj.attendance_date).first()
+        if att and att.check_out:
+            return att.check_out.strftime("%H:%M:%S")
+        return None
 
 
 class LeaveCycleSerializer(serializers.ModelSerializer):

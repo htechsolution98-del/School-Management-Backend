@@ -1,3 +1,5 @@
+from datetime import datetime
+from decimal import Decimal
 from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
@@ -8,6 +10,7 @@ from .permissions import IsClerkOrAdmin
 
 from .models import (
     Staff,
+    Attendance,
     AttendanceSetting,
     AttendanceRegularization,
     LeaveCycle,
@@ -65,7 +68,11 @@ class AttendanceSettingViewSet(viewsets.ModelViewSet):
 
 class AttendanceRegularizationViewSet(viewsets.ModelViewSet):
     serializer_class = AttendanceRegularizationSerializer
-    permission_classes = [IsAuthenticated, IsClerkOrAdmin]
+
+    def get_permissions(self):
+        if self.action in ["approve", "reject"]:
+            return [IsAuthenticated(), IsClerkOrAdmin()]
+        return [IsAuthenticated()]
 
     def get_queryset(self):
         school = get_request_school(self.request)
@@ -74,6 +81,15 @@ class AttendanceRegularizationViewSet(viewsets.ModelViewSet):
         qs = AttendanceRegularization.objects.filter(staff__school=school).select_related(
             "staff", "approved_by"
         )
+        user = self.request.user
+        role = str(getattr(user, "role", "") or "").strip().upper()
+        if role in ["TEACHER", "STAFF"]:
+            staff = Staff.objects.filter(user=user).first()
+            if staff:
+                qs = qs.filter(staff=staff)
+            else:
+                return AttendanceRegularization.objects.none()
+
         staff_id = self.request.query_params.get("staff_id")
         if staff_id:
             qs = qs.filter(staff_id=staff_id)
@@ -83,40 +99,176 @@ class AttendanceRegularizationViewSet(viewsets.ModelViewSet):
         return qs
 
     def perform_create(self, serializer):
-        serializer.save()
+        user = self.request.user
+        role = str(getattr(user, "role", "") or "").strip().upper()
+        staff = serializer.validated_data.get("staff")
+
+        # Resolve staff from user if not provided, or enforce own staff for teacher/staff roles
+        if role in ["TEACHER", "STAFF"] or not staff:
+            user_staff = None
+            try:
+                user_staff = getattr(user, "staff", None)
+            except Exception:
+                user_staff = None
+            if not user_staff:
+                try:
+                    user_staff = getattr(user, "staff_profile", None)
+                except Exception:
+                    user_staff = None
+            if not user_staff and getattr(user, "is_authenticated", False):
+                user_staff = Staff.objects.filter(user=user).first()
+            if not user_staff and getattr(user, "email", None):
+                user_staff = Staff.objects.filter(email=user.email).first()
+            if not user_staff and getattr(user, "mobile", None):
+                user_staff = Staff.objects.filter(mobile=user.mobile).first()
+
+            if user_staff:
+                staff = user_staff
+
+        if not staff:
+            raise ValidationError({"staff": "No staff profile linked to authenticated user."})
+
+        initial_log = [
+            {
+                "action": "Requested",
+                "by": user.id if user and getattr(user, "is_authenticated", False) else None,
+                "timestamp": timezone.now().isoformat(),
+                "reason": serializer.validated_data.get("reason", ""),
+            }
+        ]
+        serializer.save(staff=staff, audit_log=initial_log)
 
     @action(detail=True, methods=["post"], url_path="approve")
     def approve(self, request, pk=None):
         regularization = self.get_object()
-        regularization.status = "Approved"
-        regularization.approved_by = request.user
+
+        # 1. Update or create underlying Attendance record
+        attendance, _ = Attendance.objects.get_or_create(
+            staff=regularization.staff,
+            attendance_date=regularization.attendance_date,
+            defaults={
+                "school": regularization.staff.school,
+                "name": regularization.staff.name,
+                "category": regularization.staff.category,
+                "is_present": True,
+            },
+        )
+
+        orig_in = attendance.check_in.isoformat() if attendance.check_in else None
+        orig_out = attendance.check_out.isoformat() if attendance.check_out else None
+
+        att_date = regularization.attendance_date
+        new_in_dt = None
+        new_out_dt = None
+
+        if regularization.requested_check_in:
+            naive_in = datetime.combine(att_date, regularization.requested_check_in)
+            new_in_dt = timezone.make_aware(naive_in) if timezone.is_naive(naive_in) else naive_in
+            attendance.check_in = new_in_dt
+
+        if regularization.requested_check_out:
+            naive_out = datetime.combine(att_date, regularization.requested_check_out)
+            new_out_dt = timezone.make_aware(naive_out) if timezone.is_naive(naive_out) else naive_out
+            attendance.check_out = new_out_dt
+
+        attendance.is_present = True
+        attendance.source = "Regularization"
+
+        # Working hours
+        if attendance.check_in and attendance.check_out:
+            duration = attendance.check_out - attendance.check_in
+            total_sec = max(0.0, duration.total_seconds())
+            attendance.working_hours = round(Decimal(str(total_sec)) / Decimal("3600.0"), 2)
+
+        # Policy recalculation:
+        policy = getattr(regularization.staff, "attendance_setting", None)
+        if not policy and regularization.staff.school:
+            policy = AttendanceSetting.objects.filter(school=regularization.staff.school, is_active=True).first()
+
+        if policy and policy.check_in_time and regularization.requested_check_in:
+            c_sec = (
+                regularization.requested_check_in.hour * 3600
+                + regularization.requested_check_in.minute * 60
+                + regularization.requested_check_in.second
+            )
+            t_sec = (
+                policy.check_in_time.hour * 3600
+                + policy.check_in_time.minute * 60
+                + policy.check_in_time.second
+            )
+            diff_mins = (c_sec - t_sec) / 60.0
+            attendance.is_late = diff_mins > policy.grace_period_mins
+            attendance.is_half_day = diff_mins > policy.half_day_threshold_mins
+        else:
+            attendance.is_late = False
+            attendance.is_half_day = False
+
+        if policy and policy.check_out_time and regularization.requested_check_out:
+            c_sec = (
+                regularization.requested_check_out.hour * 3600
+                + regularization.requested_check_out.minute * 60
+                + regularization.requested_check_out.second
+            )
+            t_sec = (
+                policy.check_out_time.hour * 3600
+                + policy.check_out_time.minute * 60
+                + policy.check_out_time.second
+            )
+            early_diff_mins = (t_sec - c_sec) / 60.0
+            attendance.is_early_exit = early_diff_mins > (policy.grace_period_mins or 0)
+            if early_diff_mins > policy.half_day_threshold_mins:
+                attendance.is_half_day = True
+        else:
+            attendance.is_early_exit = False
+
+        attendance.save()
+
+        # 2. Append to audit log and update regularization
+        current_time = timezone.now().isoformat()
         log_entry = {
             "action": "Approved",
-            "by": request.user.username,
-            "timestamp": timezone.now().isoformat(),
-            "note": request.data.get("note", "Approved by administrator"),
+            "by": request.user.id,
+            "by_username": request.user.username,
+            "timestamp": current_time,
+            "original_punch": {
+                "check_in": orig_in,
+                "check_out": orig_out,
+            },
+            "new_punch": {
+                "check_in": new_in_dt.isoformat() if new_in_dt else None,
+                "check_out": new_out_dt.isoformat() if new_out_dt else None,
+                "requested_check_in": str(regularization.requested_check_in) if regularization.requested_check_in else None,
+                "requested_check_out": str(regularization.requested_check_out) if regularization.requested_check_out else None,
+            },
+            "note": request.data.get("note", "Regularization approved"),
         }
-        logs = regularization.audit_log or []
+        logs = list(regularization.audit_log or [])
         logs.append(log_entry)
         regularization.audit_log = logs
-        regularization.save()
+        regularization.status = "Approved"
+        regularization.approved_by = request.user
+        regularization.save(update_fields=["status", "approved_by", "audit_log", "updated_at"])
+
         return Response(self.get_serializer(regularization).data)
 
     @action(detail=True, methods=["post"], url_path="reject")
     def reject(self, request, pk=None):
         regularization = self.get_object()
-        regularization.status = "Rejected"
-        regularization.approved_by = request.user
+        current_time = timezone.now().isoformat()
         log_entry = {
             "action": "Rejected",
-            "by": request.user.username,
-            "timestamp": timezone.now().isoformat(),
-            "note": request.data.get("note", "Rejected by administrator"),
+            "by": request.user.id,
+            "by_username": request.user.username,
+            "timestamp": current_time,
+            "note": request.data.get("note", "Regularization rejected"),
         }
-        logs = regularization.audit_log or []
+        logs = list(regularization.audit_log or [])
         logs.append(log_entry)
         regularization.audit_log = logs
-        regularization.save()
+        regularization.status = "Rejected"
+        regularization.approved_by = request.user
+        regularization.save(update_fields=["status", "approved_by", "audit_log", "updated_at"])
+
         return Response(self.get_serializer(regularization).data)
 
 

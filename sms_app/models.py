@@ -1195,6 +1195,7 @@ class Attendance(models.Model):
     )
     check_in = models.DateTimeField(null=True, blank=True)
     check_out = models.DateTimeField(null=True, blank=True)
+    source = models.CharField(max_length=50, default="Punch", null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     class Meta:
