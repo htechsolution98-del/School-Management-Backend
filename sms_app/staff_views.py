@@ -398,6 +398,13 @@ class StaffFaceVerifyView(APIView):
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser]
 
+    def get(self, request):
+        staff = Staff.objects.filter(user=request.user).first()
+        if not staff:
+            return Response({"enrolled": False, "is_enrolled": False}, status=status.HTTP_200_OK)
+        enrolled = StaffFace.objects.filter(staff=staff, is_enrolled=True).exists()
+        return Response({"enrolled": enrolled, "is_enrolled": enrolled}, status=status.HTTP_200_OK)
+
     def post(self, request):
 
         serializer = StaffFaceVerifySerializer(data=request.data)

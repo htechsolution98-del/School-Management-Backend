@@ -820,10 +820,24 @@ class Tt_day_timeView(ModelViewSet):
 
 
 class GetLocationView(APIView):
-    permission_classes = [IsAuthenticated, IsCLerk]
+    permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        existing_instance = AttendanceLocation.objects.filter(school=request.user.school).first()
+        if not IsCLerk().has_permission(request, self):
+            return Response(
+                {"detail": "You do not have permission to configure attendance location."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        school = getattr(request.user, "school", None)
+        if not school:
+            staff = Staff.objects.filter(user=request.user).first()
+            if staff and staff.school:
+                school = staff.school
+        if not school:
+            return Response({"error": "User is not linked to any school."}, status=status.HTTP_400_BAD_REQUEST)
+
+        existing_instance = AttendanceLocation.objects.filter(school=school).first()
         serializer = AttendanceLocationSerializer(
             instance=existing_instance,
             data=request.data,
@@ -840,7 +854,16 @@ class GetLocationView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def get(self, request):
-        queryset = AttendanceLocation.objects.filter(school=request.user.school)
+        school = getattr(request.user, "school", None)
+        if not school:
+            staff = Staff.objects.filter(user=request.user).first()
+            if staff and staff.school:
+                school = staff.school
+
+        if not school:
+            return Response([], status=status.HTTP_200_OK)
+
+        queryset = AttendanceLocation.objects.filter(school=school)
 
         serializer = AttendanceLocationSerializer(
             queryset, many=True, context={"request": request}
@@ -883,9 +906,64 @@ class DeleteUpdateLocationView(APIView):
 
 
 class AttendanceView(ModelViewSet):
-    queryset = Attendance.objects.all()
     serializer_class = AttendanceSerializer
     permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = getattr(self.request, "user", None)
+        if not user or not getattr(user, "is_authenticated", False):
+            return Attendance.objects.none()
+        school = getattr(user, "school", None)
+        if not school:
+            staff = Staff.objects.filter(user=user).first()
+            if staff and staff.school:
+                school = staff.school
+        if not school:
+            return Attendance.objects.none()
+
+        qs = Attendance.objects.filter(school=school).select_related("staff")
+
+        role = str(getattr(user, "role", "") or "").strip().upper()
+        is_management = (
+            getattr(user, "is_superuser", False)
+            or getattr(user, "is_staff", False)
+            or role in [
+                "CLERK", "ASSISTANT CLERK", "ADMIN", "SUPERADMIN",
+                "SUPER_ADMIN", "PRINCIPAL", "VICE PRINCIPAL", "TRUSTEE"
+            ]
+            or user.groups.filter(name__in=[
+                "CLERK", "clerk", "Clerk", "ASSISTANT CLERK", "assistant clerk",
+                "Assistant Clerk", "admin(trustee)", "trustee", "ADMIN",
+                "PRINCIPAL", "principal", "VICE PRINCIPAL", "vice principal"
+            ]).exists()
+        )
+
+        params = getattr(self.request, "query_params", getattr(self.request, "GET", {}))
+
+        if not is_management:
+            staff = Staff.objects.filter(user=user).first()
+            if not staff:
+                return Attendance.objects.none()
+            qs = qs.filter(staff=staff)
+        else:
+            staff_id = params.get("staff_id")
+            if staff_id:
+                qs = qs.filter(staff_id=staff_id)
+            category = params.get("category")
+            if category:
+                qs = qs.filter(category__iexact=category)
+
+        date_param = params.get("date")
+        if date_param:
+            qs = qs.filter(attendance_date=date_param)
+        start_date = params.get("start_date")
+        if start_date:
+            qs = qs.filter(attendance_date__gte=start_date)
+        end_date = params.get("end_date")
+        if end_date:
+            qs = qs.filter(attendance_date__lte=end_date)
+
+        return qs.order_by("-attendance_date", "-id")
 
     def create(self, request, *args, **kwargs):
         response = super().create(request, *args, **kwargs)
