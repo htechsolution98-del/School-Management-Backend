@@ -53,6 +53,8 @@ class SubscriptionPlanSerializer(serializers.ModelSerializer):
             "max_staff",
             "max_admin_users",
             "storage_limit_mb",
+            "gst_included",
+            "gst_percentage",
             "is_active",
             "plan_modules",
             "enabled_module_ids",
@@ -103,6 +105,7 @@ class SchoolSubscriptionSerializer(serializers.ModelSerializer):
     school_is_active = serializers.BooleanField(source="school.is_active", read_only=True)
 
     plan_name = serializers.CharField(source="plan.name", read_only=True)
+    plan_details = SubscriptionPlanSerializer(source="plan", read_only=True)
     live_student_count = serializers.SerializerMethodField()
     calculated_amount = serializers.SerializerMethodField()
     days_left = serializers.SerializerMethodField()
@@ -121,6 +124,7 @@ class SchoolSubscriptionSerializer(serializers.ModelSerializer):
             "school_is_active",
             "plan",
             "plan_name",
+            "plan_details",
             "plan_type",
             "billing_model",
             "billing_cycle",

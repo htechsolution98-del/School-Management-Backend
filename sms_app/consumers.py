@@ -274,7 +274,9 @@ class AnnouncementConsumer(AsyncWebsocketConsumer):
             return
         school=await self.get_school(user)
         print(school)
-        role = user.role.upper() if user.role else ""
+        import re
+        raw_role = user.role.upper() if user.role else ""
+        role = re.sub(r"[^a-zA-Z0-9_\-\.]", "_", raw_role)
         print("Role", role)
         self.role_group = f"school_{school.id}_choice_{role}"
         await self.channel_layer.group_add(

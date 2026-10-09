@@ -97,7 +97,12 @@ class SubscriptionBillingService:
         disc = Decimal(str(discount_amount))
         net_subtotal = max(Decimal("0.00"), subtotal - disc)
 
-        tax_pct = cls.get_tax_percentage()
+        # Determine GST tax percentage from plan or global settings
+        if plan and hasattr(plan, "gst_included"):
+            tax_pct = Decimal(str(plan.gst_percentage)) if plan.gst_included else Decimal("0.00")
+        else:
+            tax_pct = cls.get_tax_percentage()
+
         tax_amt = round(net_subtotal * (tax_pct / Decimal("100.0")), 2)
         total_amt = round(net_subtotal + tax_amt, 2)
 
@@ -109,6 +114,7 @@ class SubscriptionBillingService:
             "unit_rate": float(unit_rate),
             "student_count": student_count,
             "subtotal": float(subtotal),
+            "gst_included": bool(plan.gst_included) if plan and hasattr(plan, "gst_included") else (tax_pct > 0),
             "tax_percentage": float(tax_pct),
             "tax_amount": float(tax_amt),
             "discount_amount": float(disc),

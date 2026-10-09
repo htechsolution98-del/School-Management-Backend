@@ -172,6 +172,16 @@ class SchoolView(ModelViewSet):
 
     def perform_create(self, serializer):
         features = serializer.validated_data.pop("feature_ids", [])
+        trial_start = serializer.validated_data.pop("trial_start_date", None)
+        trial_end = serializer.validated_data.pop("trial_end_date", None)
+        pricing_model = serializer.validated_data.pop("pricing_model", "FLAT")
+        monthly_p = serializer.validated_data.pop("monthly_price", 0)
+        quarterly_p = serializer.validated_data.pop("quarterly_price", 0)
+        half_yearly_p = serializer.validated_data.pop("half_yearly_price", 0)
+        yearly_p = serializer.validated_data.pop("yearly_price", 0)
+        gst_inc = serializer.validated_data.pop("gst_included", False)
+        gst_pct = serializer.validated_data.pop("gst_percentage", 18.00)
+
         name = serializer.validated_data.get("name")
         email = serializer.validated_data.get("email")
 
@@ -213,12 +223,63 @@ class SchoolView(ModelViewSet):
             user.school = school  # if field exists
             user.save()
 
+            # 🌟 Create dedicated SubscriptionPlan for this School
+            plan_name = f"{school.name} Plan"
+            plan, _ = SubscriptionPlan.objects.get_or_create(
+                name=plan_name,
+                defaults={
+                    "description": f"Subscription plan configured for {school.name}",
+                    "pricing_model": pricing_model or "FLAT",
+                    "monthly_price": monthly_p or 0,
+                    "quarterly_price": quarterly_p or 0,
+                    "half_yearly_price": half_yearly_p or 0,
+                    "yearly_price": yearly_p or 0,
+                    "gst_included": gst_inc,
+                    "gst_percentage": gst_pct,
+                    "trial_available": True,
+                    "trial_duration_days": 14,
+                    "is_active": True,
+                }
+            )
+
+            # 🌟 Create SchoolSubscription with trial dates
+            today = timezone.now().date()
+            s_start = trial_start if trial_start else today
+            s_end = trial_end if trial_end else (today + datetime.timedelta(days=14))
+            
+            SchoolSubscription.objects.create(
+                school=school,
+                plan=plan,
+                plan_type="TRIAL",
+                billing_model=pricing_model or "FLAT",
+                billing_cycle="MONTHLY",
+                flat_amount=monthly_p or 0,
+                per_student_rate=monthly_p or 0,
+                trial_start_date=s_start,
+                trial_end_date=s_end,
+                start_date=s_start,
+                due_date=s_end,
+                status="TRIAL",
+                grace_period_days=3,
+                auto_lock_on_due=True,
+            )
+
         #  Clear cache after create
         # cache.delete("school_list")
 
     # 🔹 Update + clear cache
     def perform_update(self, serializer):
         features = serializer.validated_data.pop("feature_ids", None)
+        trial_start = serializer.validated_data.pop("trial_start_date", None)
+        trial_end = serializer.validated_data.pop("trial_end_date", None)
+        pricing_model = serializer.validated_data.pop("pricing_model", None)
+        monthly_p = serializer.validated_data.pop("monthly_price", None)
+        quarterly_p = serializer.validated_data.pop("quarterly_price", None)
+        half_yearly_p = serializer.validated_data.pop("half_yearly_price", None)
+        yearly_p = serializer.validated_data.pop("yearly_price", None)
+        gst_inc = serializer.validated_data.pop("gst_included", None)
+        gst_pct = serializer.validated_data.pop("gst_percentage", None)
+
         is_being_deactivated = serializer.validated_data.get("is_active") is False
         with transaction.atomic():
             school = serializer.save()
@@ -254,6 +315,36 @@ class SchoolView(ModelViewSet):
                             if user_ids:
                                 User.objects.filter(id__in=user_ids).update(is_active=True)
 
+            # 🌟 Update or create school's Subscription and Plan if pricing/trial fields passed
+            sub = SchoolSubscription.objects.filter(school=school).first()
+            if sub and sub.plan:
+                plan = sub.plan
+                if pricing_model: plan.pricing_model = pricing_model
+                if monthly_p is not None: plan.monthly_price = monthly_p
+                if quarterly_p is not None: plan.quarterly_price = quarterly_p
+                if half_yearly_p is not None: plan.half_yearly_price = half_yearly_p
+                if yearly_p is not None: plan.yearly_price = yearly_p
+                if gst_inc is not None: plan.gst_included = gst_inc
+                if gst_pct is not None: plan.gst_percentage = gst_pct
+                plan.save()
+
+            if sub:
+                if trial_start: sub.trial_start_date = trial_start
+                if trial_end:
+                    sub.trial_end_date = trial_end
+                    sub.due_date = trial_end
+                if pricing_model: sub.billing_model = pricing_model
+                if monthly_p is not None:
+                    sub.flat_amount = monthly_p
+                    sub.per_student_rate = monthly_p
+
+                # Sync subscription status with school is_active
+                if is_being_deactivated:
+                    sub.status = "SUSPENDED"
+                elif school.is_active and sub.status == "SUSPENDED":
+                    sub.status = "ACTIVE" if sub.plan_type == "PAID" else "TRIAL"
+
+                sub.save()
 
         cache.delete("school_list")
 

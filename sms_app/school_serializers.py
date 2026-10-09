@@ -83,6 +83,56 @@ class SchoolSerializer(serializers.ModelSerializer):
     school_features = SchoolFeatureSerializer(
         source="schoolfeature_set", many=True, read_only=True
     )
+    # 🌟 Subscription & Trial Fields
+    trial_start_date = serializers.DateField(write_only=True, required=False, allow_null=True)
+    trial_end_date = serializers.DateField(write_only=True, required=False, allow_null=True)
+    pricing_model = serializers.ChoiceField(choices=["PER_STUDENT", "FLAT"], default="FLAT", write_only=True, required=False)
+    monthly_price = serializers.DecimalField(max_digits=10, decimal_places=2, default=0, write_only=True, required=False)
+    quarterly_price = serializers.DecimalField(max_digits=10, decimal_places=2, default=0, write_only=True, required=False)
+    half_yearly_price = serializers.DecimalField(max_digits=10, decimal_places=2, default=0, write_only=True, required=False)
+    yearly_price = serializers.DecimalField(max_digits=10, decimal_places=2, default=0, write_only=True, required=False)
+    gst_included = serializers.BooleanField(default=False, write_only=True, required=False)
+    gst_percentage = serializers.DecimalField(max_digits=5, decimal_places=2, default=18.00, write_only=True, required=False)
+    subscription_details = serializers.SerializerMethodField(read_only=True)
+
+    def get_subscription_details(self, obj):
+        sub = SchoolSubscription.objects.filter(school=obj).first()
+        if not sub:
+            return None
+        plan = sub.plan
+        days = getattr(sub, "days_left", 0)
+        if callable(days):
+            days = days()
+        elif not isinstance(days, int):
+            try:
+                days = sub.days_remaining()
+            except Exception:
+                days = 0
+
+        plan_name = plan.name if plan else f"{obj.name} Plan"
+        pricing_model = plan.pricing_model if plan else getattr(sub, "billing_model", "FLAT")
+        monthly = str(plan.monthly_price) if plan else str(getattr(sub, "flat_amount", 0))
+        quarterly = str(plan.quarterly_price) if plan else str(float(getattr(sub, "flat_amount", 0) or 0) * 3)
+        half_yearly = str(plan.half_yearly_price) if plan else str(float(getattr(sub, "flat_amount", 0) or 0) * 6)
+        yearly = str(plan.yearly_price) if plan else str(float(getattr(sub, "flat_amount", 0) or 0) * 12)
+        gst_inc = bool(getattr(plan, "gst_included", False)) if plan else False
+        gst_pct = str(getattr(plan, "gst_percentage", 18.00)) if plan else "18.00"
+
+        return {
+            "id": sub.id,
+            "status": sub.status,
+            "trial_start_date": str(sub.trial_start_date) if sub.trial_start_date else None,
+            "trial_end_date": str(sub.trial_end_date) if sub.trial_end_date else None,
+            "days_left": days,
+            "plan_name": plan_name,
+            "pricing_model": pricing_model,
+            "monthly_price": monthly,
+            "quarterly_price": quarterly,
+            "half_yearly_price": half_yearly,
+            "yearly_price": yearly,
+            "gst_included": gst_inc,
+            "gst_percentage": gst_pct,
+        }
 
     class Meta:
         model = School
@@ -103,9 +153,19 @@ class SchoolSerializer(serializers.ModelSerializer):
             "index_no",
             "is_active",
             "school_features",
+            "trial_start_date",
+            "trial_end_date",
+            "pricing_model",
+            "monthly_price",
+            "quarterly_price",
+            "half_yearly_price",
+            "yearly_price",
+            "gst_included",
+            "gst_percentage",
+            "subscription_details",
             "created_at"
         ]
-        read_only_fields = ["slug", "code"]
+        read_only_fields = ["slug", "code", "subscription_details"]
         extra_kwargs = {
             field: {"required": True, "allow_blank": False, "allow_null": False,
                     "error_messages": {"required": f"{label} is required.", "blank": f"{label} is required.", "null": f"{label} is required."}}
