@@ -209,9 +209,11 @@ class CertificateTemplateAdminViewSet(ModelViewSet):
     def get_queryset(self):
 
         staff = Staff.objects.filter(
-            user=self.request.user,
-            category="CLERK"
+            user=self.request.user
         ).first()
+
+        if not staff:
+            return CertificateTemplate.objects.none()
 
         return CertificateTemplate.objects.filter(
             certificate_type__school=staff.school
@@ -233,9 +235,11 @@ class CertificateTemplateFieldAdminViewSet(ModelViewSet):
     def get_queryset(self):
 
         staff = Staff.objects.filter(
-            user=self.request.user,
-            category="CLERK"
+            user=self.request.user
         ).first()
+
+        if not staff:
+            return CertificateTemplateField.objects.none()
 
         queryset = CertificateTemplateField.objects.filter(
             template__certificate_type__school=staff.school
@@ -262,8 +266,7 @@ class CertificateTemplateAPIView(APIView):
 
         staff = get_object_or_404(
             Staff,
-            user=request.user,
-            category="CLERK"
+            user=request.user
         )
 
         certificate_request = get_object_or_404(
@@ -337,8 +340,7 @@ class CertificateGenerateAPIView(APIView):
 
         staff = get_object_or_404(
             Staff,
-            user=request.user,
-            category="CLERK"
+            user=request.user
         )
 
         certificate_request = get_object_or_404(
@@ -440,8 +442,7 @@ class CertificateUploadAPIView(APIView):
 
         staff = get_object_or_404(
             Staff,
-            user=request.user,
-            category="CLERK"
+            user=request.user
         )
 
         certificate = get_object_or_404(
@@ -612,7 +613,7 @@ class CertificateTypeViewSet(ModelViewSet): #for create, read, update, delete  c
         user = self.request.user
 
         # Clerk access (same as before)
-        staff = Staff.objects.filter(user=user, category="CLERK").first()
+        staff = Staff.objects.filter(user=user).first()
         if staff:
             return CertificateType.objects.filter(school=staff.school)
 
@@ -626,12 +627,11 @@ class CertificateTypeViewSet(ModelViewSet): #for create, read, update, delete  c
 
     def perform_create(self, serializer):
         staff = Staff.objects.filter(
-            user=self.request.user,
-            category="CLERK"
+            user=self.request.user
         ).first()
 
         if not staff:
-            raise ValidationError("Clerk profile not found.")
+            raise ValidationError("Staff profile not found.")
 
         name = serializer.validated_data.get("name")
 
@@ -699,8 +699,7 @@ class ClerkCertificateRequestViewSet(ModelViewSet):
 
     def get_queryset(self):
         staff = Staff.objects.filter(
-            user=self.request.user,
-            category="CLERK"
+            user=self.request.user
         ).first()
 
         if not staff:
@@ -771,7 +770,7 @@ from rest_framework.exceptions import PermissionDenied, NotFound
 
 # Helper
 def get_user_school(request):
-    """Return the school for any staff-level user (CLERK, PRINCIPAL, TRUSTEE, ADMIN)."""
+    """Return the school for any staff-level user (CLERK, ASSISTANT CLERK, PRINCIPAL, TRUSTEE, ADMIN)."""
     user = getattr(request, "user", None)
     if not user or not user.is_authenticated:
         raise PermissionDenied("Authentication required.")
@@ -780,6 +779,10 @@ def get_user_school(request):
     is_admin_or_staff = getattr(user, "is_superuser", False) or getattr(user, "is_staff", False)
     has_group = user.groups.filter(name__in=[
         "CLERK", "clerk", "Clerk",
+        "ASSISTANT CLERK", "assistant clerk", "Assistant Clerk",
+        "ASSISTANT_CLERK", "assistant_clerk",
+        "ASSISTANTCLERK", "assistantclerk",
+        "fees_clerk",
         "PRINCIPAL", "principal", "Principal",
         "admin(trustee)", "trustee", "Trustee",
         "ADMIN", "admin", "Admin",
@@ -788,8 +791,11 @@ def get_user_school(request):
     staff = getattr(user, "staff", None) or Staff.objects.filter(user=user).select_related("school").first()
     staff_category = str(getattr(staff, "category", "") or "").strip().upper() if staff else ""
 
-    allowed_roles = ["CLERK", "PRINCIPAL", "TRUSTEE", "ADMIN", "SUPERADMIN", "SUPER_ADMIN", "FEES MANAGEMENT"]
-    if not (is_admin_or_staff or role in allowed_roles or staff_category in ["CLERK", "PRINCIPAL", "TRUSTEE", "ADMIN"] or has_group):
+    allowed_roles = [
+        "CLERK", "ASSISTANT CLERK", "ASSISTANT_CLERK", "ASSISTANTCLERK", "FEES_CLERK",
+        "PRINCIPAL", "TRUSTEE", "ADMIN", "SUPERADMIN", "SUPER_ADMIN", "FEES MANAGEMENT"
+    ]
+    if not (is_admin_or_staff or role in allowed_roles or staff_category in ["CLERK", "ASSISTANT CLERK", "ASSISTANT_CLERK", "ASSISTANTCLERK", "PRINCIPAL", "TRUSTEE", "ADMIN"] or has_group):
         raise PermissionDenied("You do not have permission to perform this action.")
 
     school = getattr(user, "school", None) or (staff.school if staff else None)
@@ -1267,18 +1273,47 @@ class ResultBulkCreateViewSet(GenericAPIView):
         exam = serializer.validated_data["exam"]
         max_marks = serializer.validated_data["max_marks"]
         entries = serializer.validated_data["entries"]
+        submit_status = request.data.get("status", "DRAFT")
+        if submit_status not in ["DRAFT", "SUBMITTED", "VERIFIED", "SENT_BACK"]:
+            submit_status = "DRAFT"
 
         # Check verification lock
-        from .models import ClassTeacherMarksVerification
+        from .models import ClassTeacherMarksVerification, AssignClass
         is_locked = ClassTeacherMarksVerification.objects.filter(
             school=request.user.school,
             academic_year=exam.academic_year,
             school_class=exam.class_group,
-            exam_term=exam.exam_term,
             status="VERIFIED"
         ).exists()
-        if is_locked:
-            return Response({"error": "Marks for this class and term have already been verified and locked by the Class Teacher."}, status=status.HTTP_400_BAD_REQUEST)
+        
+        user_role = str(getattr(request.user, "role", "") or "").strip().upper()
+        is_admin = getattr(request.user, "is_superuser", False) or user_role in ["PRINCIPAL", "CLERK", "ASSISTANT CLERK", "ASSISTANT_CLERK", "ASSISTANTCLERK", "ADMIN", "SUPERADMIN", "ADMIN(TRUSTEE)", "TRUSTEE", "SUPER_ADMIN"]
+        
+        if is_locked and not is_admin:
+            return Response({"error": "Marks for this class have been verified and locked by the Class Teacher."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Check if user is Class Teacher for this class
+        is_ct = False
+        if staff:
+            is_ct = AssignClass.objects.filter(
+                school=request.user.school,
+                teacher=staff,
+                is_class_teacher=True,
+                division__SchoolClass=exam.class_group
+            ).exists()
+
+        # Check if already submitted
+        existing_results = Result.objects.filter(exam=exam)
+        has_submitted_marks = existing_results.filter(status__in=["SUBMITTED", "VERIFIED"]).exists()
+
+        if not is_admin and not is_ct and has_submitted_marks:
+            return Response(
+                {
+                    "error": "Marks for this subject have already been submitted to the Class Teacher. "
+                             "Subject teachers cannot edit submitted marks. Only the Class Teacher or Administrator has update authority."
+                },
+                status=status.HTTP_403_FORBIDDEN
+            )
 
         created, updated = 0, 0
 
@@ -1296,16 +1331,19 @@ class ResultBulkCreateViewSet(GenericAPIView):
                     "is_absent": entry["is_absent"],
                     "remarks": entry.get("remarks", ""),
                     "grade": grade,
-                    "is_published": False,  # always revert to unpublished on edit
+                    "status": submit_status,
+                    "is_published": False,
                 },
             )
             created += is_created
             updated += (not is_created)
 
+        action_word = "submitted to Class Teacher" if submit_status == "SUBMITTED" else "saved as draft"
         return Response(
-            {"detail": "results saved", "created": created, "updated": updated},
+            {"detail": f"Results {action_word} successfully.", "created": created, "updated": updated, "status": submit_status},
             status=status.HTTP_200_OK,
         )
+
     
 
 class ResultPublishViewSet(GenericAPIView):
@@ -1346,6 +1384,32 @@ class ExamResultRosterView(GenericAPIView):
         existing_results = {
             r.student_id: r for r in Result.objects.filter(exam=exam)
         }
+
+        user_role = str(getattr(request.user, "role", "") or "").strip().upper()
+        is_admin = getattr(request.user, "is_superuser", False) or user_role in ["PRINCIPAL", "CLERK", "ASSISTANT CLERK", "ASSISTANT_CLERK", "ASSISTANTCLERK", "ADMIN", "SUPERADMIN", "ADMIN(TRUSTEE)", "TRUSTEE", "SUPER_ADMIN"]
+        
+        from .models import AssignClass
+        is_ct = False
+        if staff:
+            is_ct = AssignClass.objects.filter(
+                school=request.user.school,
+                teacher=staff,
+                is_class_teacher=True,
+                division__SchoolClass=exam.class_group
+            ).exists()
+
+        statuses = [r.status for r in existing_results.values() if r.status]
+        overall_status = "DRAFT"
+        if "VERIFIED" in statuses:
+            overall_status = "VERIFIED"
+        elif "SUBMITTED" in statuses:
+            overall_status = "SUBMITTED"
+        elif "SENT_BACK" in statuses:
+            overall_status = "SENT_BACK"
+
+        can_edit = True
+        if (overall_status in ["SUBMITTED", "VERIFIED"]) and not is_admin and not is_ct:
+            can_edit = False
  
         data = []
         for s in students:
@@ -1358,10 +1422,18 @@ class ExamResultRosterView(GenericAPIView):
                 "max_marks": r.max_marks if r else None,
                 "is_absent": r.is_absent if r else False,
                 "remarks": r.remarks if r else "",
+                "status": r.status if r else "DRAFT",
                 "is_published": r.is_published if r else False,
             })
  
-        return Response({"exam": exam.id, "class_group": exam.class_group.id, "roster": data})
+        return Response({
+            "exam": exam.id,
+            "class_group": exam.class_group.id,
+            "is_class_teacher": is_ct or is_admin,
+            "status": overall_status,
+            "can_edit": can_edit,
+            "roster": data
+        })
  
  
 class ExamRankListView(GenericAPIView):

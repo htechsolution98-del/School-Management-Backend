@@ -2950,6 +2950,7 @@ class ResultWeightageConfig(models.Model):
     )
     school = models.ForeignKey(School, on_delete=models.CASCADE)
     academic_year = models.ForeignKey(AcademicYear, on_delete=models.CASCADE, related_name='weightage_configs')
+    school_class = models.ForeignKey(SchoolClass, on_delete=models.CASCADE, null=True, blank=True, related_name='weightage_configs')
     title = models.CharField(max_length=255, default='Academic Year Weightage Configuration')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='DRAFT')
     is_active = models.BooleanField(default=False)
@@ -2959,7 +2960,7 @@ class ResultWeightageConfig(models.Model):
 
     class Meta:
         db_table = 'result_weightage_config'
-        unique_together = ('school', 'academic_year')
+        unique_together = ('school', 'academic_year', 'school_class')
 
 class ResultWeightageComponent(models.Model):
     COMPONENT_CHOICES = (

@@ -1,7 +1,7 @@
 from django.core.management.base import BaseCommand
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
-from sms_app.models import School, Feature, SchoolFeature
+from sms_app.models import School, Feature, SchoolFeature, Staff
 from sms_app.signals import seed_features_and_school_features
 
 User = get_user_model()
@@ -64,6 +64,15 @@ class Command(BaseCommand):
                 "last_name": "Clerk",
             },
             {
+                "username": "AssistantClerk123",
+                "email": "assistantclerk@gmail.com",
+                "mobile": "7984649968",
+                "role": "ASSISTANT CLERK",
+                "group": "ASSISTANT CLERK",
+                "first_name": "Assistant",
+                "last_name": "Clerk",
+            },
+            {
                 "username": "Mansi4614",
                 "email": "mansi@gmail.com",
                 "mobile": "7046062012",
@@ -104,7 +113,9 @@ class Command(BaseCommand):
         default_password = "123456"
 
         for udata in demo_users:
-            group_obj, _ = Group.objects.get_or_create(name=udata["group"])
+            group_obj = Group.objects.filter(name__iexact=udata["group"]).first()
+            if not group_obj:
+                group_obj = Group.objects.create(name=udata["group"])
             u = (
                 User.objects.filter(email__iexact=udata["email"]).first()
                 or User.objects.filter(username__iexact=udata["username"]).first()
@@ -140,6 +151,25 @@ class Command(BaseCommand):
                         f"Updated password for demo user: {udata['email']} / {udata['username']}"
                     )
                 )
+
+            # Ensure Staff row exists for staff accounts
+            if udata["role"] in ["CLERK", "ASSISTANT CLERK", "FEES MANAGEMENT", "PRINCIPAL", "TEACHER"]:
+                staff_member, _ = Staff.objects.get_or_create(
+                    user=u,
+                    defaults={
+                        "name": f"{udata['first_name']} {udata['last_name']}",
+                        "email": udata["email"],
+                        "mobile": udata["mobile"],
+                        "school": school,
+                        "category": udata["role"],
+                        "is_active": True,
+                    }
+                )
+                if staff_member.school != school or staff_member.category != udata["role"]:
+                    staff_member.school = school
+                    staff_member.category = udata["role"]
+                    staff_member.is_active = True
+                    staff_member.save()
 
         # 4. Seed all features and attach to all schools dynamically
         seed_features_and_school_features()
