@@ -1056,6 +1056,7 @@ class GetStudentView(ModelViewSet):
     queryset = Student.objects.all()
     serializer_class = GetStudentSerializer
     permission_classes = [IsAuthenticated, IsCLerk | Isteacher | Isprincipal | IsLibrarian]
+    pagination_class = None
 
     def get_queryset(self):
         school = self.request.user.school
@@ -1065,9 +1066,29 @@ class GetStudentView(ModelViewSet):
         division = self.request.query_params.get("division")
 
         if school_class:
-            queryset = queryset.filter(school_class=school_class)
-        if division:
-            queryset = queryset.filter(division=division)
+            if str(school_class).isdigit():
+                queryset = queryset.filter(
+                    Q(school_class_id=int(school_class)) |
+                    Q(school_class__school_class__iexact=str(school_class).strip())
+                )
+            else:
+                queryset = queryset.filter(school_class__school_class__iexact=str(school_class).strip())
+
+        if division and str(division).strip().upper() not in ["ALL", ""]:
+            div_val = str(division).strip()
+            if div_val.lower().startswith("div "):
+                div_val = div_val[4:].strip()
+            elif div_val.lower().startswith("div"):
+                div_val = div_val[3:].strip()
+
+            queryset = queryset.filter(
+                Q(division__iexact=div_val) |
+                Q(division__iexact=f"Div {div_val}") |
+                Q(division__iexact=f"Div ({div_val})") |
+                Q(division__iexact=f"({div_val})") |
+                Q(division__isnull=True) |
+                Q(division="")
+            )
 
         return queryset
 

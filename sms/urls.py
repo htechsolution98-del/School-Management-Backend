@@ -317,6 +317,11 @@ from sms_app.exam_views import (
     ClassTeacherVerificationViewSet,
     ResultProcessingViewSet,
     ResultPublishView,
+    ResultDashboardSummaryAPIView,
+    ResultReadinessCheckAPIView,
+    MarksOverviewAPIView,
+    StudentExamScheduleView,
+    StudentPublishedReportCardView,
 )
 
 router.register(r"my-books", BookIssueStudent, basename="book-issue-student")
@@ -412,6 +417,11 @@ urlpatterns = [
     path('api/get_receipt/<int:student_id>/<int:form_id>/',get_receipt),
     path('api/schoollist/',SchoolListView.as_view()),
     path('api/assign-roll-numbers/',AssignRollNumberAPIView.as_view()),
+    path('api/result-dashboard-summary/', ResultDashboardSummaryAPIView.as_view(), name='result-dashboard-summary'),
+    path('api/result-readiness/', ResultReadinessCheckAPIView.as_view(), name='result-readiness'),
+    path('api/marks-overview/', MarksOverviewAPIView.as_view(), name='marks-overview'),
+    path('api/student-exam-schedule/', StudentExamScheduleView.as_view(), name='student-exam-schedule'),
+    path('api/student-report-card/', StudentPublishedReportCardView.as_view(), name='student-report-card'),
     path('api/result-process/', ResultProcessingViewSet.as_view()),
     path('api/result-publish/', ResultPublishView.as_view()),
     path('api/face-enroll/',StaffFaceEnrollView.as_view()),

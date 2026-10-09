@@ -117,7 +117,9 @@ class StaffView(ModelViewSet):
         if school and not SchoolFeature.objects.filter(school=school, feature=cat, is_enabled=True).exists():
             raise serializers.ValidationError({"category": f"Feature '{cat.name}' is not enabled by Superadmin for this school."})
 
-        group, created = Group.objects.get_or_create(name=cat.name)
+        group = Group.objects.filter(name__iexact=cat.name).first()
+        if not group:
+            group = Group.objects.create(name=cat.name)
 
         username = generate_staff_username(name)
 
@@ -186,7 +188,9 @@ class StaffView(ModelViewSet):
                     if user:
                         user.role = cat.name
                         user.save(update_fields=["role"])
-                        group, _ = Group.objects.get_or_create(name=cat.name)
+                        group = Group.objects.filter(name__iexact=cat.name).first()
+                        if not group:
+                            group = Group.objects.create(name=cat.name)
                         user.groups.clear()
                         user.groups.add(group)
                         UserModuleAccess.objects.filter(user=user).delete()
