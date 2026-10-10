@@ -623,10 +623,14 @@ class SchoolListView(generics.ListAPIView):
 
 class AnnouncementView(APIView):
     permission_classes = [IsAuthenticated]
+
     def get(self, request, id=None):
+        # Auto-clean expired announcements
         Announcement.objects.filter(
+            expires_at__isnull=False,
             expires_at__lte=timezone.now()
         ).delete()
+
         school = getattr(request.user, "school", None)
         if not school:
             return Response([], status=status.HTTP_200_OK)
@@ -643,54 +647,181 @@ class AnnouncementView(APIView):
                     status=status.HTTP_404_NOT_FOUND
                 )
 
-            serializer = AnnouncementSerializer(announcement)
+            serializer = AnnouncementSerializer(announcement, context={"request": request})
             return Response(serializer.data)
-       
-        announcements = Announcement.objects.filter(
-            school=school
-        ).order_by("-created_at")
 
-        serializer = AnnouncementSerializer(announcements, many=True)
-        return Response(serializer.data)
-    def post(self,request):
-        school=request.user.school
-        serializer=AnnouncementSerializer(data=request.data)
-        print("Before valid")
-        if serializer.is_valid():
-            print("yes valid")
-            announcement=serializer.save(
-                school=school
-                
-                 )
-            print(AnnouncementSerializer().fields.keys())
-            if announcement.is_everyone:
-                group_name = f"school_{school.id}_choice_all"
+        user = request.user
+        role = str(getattr(user, "role", "") or "").strip().upper()
+
+        # Management roles see all announcements for the school
+        is_management = (
+            user.is_superuser
+            or user.is_staff
+            or role in [
+                "ADMIN(TRUSTEE)",
+                "TRUSTEE",
+                "ADMIN",
+                "SUPERADMIN",
+                "SUPER_ADMIN",
+                "PRINCIPAL",
+                "VICE PRINCIPAL",
+            ]
+        )
+
+        if is_management:
+            announcements = Announcement.objects.filter(school=school)
+        elif role == "STUDENT":
+            student = Student.objects.filter(user=user, school=school).first()
+            base_q = (
+                models.Q(is_everyone=True)
+                | models.Q(announcement_for__iexact="ALL")
+                | models.Q(announcement_for__iexact="STUDENT")
+                | models.Q(announcement_for__iexact="STUDENTS_PARENTS")
+                | models.Q(announcement_for__iexact="STUDENT_PARENT")
+                | models.Q(announcement_for__isnull=True)
+                | models.Q(announcement_for="")
+            )
+            if student:
+                student_q = (
+                    (models.Q(target_student__isnull=True) & models.Q(target_class__isnull=True))
+                    | models.Q(target_student=student)
+                    | (
+                        models.Q(target_class=student.school_class)
+                        & (models.Q(target_division__isnull=True) | models.Q(target_division="") | models.Q(target_division__iexact=student.division or ""))
+                    )
+                )
+                announcements = Announcement.objects.filter(school=school).filter(base_q & student_q)
             else:
-                group_name = f"school_{school.id}_choice_{announcement.announcement_for}"
+                announcements = Announcement.objects.filter(school=school).filter(base_q & models.Q(target_student__isnull=True))
+        elif role in ["PARENT", "PARENTS"]:
+            # Check if parent is linked to student
+            student = Student.objects.filter(models.Q(user=user) | models.Q(mobile=getattr(user, "mobile", "")), school=school).first()
+            base_q = (
+                models.Q(is_everyone=True)
+                | models.Q(announcement_for__iexact="ALL")
+                | models.Q(announcement_for__iexact="PARENT")
+                | models.Q(announcement_for__iexact="STUDENTS_PARENTS")
+                | models.Q(announcement_for__iexact="STUDENT_PARENT")
+                | models.Q(announcement_for__isnull=True)
+                | models.Q(announcement_for="")
+            )
+            if student:
+                student_q = (
+                    (models.Q(target_student__isnull=True) & models.Q(target_class__isnull=True))
+                    | models.Q(target_student=student)
+                    | (
+                        models.Q(target_class=student.school_class)
+                        & (models.Q(target_division__isnull=True) | models.Q(target_division="") | models.Q(target_division__iexact=student.division or ""))
+                    )
+                )
+                announcements = Announcement.objects.filter(school=school).filter(base_q & student_q)
+            else:
+                announcements = Announcement.objects.filter(school=school).filter(base_q & models.Q(target_student__isnull=True))
+        elif role in ["TRANSPORT", "TRANSPORTATION", "DRIVER"]:
+            announcements = Announcement.objects.filter(
+                school=school
+            ).filter(
+                models.Q(is_everyone=True)
+                | models.Q(announcement_for__iexact="ALL")
+                | models.Q(announcement_for__iexact="TRANSPORT")
+                | models.Q(announcement_for__isnull=True)
+                | models.Q(announcement_for="")
+            )
+        else:
+            # Staff roles (Teacher, Clerk, Fee Manager, Librarian, Inventory, etc.)
+            announcements = Announcement.objects.filter(
+                school=school
+            ).filter(
+                models.Q(is_everyone=True)
+                | models.Q(announcement_for__iexact="ALL")
+                | models.Q(announcement_for__iexact=role)
+                | models.Q(announcement_for__iexact="TEACHER")
+                | models.Q(created_by=user)
+                | models.Q(announcement_for__isnull=True)
+                | models.Q(announcement_for="")
+            )
 
+        announcements = announcements.order_by("-created_at")
+        serializer = AnnouncementSerializer(announcements, many=True, context={"request": request})
+        return Response(serializer.data)
 
+    def post(self, request):
+        user = request.user
+        role = str(getattr(user, "role", "") or "").strip().upper()
+
+        # Disallow Student, Parent, Transport from creating announcements
+        disallowed_roles = ["STUDENT", "PARENT", "PARENTS", "TRANSPORT", "TRANSPORTATION", "DRIVER"]
+        if role in disallowed_roles:
+            return Response(
+                {"error": "You do not have permission to create announcements. Students, parents, and transport staff are view-only."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        school = getattr(user, "school", None)
+        if not school:
+            return Response({"error": "User does not belong to any school."}, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer = AnnouncementSerializer(data=request.data, context={"request": request})
+        if serializer.is_valid():
+            created_role = role if role else "STAFF"
+            announcement = serializer.save(
+                school=school,
+                created_by=user,
+                created_by_role=created_role
+            )
 
             try:
                 channel_layer = get_channel_layer()
                 if channel_layer:
+                    author_name = f"{user.first_name} {user.last_name}".strip() or user.username
+                    ws_payload = {
+                        "type": "announcement_send",
+                        "id": announcement.id,
+                        "title": announcement.title,
+                        "description": announcement.description,
+                        "announcement_for": announcement.announcement_for or "ALL",
+                        "is_everyone": announcement.is_everyone,
+                        "priority": announcement.priority,
+                        "created_at": announcement.created_at.isoformat() if announcement.created_at else None,
+                        "expires_at": announcement.expires_at.isoformat() if announcement.expires_at else None,
+                        "created_by": user.username,
+                        "created_by_name": author_name,
+                        "created_by_role": created_role,
+                        "target_class": announcement.target_class_id,
+                        "target_class_name": getattr(announcement.target_class, "school_class", None) if announcement.target_class else None,
+                        "target_division": announcement.target_division,
+                        "target_student": announcement.target_student_id,
+                        "target_student_name": f"{announcement.target_student.name} {announcement.target_student.surname}".strip() if announcement.target_student else None,
+                    }
+
+                    # Broadcast to school all-group
                     async_to_sync(channel_layer.group_send)(
-                        group_name,
-                        {
-                            "type": "announcement_send",
-                            "title": announcement.title,
-                            "description": announcement.description,
-                        },
+                        f"school_{school.id}_choice_all",
+                        ws_payload
                     )
+
+                    # If targeted to a specific role, also broadcast to that role group
+                    if announcement.announcement_for and announcement.announcement_for.upper() != "ALL":
+                        async_to_sync(channel_layer.group_send)(
+                            f"school_{school.id}_choice_{announcement.announcement_for.upper()}",
+                            ws_payload
+                        )
             except Exception as e:
                 print("Failed to broadcast announcement WebSocket message:", e)
 
-            return Response(serializer.data, status=200)
-        return Response(serializer.errors,status=400)
+            response_serializer = AnnouncementSerializer(announcement, context={"request": request})
+            return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
     def put(self, request, id):
+        user = request.user
+        role = str(getattr(user, "role", "") or "").strip().upper()
+        school = getattr(user, "school", None)
+
         try:
             announcement = Announcement.objects.get(
                 id=id,
-                school=request.user.school
+                school=school
             )
         except Announcement.DoesNotExist:
             return Response(
@@ -698,35 +829,79 @@ class AnnouncementView(APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
 
-        serializer =AnnouncementSerializer(
+        # Check permissions: Management or the original creator can edit
+        is_management = (
+            user.is_superuser
+            or user.is_staff
+            or role in [
+                "ADMIN(TRUSTEE)",
+                "TRUSTEE",
+                "ADMIN",
+                "SUPERADMIN",
+                "SUPER_ADMIN",
+                "PRINCIPAL",
+                "VICE PRINCIPAL",
+            ]
+        )
+        if not is_management and announcement.created_by_id != user.id:
+            return Response(
+                {"error": "You can only edit announcements created by yourself."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        serializer = AnnouncementSerializer(
             announcement,
             data=request.data,
-            partial=False
+            partial=True,
+            context={"request": request}
         )
 
         if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data)
+            updated_announcement = serializer.save()
+            return Response(AnnouncementSerializer(updated_announcement, context={"request": request}).data)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def delete(self, request, id):
+        user = request.user
+        role = str(getattr(user, "role", "") or "").strip().upper()
+        school = getattr(user, "school", None)
+
         try:
             announcement = Announcement.objects.get(
                 id=id,
-                school=request.user.school
+                school=school
             )
         except Announcement.DoesNotExist:
             return Response(
                 {"error": "Announcement not found"},
                 status=status.HTTP_404_NOT_FOUND
+            )
+
+        is_management = (
+            user.is_superuser
+            or user.is_staff
+            or role in [
+                "ADMIN(TRUSTEE)",
+                "TRUSTEE",
+                "ADMIN",
+                "SUPERADMIN",
+                "SUPER_ADMIN",
+                "PRINCIPAL",
+                "VICE PRINCIPAL",
+            ]
+        )
+        if not is_management and announcement.created_by_id != user.id:
+            return Response(
+                {"error": "You can only delete announcements created by yourself."},
+                status=status.HTTP_403_FORBIDDEN
             )
 
         announcement.delete()
 
         return Response(
             {"message": "Announcement deleted successfully"},
-            status=status.HTTP_204_NO_CONTENT
+            status=status.HTTP_200_OK
         )
 
         

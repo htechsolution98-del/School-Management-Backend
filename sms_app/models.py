@@ -3593,22 +3593,35 @@ class BookReservation(models.Model):
 class Announcement(models.Model):
     
     SENT_CHOICES=[
+        ("ALL","All Users"),
         ("TEACHER","Teacher"),
         ("CLERK","Clerk"),
         ("FEE-MANAGER","Fee-manager"),
         ("LIBRARIAN","Librarian"),
         ("STUDENT","Student"),
         ("PARENT","Parent"),
+        ("TRANSPORT","Transport"),
+    ]
+    PRIORITY_CHOICES = [
+        ("NORMAL", "Normal"),
+        ("IMPORTANT", "Important"),
+        ("URGENT", "Urgent"),
     ]
     school=models.ForeignKey(School, on_delete=models.CASCADE)
-    title=models.CharField(max_length=50)
-    description=models.CharField(max_length=200)
+    title=models.CharField(max_length=255)
+    description=models.TextField()
     announcement_for=models.CharField(max_length=50,choices=SENT_CHOICES, null=True,
     blank=True,
     default=None)
     is_everyone=models.BooleanField(default=False)
+    priority=models.CharField(max_length=20, choices=PRIORITY_CHOICES, default="NORMAL")
     created_at = models.DateTimeField(auto_now_add=True)
-    expires_at = models.DateTimeField()
+    expires_at = models.DateTimeField(null=True, blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="announcements")
+    created_by_role = models.CharField(max_length=50, null=True, blank=True)
+    target_class = models.ForeignKey(SchoolClass, on_delete=models.SET_NULL, null=True, blank=True, related_name="class_announcements")
+    target_division = models.CharField(max_length=50, null=True, blank=True)
+    target_student = models.ForeignKey(Student, on_delete=models.SET_NULL, null=True, blank=True, related_name="targeted_announcements")
 
     
     class Meta:

@@ -1055,7 +1055,7 @@ class ClerkVerifyView(ModelViewSet):
 class GetStudentView(ModelViewSet):
     queryset = Student.objects.all()
     serializer_class = GetStudentSerializer
-    permission_classes = [IsAuthenticated, IsCLerk | Isteacher | Isprincipal | IsLibrarian]
+    permission_classes = [IsAuthenticated]
     pagination_class = None
 
     def get_queryset(self):
