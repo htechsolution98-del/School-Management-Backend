@@ -4699,10 +4699,63 @@ class StaffListSirializer(serializers.ModelSerializer):
 #         model = WorkingDay
 #         fields = "__all__"
 
-# class HolidaySerializer(serializers.ModelSerializer):
-#     class Meta:
-#         model = Holiday
-#         fields = "__all__"
+class HolidaySerializer(serializers.ModelSerializer):
+    created_by_name = serializers.SerializerMethodField()
+    can_manage = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Holiday
+        fields = [
+            "id",
+            "school",
+            "name",
+            "title",
+            "event_type",
+            "is_holiday",
+            "start_date",
+            "end_date",
+            "description",
+            "target_audience",
+            "location",
+            "color",
+            "created_by",
+            "created_by_name",
+            "can_manage",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["school", "created_at", "updated_at", "created_by"]
+
+    def get_created_by_name(self, obj):
+        if obj.created_by:
+            full_name = f"{obj.created_by.first_name} {obj.created_by.last_name}".strip()
+            return full_name if full_name else (obj.created_by.username or "Staff")
+        return "Administration"
+
+    def get_can_manage(self, obj):
+        request = self.context.get("request")
+        if not request or not request.user or not request.user.is_authenticated:
+            return False
+        user = request.user
+        role = str(getattr(user, "role", "") or "").upper()
+        return bool(
+            user.is_superuser
+            or user.is_staff
+            or role in [
+                "ADMIN(TRUSTEE)",
+                "TRUSTEE",
+                "ADMIN",
+                "SUPERADMIN",
+                "SUPER_ADMIN",
+                "PRINCIPAL",
+                "VICE PRINCIPAL",
+                "CLERK",
+                "ASSISTANT CLERK",
+                "ASSISTANT_CLERK",
+                "ASSISTANTCLERK",
+            ]
+        )
+
 
 
 class ClassDivSerializer(serializers.ModelSerializer):

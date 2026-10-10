@@ -904,6 +904,151 @@ class AnnouncementView(APIView):
             status=status.HTTP_200_OK
         )
 
+
+class HolidayCalendarView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def _is_manager(self, user):
+        role = str(getattr(user, "role", "") or "").upper()
+        return bool(
+            user.is_superuser
+            or user.is_staff
+            or role in [
+                "ADMIN(TRUSTEE)",
+                "TRUSTEE",
+                "ADMIN",
+                "SUPERADMIN",
+                "SUPER_ADMIN",
+                "PRINCIPAL",
+                "VICE PRINCIPAL",
+                "CLERK",
+                "ASSISTANT CLERK",
+                "ASSISTANT_CLERK",
+                "ASSISTANTCLERK",
+            ]
+        )
+
+    def get(self, request, id=None):
+        school = getattr(request.user, "school", None)
+        if not school:
+            return Response([], status=status.HTTP_200_OK)
+
+        if id:
+            try:
+                event = Holiday.objects.get(id=id, school=school)
+            except Holiday.DoesNotExist:
+                return Response({"error": "Event not found"}, status=status.HTTP_404_NOT_FOUND)
+            serializer = HolidaySerializer(event, context={"request": request})
+            return Response(serializer.data)
+
+        # Auto-seed default holidays if school currently has no holidays
+        if Holiday.objects.filter(school=school).count() == 0:
+            try:
+                from .holiday_defaults import seed_default_school_holidays
+                seed_default_school_holidays(school)
+            except Exception:
+                pass
+
+        queryset = Holiday.objects.filter(school=school)
+
+        # Optional filters
+        year = request.query_params.get("year")
+        month = request.query_params.get("month")
+        event_type = request.query_params.get("event_type")
+        is_holiday = request.query_params.get("is_holiday")
+
+        if year:
+            queryset = queryset.filter(Q(start_date__year=year) | Q(end_date__year=year))
+        if month:
+            queryset = queryset.filter(Q(start_date__month=month) | Q(end_date__month=month))
+        if event_type:
+            if event_type.upper() == "HOLIDAY":
+                queryset = queryset.filter(Q(event_type__iexact="HOLIDAY") | Q(is_holiday=True))
+            else:
+                queryset = queryset.filter(event_type__iexact=event_type)
+        if is_holiday is not None:
+            val = is_holiday.lower() in ["true", "1"]
+            queryset = queryset.filter(is_holiday=val)
+
+        queryset = queryset.order_by("start_date")
+        serializer = HolidaySerializer(queryset, many=True, context={"request": request})
+        return Response(serializer.data)
+
+    def post(self, request):
+        user = request.user
+        if not self._is_manager(user):
+            return Response(
+                {"error": "Permission denied. Only Principal, Clerk, or Trustee can add events & holidays."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        school = getattr(user, "school", None)
+        if not school:
+            return Response({"error": "User does not belong to any school."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # If manual reseed action requested
+        if request.data.get("action") == "seed_defaults":
+            from .holiday_defaults import seed_default_school_holidays
+            count = seed_default_school_holidays(school)
+            events = Holiday.objects.filter(school=school).order_by("start_date")
+            serializer = HolidaySerializer(events, many=True, context={"request": request})
+            return Response({"message": f"Successfully seeded {count} public holidays.", "events": serializer.data}, status=status.HTTP_200_OK)
+
+        serializer = HolidaySerializer(data=request.data, context={"request": request})
+        if serializer.is_valid():
+            serializer.save(school=school, created_by=user)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def put(self, request, id=None):
+        user = request.user
+        if not self._is_manager(user):
+            return Response(
+                {"error": "Permission denied. Only Principal, Clerk, or Trustee can update events & holidays."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        school = getattr(user, "school", None)
+        if not school:
+            return Response({"error": "User does not belong to any school."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not id:
+            return Response({"error": "Event ID is required for update."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            event = Holiday.objects.get(id=id, school=school)
+        except Holiday.DoesNotExist:
+            return Response({"error": "Event not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = HolidaySerializer(event, data=request.data, partial=True, context={"request": request})
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def delete(self, request, id=None):
+        user = request.user
+        if not self._is_manager(user):
+            return Response(
+                {"error": "Permission denied. Only Principal, Clerk, or Trustee can delete events & holidays."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        school = getattr(user, "school", None)
+        if not school:
+            return Response({"error": "User does not belong to any school."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not id:
+            return Response({"error": "Event ID is required for deletion."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            event = Holiday.objects.get(id=id, school=school)
+        except Holiday.DoesNotExist:
+            return Response({"error": "Event not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        event.delete()
+        return Response({"message": "Event deleted successfully"}, status=status.HTTP_200_OK)
+
         
 
 
