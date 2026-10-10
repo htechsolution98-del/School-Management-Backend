@@ -30,7 +30,7 @@ from drf_yasg import openapi
 from django.conf import settings
 from django.conf.urls.static import static
 from sms_app.views import *
-from sms_app.auth_views import CustomLoginView, InitDatabaseView, CookieTokenRefreshView
+from sms_app.auth_views import CustomLoginView, InitDatabaseView, CookieTokenRefreshView, ChangePasswordView, LogoutView
 from sms_app.finance_ledger_views import *
 from sms_app.finance_views import RTESummaryView, BulkCollectStudentFeePaymentView
 from sms_app.library_leave_views import *
@@ -74,7 +74,10 @@ schema_view = get_schema_view(
 )
 
 
+from sms_app.activity_views import ActivityLogViewSet
+
 router = DefaultRouter()
+router.register(r'activity-logs', ActivityLogViewSet, basename='activity-logs')
 router.register(r'feature',FeatureView,basename='feature')
 router.register(r'subscription-plans', SubscriptionPlanViewSet, basename='subscription-plans')
 router.register(r'school-subscriptions', SchoolSubscriptionViewSet, basename='school-subscriptions')
@@ -362,9 +365,14 @@ urlpatterns = [
     path('api/delete-location/<int:pk>/',DeleteUpdateLocationView.as_view()),
     
     path('api/api-login/', LoginView.as_view()),
+    path('api/logout/', LogoutView.as_view(), name='api_logout'),
+    path('logout/', LogoutView.as_view(), name='logout_direct'),
     path('api/me/', CurrentUserProfileView.as_view(), name='current_user_profile'),
     path('api/profile/', CurrentUserProfileView.as_view(), name='profile_alias'),
     path('api/user-profile/', CurrentUserProfileView.as_view(), name='user_profile_alias'),
+    path('api/change-password/', ChangePasswordView.as_view(), name='change_password'),
+    path('api/auth/change-password/', ChangePasswordView.as_view(), name='auth_change_password'),
+    path('change-password/', ChangePasswordView.as_view(), name='change_password_direct'),
     
     # path('school/<int:school_id>/', school_wise_report, name='school_wise_report'),
     

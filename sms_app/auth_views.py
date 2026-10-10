@@ -1,5 +1,6 @@
 from rest_framework.views import APIView
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework import permissions
 from rest_framework.viewsets import ModelViewSet
 from rest_framework import generics
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
@@ -249,14 +250,35 @@ class LoginView(APIView):
         )
 
         # =====================================
+        # Resolve School (including Student / Parent lookups)
+        # =====================================
+        school_obj = getattr(user, "school", None) or getattr(user, "managed_school", None)
+        if not school_obj:
+            try:
+                student_obj = Student.objects.filter(user=user).select_related("school").first()
+                if not student_obj and getattr(user, "username", None):
+                    student_obj = Student.objects.filter(gr_no=user.username).select_related("school").first()
+                if student_obj and student_obj.school:
+                    school_obj = student_obj.school
+            except Exception:
+                pass
+        if not school_obj:
+            try:
+                parent_obj = Perents.objects.filter(user=user).select_related("perents_of__school").first()
+                if parent_obj and parent_obj.perents_of and parent_obj.perents_of.school:
+                    school_obj = parent_obj.perents_of.school
+            except Exception:
+                pass
+
+        # =====================================
         # Common Payload
         # =====================================
         response_data = {
             "access": access_token,
             "refresh": refresh_token,
-            "school_id": user.school.id if user.school else None,
-            "school_name": user.school.name if user.school else None,
-            "school_slug": user.school.slug if user.school else None,
+            "school_id": school_obj.id if school_obj else (user.school.id if user.school else None),
+            "school_name": school_obj.name if school_obj else (user.school.name if user.school else None),
+            "school_slug": school_obj.slug if school_obj else (user.school.slug if user.school else None),
             "roles": roles,
             "modules": modules,
             "user": {
@@ -266,8 +288,36 @@ class LoginView(APIView):
                 "email": user.email,
                 "mobile": user.mobile,
                 "roles": roles,
+                "school_id": school_obj.id if school_obj else None,
+                "school_name": school_obj.name if school_obj else None,
             },
         }
+
+        # Log authentication activity
+        try:
+            from .activity_logger import log_activity
+            display_name = _user_display_name(user)
+            role_label = roles[0].title() if roles else "User"
+            log_activity(
+                user=user,
+                action="LOGIN",
+                module="AUTH",
+                title=f"{display_name} ({role_label}) Signed In",
+                description=f"User {user.username} ({display_name}) successfully signed in to {school_obj.name if school_obj else 'the portal'}.",
+                school=school_obj,
+                extra_data={
+                    "user_id": user.id,
+                    "username": user.username,
+                    "display_name": display_name,
+                    "roles": roles,
+                    "school_id": school_obj.id if school_obj else None,
+                    "school_name": school_obj.name if school_obj else None,
+                    "client_type": request.headers.get("Client-Type", "web"),
+                },
+                request=request,
+            )
+        except Exception:
+            pass
 
         # =====================================
         # Detect Client Type
@@ -314,15 +364,52 @@ class LoginView(APIView):
         return response
 
 
+class LogoutView(APIView):
+    """
+    POST /api/logout/ - Logs out the user, records LOGOUT activity, and clears auth cookies.
+    """
+    permission_classes = [permissions.AllowAny]
 
+    def post(self, request):
+        user = getattr(request, "user", None)
+        if not user or not getattr(user, "is_authenticated", False):
+            user_id = request.data.get("user_id")
+            username = request.data.get("username")
+            if user_id:
+                user = CustomUser.objects.filter(id=user_id).first()
+            elif username:
+                user = CustomUser.objects.filter(username=username).first()
 
-class UserListView(generics.ListAPIView):
-    queryset = User.objects.all()
-    serializer_class = UserListSerialzer
+        if user and (getattr(user, "is_authenticated", False) or getattr(user, "id", None)):
+            try:
+                from .activity_logger import log_activity
+                display_name = _user_display_name(user)
+                roles = list(user.groups.values_list("name", flat=True))
+                role_label = roles[0].title() if roles else (str(getattr(user, "role", "") or "User").title())
+                school_obj = getattr(user, "school", None) or getattr(user, "managed_school", None)
+                log_activity(
+                    user=user,
+                    action="LOGOUT",
+                    module="AUTH",
+                    title=f"{display_name} ({role_label}) Signed Out",
+                    description=f"User {user.username} logged out from the portal session.",
+                    school=school_obj,
+                    extra_data={
+                        "user_id": user.id,
+                        "username": user.username,
+                        "role": role_label,
+                        "school_id": school_obj.id if school_obj else None,
+                        "school_name": school_obj.name if school_obj else None,
+                    },
+                    request=request,
+                )
+            except Exception:
+                pass
 
-    def get_queryset(self):
-        school = self.request.user.school
-        return User.objects.filter(school=school)
+        response = Response({"message": "Successfully logged out."}, status=status.HTTP_200_OK)
+        response.delete_cookie("access_token", path="/")
+        response.delete_cookie("refresh_token", path="/")
+        return response
 
 
 class CurrentUserProfileView(APIView):
@@ -342,6 +429,79 @@ class CurrentUserProfileView(APIView):
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
+class ChangePasswordView(APIView):
+    """
+    POST /api/change-password/
+    Allows any user in any role (Principal, Teacher, Student, Parent, Clerk, etc.)
+    to change their password after verifying their current password.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        user = request.user
+        current_password = str(request.data.get("current_password") or "").strip()
+        new_password = str(request.data.get("new_password") or "").strip()
+        confirm_password = str(request.data.get("confirm_password") or "").strip()
+
+        if not current_password:
+            return Response(
+                {"error": "Current password is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not new_password:
+            return Response(
+                {"error": "New password is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if len(new_password) < 6:
+            return Response(
+                {"error": "New password must be at least 6 characters long."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if new_password != confirm_password:
+            return Response(
+                {"error": "New password and confirmation password do not match."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Verify current password using standard Django hasher
+        if not user.check_password(current_password):
+            return Response(
+                {"error": "Current password is incorrect. Please verify and try again."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if current_password == new_password:
+            return Response(
+                {"error": "New password cannot be the same as your current password."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Hash and store new password
+        user.set_password(new_password)
+        user.save()
+
+        # Record activity log
+        from .activity_logger import log_activity
+        log_activity(
+            user=user,
+            action="PASSWORD_CHANGE",
+            module="AUTH",
+            title="Password Changed",
+            description=f"{user.username} successfully changed their account password.",
+            request=request,
+        )
+
+        return Response(
+            {
+                "message": "Password changed successfully! Please use your new password for future logins.",
+                "success": True,
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 class ModuleView(ModelViewSet):
