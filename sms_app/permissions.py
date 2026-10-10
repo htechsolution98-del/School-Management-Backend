@@ -315,7 +315,7 @@ class IsHRAttendanceAdmin(BasePermission):
 
 
 class IsPrincipalOrTrustee(BasePermission):
-    """Principal, Clerk, Assistant Clerk, Trustee and Admin can approve/reject leave requests."""
+    """Principal, Trustee, and System Admin can approve/reject leave requests. Non-approver roles (Teachers, Librarians, Clerks) cannot."""
     def has_permission(self, request, view):
         user = getattr(request, "user", None)
         if not user or not user.is_authenticated:
@@ -323,14 +323,17 @@ class IsPrincipalOrTrustee(BasePermission):
         if getattr(user, "is_superuser", False) or getattr(user, "is_staff", False):
             return True
         role = str(getattr(user, "role", "") or "").strip().upper()
-        if role in CLERK_ROLES or role in ["PRINCIPAL", "TRUSTEE", "ADMIN", "SUPERADMIN", "SUPER_ADMIN"]:
+        if role in ["PRINCIPAL", "VICE PRINCIPAL", "TRUSTEE", "ADMIN", "SUPERADMIN", "SUPER_ADMIN", "ADMIN(TRUSTEE)"]:
             return True
         staff = getattr(user, "staff", None)
-        if staff and (str(getattr(staff, "category", "") or "").strip().upper() in ["PRINCIPAL"] or str(getattr(staff, "category", "") or "").strip().upper() in CLERK_ROLES):
+        if staff and str(getattr(staff, "category", "") or "").strip().upper() in ["PRINCIPAL", "VICE PRINCIPAL", "TRUSTEE"]:
             return True
         return (
-            user.groups.filter(name__in=CLERK_GROUPS).exists()
-            or user.groups.filter(name__in=["PRINCIPAL", "admin(trustee)", "ADMIN", "admin", "principal"] + CLERK_GROUPS).exists()
+            user.groups.filter(name__iexact="PRINCIPAL").exists()
+            or user.groups.filter(name__iexact="VICE PRINCIPAL").exists()
+            or user.groups.filter(name__iexact="TRUSTEE").exists()
+            or user.groups.filter(name__iexact="ADMIN(TRUSTEE)").exists()
+            or user.groups.filter(name__in=["PRINCIPAL", "principal", "Principal", "admin(trustee)", "ADMIN", "admin", "TRUSTEE", "trustee"]).exists()
         )
 
 

@@ -715,6 +715,7 @@ class AttendanceLocationSerializer(serializers.ModelSerializer):
 
 class AttendanceSerializer(serializers.ModelSerializer):
 
+    status = serializers.CharField(source="canonical_status", read_only=True)
     latitude = serializers.CharField(write_only=True, required=False, allow_blank=True)
     longitude = serializers.CharField(write_only=True, required=False, allow_blank=True)
     verification_token = serializers.CharField(write_only=True, required=False, allow_blank=True)
@@ -723,6 +724,7 @@ class AttendanceSerializer(serializers.ModelSerializer):
         model = Attendance
         fields = [
             "id",
+            "status",
             "latitude",
             "longitude",
             "verification_token",
@@ -746,6 +748,7 @@ class AttendanceSerializer(serializers.ModelSerializer):
 
         read_only_fields = [
             "id",
+            "status",
             "school",
             "staff",
             "attendance_date",

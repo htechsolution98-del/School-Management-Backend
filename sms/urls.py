@@ -55,6 +55,8 @@ from sms_app.dynamic_hr_views import (
     AttendanceRegularizationViewSet,
     LeaveCycleViewSet,
     LeaveBalanceViewSet,
+    LeaveTransactionViewSet,
+    LeaveReportViewSet,
     LeaveTemplateViewSet,
     LeaveTypeViewSet,
     DynamicSalaryComponentViewSet,
@@ -266,6 +268,8 @@ router.register(r'attendance-settings', AttendanceSettingViewSet, basename='atte
 router.register(r'attendance-regularizations', AttendanceRegularizationViewSet, basename='attendance-regularizations')
 router.register(r'leave-cycles', LeaveCycleViewSet, basename='leave-cycles')
 router.register(r'leave-balances', LeaveBalanceViewSet, basename='leave-balances')
+router.register(r'leave-transactions', LeaveTransactionViewSet, basename='leave-transactions')
+router.register(r'leave-reports', LeaveReportViewSet, basename='leave-reports')
 router.register(r'dynamic-salary-components', DynamicSalaryComponentViewSet, basename='dynamic-salary-components')
 router.register(r'salary-structures', SalaryStructureViewSet, basename='salary-structures')
 router.register(r'payroll-runs', PayrollRunViewSet, basename='payroll-runs')

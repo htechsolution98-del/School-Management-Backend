@@ -1221,6 +1221,34 @@ class Attendance(models.Model):
         """Returns True if staff has checked in but not checked out."""
         return bool(self.check_in and not self.check_out)
 
+    @property
+    def canonical_status(self):
+        """
+        Normalized canonical attendance status string evaluated in a strict hierarchy:
+        1. Missing Punch: check_in is not None and check_out is None
+        2. Leave: source == 'Leave' and not is_present
+        3. Holiday/Week Off: source in ['Holiday', 'Week Off']
+        4. Present Logic: is_present (HALF_DAY -> LATE -> PRESENT)
+        5. Default: ABSENT
+        """
+        if self.check_in is not None and self.check_out is None:
+            return "MISSING_PUNCH"
+
+        if self.source == "Leave" and not self.is_present:
+            return "LEAVE"
+
+        if self.source in ["Holiday", "Week Off"]:
+            return self.source.upper().replace(" ", "_")
+
+        if self.is_present:
+            if self.is_half_day:
+                return "HALF_DAY"
+            if self.is_late:
+                return "LATE"
+            return "PRESENT"
+
+        return "ABSENT"
+
     def __str__(self):
         return f"{self.name} - {self.attendance_date}"
     
@@ -1239,6 +1267,15 @@ class LeaveCycle(models.Model):
     start_date = models.DateField()
     end_date = models.DateField()
     is_active = models.BooleanField(default=True)
+    is_closed = models.BooleanField(default=False)
+    closed_at = models.DateTimeField(null=True, blank=True)
+    closed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="closed_leave_cycles",
+    )
     created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
     updated_at = models.DateTimeField(auto_now=True, null=True, blank=True)
 
@@ -1261,6 +1298,7 @@ class LeaveTemplate(models.Model):
     time_line = models.CharField(max_length=20, choices=TIMELINE_CHOICES, null=True, blank=True)
     school = models.ForeignKey(School, on_delete=models.CASCADE, null=True)
     is_active = models.BooleanField(default=True)
+    description = models.TextField(blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
     
     def __str__(self):
@@ -1277,6 +1315,12 @@ class LeaveType(models.Model):
         ("Yearly", "Yearly"),
     ]
 
+    PRORATA_CHOICES = [
+        ("PRO_RATA", "Pro-Rata"),
+        ("FULL", "Full"),
+        ("NONE", "None"),
+    ]
+
     leave_type = models.CharField(max_length=100, null=True, blank=True)
     leave_template = models.ForeignKey(LeaveTemplate, on_delete=models.CASCADE, null=True, blank=True, related_name="leave_types")
     leave_num = models.IntegerField(null=True, blank=True)
@@ -1291,6 +1335,19 @@ class LeaveType(models.Model):
     carry_forward = models.BooleanField(default=False)
     max_carry_forward = models.PositiveIntegerField(default=0)
     allow_encashment = models.BooleanField(default=False)
+    is_active = models.BooleanField(default=True)
+
+    # Advanced policy settings
+    max_consecutive_days = models.PositiveIntegerField(default=0, help_text="0 means unlimited")
+    half_day_allowed = models.BooleanField(default=True)
+    include_weekends = models.BooleanField(default=False, help_text="If True, weekends count towards leave")
+    include_holidays = models.BooleanField(default=False, help_text="If True, holidays count towards leave")
+    allow_negative_balance = models.BooleanField(default=False)
+    allow_future_leave = models.BooleanField(default=True)
+    allow_backdated_leave = models.BooleanField(default=False)
+    max_backdated_days = models.PositiveIntegerField(default=0)
+    prorata_on_joining = models.CharField(max_length=20, choices=PRORATA_CHOICES, default="PRO_RATA")
+
     created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     @property
@@ -1335,6 +1392,19 @@ class LeaveType(models.Model):
 
 
 class LeaveRequest(models.Model):
+    HALF_DAY_SESSION_CHOICES = [
+        ("FULL_DAY", "Full Day"),
+        ("FIRST_HALF", "First Half"),
+        ("SECOND_HALF", "Second Half"),
+    ]
+
+    CANCELLATION_STATUS_CHOICES = [
+        ("NONE", "None"),
+        ("REQUESTED", "Requested"),
+        ("APPROVED", "Approved"),
+        ("REJECTED", "Rejected"),
+    ]
+
     school = models.ForeignKey(
         School, on_delete=models.CASCADE, null=True, blank=True, db_index=True
     )
@@ -1354,8 +1424,40 @@ class LeaveRequest(models.Model):
     total_days = models.DecimalField(
         max_digits=5, decimal_places=1, default=Decimal("1.0"), null=True, blank=True
     )
+    is_half_day = models.BooleanField(default=False)
+    half_day_session = models.CharField(
+        max_length=20, choices=HALF_DAY_SESSION_CHOICES, default="FULL_DAY"
+    )
+
     reason = models.TextField(null=True, blank=True)
     status = models.CharField(max_length=20, default="PENDING", null=True, blank=True)
+
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="approved_leave_requests",
+    )
+    approved_at = models.DateTimeField(null=True, blank=True)
+    rejection_reason = models.TextField(null=True, blank=True)
+
+    cancellation_status = models.CharField(
+        max_length=20, choices=CANCELLATION_STATUS_CHOICES, default="NONE"
+    )
+    cancellation_reason = models.TextField(null=True, blank=True)
+    cancellation_requested_at = models.DateTimeField(null=True, blank=True)
+    cancellation_action_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="cancellation_actioned_leaves",
+    )
+    cancellation_action_at = models.DateTimeField(null=True, blank=True)
+    cancellation_rejection_reason = models.TextField(null=True, blank=True)
+
+    audit_log = models.JSONField(default=list, blank=True)
 
     updated_at = models.DateTimeField(
         auto_now=True, null=True, blank=True
@@ -1405,15 +1507,16 @@ class LeavePerDay(models.Model):
     status = models.CharField(
         max_length=20, choices=STATUS_CHOICES, default="PENDING", null=True, blank=True
     )
+    day_weight = models.DecimalField(max_digits=3, decimal_places=2, default=Decimal("1.0"))
+    session = models.CharField(max_length=20, default="FULL_DAY")
     approved_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     def __str__(self):
-        return f"{self.date} - {self.leave.total_days} leaves"
+        return f"{self.date} - {self.leave.total_days if self.leave else 0} leaves ({self.status})"
 
     class Meta:
         db_table = "leave_per_day"
-
 
 
 class StaffRemainingLeave(models.Model):
@@ -1453,10 +1556,11 @@ class LeaveBalance(models.Model):
     leave_cycle = models.ForeignKey(
         LeaveCycle, on_delete=models.CASCADE, related_name="leave_balances", db_index=True
     )
-    allocated = models.DecimalField(max_digits=6, decimal_places=2, default=0.0)
-    carry_forward = models.DecimalField(max_digits=6, decimal_places=2, default=0.0)
-    used = models.DecimalField(max_digits=6, decimal_places=2, default=0.0)
-    pending = models.DecimalField(max_digits=6, decimal_places=2, default=0.0)
+    opening_balance = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal("0.0"))
+    allocated = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal("0.0"))
+    carry_forward = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal("0.0"))
+    used = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal("0.0"))
+    pending = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal("0.0"))
     created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
     updated_at = models.DateTimeField(auto_now=True, null=True, blank=True)
 
@@ -1469,11 +1573,61 @@ class LeaveBalance(models.Model):
 
     @property
     def remaining(self):
+        op = Decimal(str(self.opening_balance or 0))
         alloc = Decimal(str(self.allocated or 0))
         cf = Decimal(str(self.carry_forward or 0))
         u = Decimal(str(self.used or 0))
         p = Decimal(str(self.pending or 0))
-        return (alloc + cf) - (u + p)
+        return (op + alloc + cf) - (u + p)
+
+    @property
+    def available(self):
+        return self.remaining
+
+
+class LeaveTransaction(models.Model):
+    TRANSACTION_TYPES = [
+        ("OPENING", "Opening Balance"),
+        ("ALLOCATION", "Allocation"),
+        ("RESERVATION", "Pending Reservation"),
+        ("RELEASE", "Reservation Release"),
+        ("USAGE", "Approved Usage"),
+        ("CANCELLATION", "Cancellation Refund"),
+        ("CARRY_FORWARD", "Carry Forward Credit"),
+        ("EXPIRY", "Balance Expiry"),
+        ("ADJUSTMENT", "Manual Adjustment"),
+    ]
+
+    school = models.ForeignKey(
+        School, on_delete=models.CASCADE, related_name="leave_transactions", db_index=True
+    )
+    staff = models.ForeignKey(
+        Staff, on_delete=models.CASCADE, related_name="leave_transactions", db_index=True
+    )
+    leave_type = models.ForeignKey(
+        LeaveType, on_delete=models.CASCADE, related_name="leave_transactions"
+    )
+    leave_cycle = models.ForeignKey(
+        LeaveCycle, on_delete=models.CASCADE, related_name="leave_transactions"
+    )
+    leave_request = models.ForeignKey(
+        LeaveRequest, on_delete=models.SET_NULL, null=True, blank=True, related_name="transactions"
+    )
+    transaction_type = models.CharField(max_length=30, choices=TRANSACTION_TYPES)
+    amount = models.DecimalField(max_digits=6, decimal_places=2)
+    balance_after = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal("0.0"))
+    description = models.TextField(blank=True, default="")
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="created_leave_transactions"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "leave_transaction"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.staff} - {self.transaction_type}: {self.amount} ({self.created_at})"
 
 
 # class Announcement(models.Model):
