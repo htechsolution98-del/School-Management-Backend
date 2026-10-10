@@ -90,6 +90,38 @@ class AttendanceRegularizationSerializer(serializers.ModelSerializer):
             return att.check_out.strftime("%H:%M:%S")
         return None
 
+    def validate(self, attrs):
+        request = self.context.get("request")
+        user = getattr(request, "user", None) if request else None
+
+        staff = attrs.get("staff") or getattr(self.instance, "staff", None)
+        if not staff and user:
+            from .models import Staff
+            staff = Staff.objects.filter(user=user).first()
+            if not staff and getattr(user, "email", None):
+                staff = Staff.objects.filter(email=user.email).first()
+            if not staff and getattr(user, "mobile", None):
+                staff = Staff.objects.filter(mobile=user.mobile).first()
+
+        if staff:
+            if not staff.is_active:
+                raise serializers.ValidationError(
+                    {"staff": "Inactive staff cannot request attendance regularization."}
+                )
+
+            att_date = attrs.get("attendance_date") or getattr(self.instance, "attendance_date", None)
+            if att_date:
+                if staff.joining_date and att_date < staff.joining_date:
+                    raise serializers.ValidationError(
+                        {"attendance_date": f"Cannot regularize attendance before joining date ({staff.joining_date})."}
+                    )
+                if staff.exit_date and att_date > staff.exit_date:
+                    raise serializers.ValidationError(
+                        {"attendance_date": f"Cannot regularize attendance after exit date ({staff.exit_date})."}
+                    )
+
+        return attrs
+
 
 class LeaveCycleSerializer(serializers.ModelSerializer):
     closed_by_name = serializers.CharField(source="closed_by.username", read_only=True, default=None)

@@ -922,7 +922,7 @@ class AttendanceView(ModelViewSet):
         if not school:
             return Attendance.objects.none()
 
-        qs = Attendance.objects.filter(school=school).select_related("staff")
+        qs = Attendance.objects.filter(school=school).select_related("staff", "staff__department")
 
         role = str(getattr(user, "role", "") or "").strip().upper()
         is_management = (
@@ -957,8 +957,14 @@ class AttendanceView(ModelViewSet):
             category = params.get("category")
             if category:
                 qs = qs.filter(category__iexact=category)
+            department = params.get("department")
+            if department:
+                if str(department).isdigit():
+                    qs = qs.filter(staff__department_id=int(department))
+                else:
+                    qs = qs.filter(staff__department__name__iexact=department)
 
-        date_param = params.get("date")
+        date_param = params.get("date") or params.get("attendance_date")
         if date_param:
             qs = qs.filter(attendance_date=date_param)
         start_date = params.get("start_date")

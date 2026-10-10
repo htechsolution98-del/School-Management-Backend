@@ -462,6 +462,27 @@ class StaffSalaryPaymentSerializer(serializers.ModelSerializer):
                 {"message": "Salary payment already exists for this staff and month."}
             )
 
+        # Check PayrollRun Lock status
+        target_months = set()
+        if salary_month:
+            target_months.add(str(salary_month))
+        if self.instance and self.instance.salary_month:
+            target_months.add(str(self.instance.salary_month))
+
+        for sm in target_months:
+            try:
+                parts = sm.split("-")
+                month_start = date(int(parts[0]), int(parts[1]), 1)
+                payroll_run = PayrollRun.objects.filter(
+                    school=school, salary_month=month_start
+                ).first()
+                if payroll_run and payroll_run.status == "Locked":
+                    raise serializers.ValidationError(
+                        {"message": f"Payroll for {sm} is Locked and cannot be modified."}
+                    )
+            except (ValueError, IndexError):
+                pass
+
         return attrs
 
     def create(self, validated_data):
@@ -523,21 +544,28 @@ class GenerateStaffSalaryPaymentSerializer(serializers.ModelSerializer):
                 {"transaction_id": "Transaction ID is required for online payment."}
             )
 
-        if StaffSalaryPayment.objects.filter(
+        existing = StaffSalaryPayment.objects.filter(
             staff=staff, salary_month=attrs.get("salary_month")
-        ).exists():
+        )
+        if self.instance:
+            existing = existing.exclude(pk=self.instance.pk)
+        if existing.exists():
             raise serializers.ValidationError(
                 {"message": "Salary payment already exists for this staff and month."}
             )
 
-        salary_month = attrs.get("salary_month")
-        year, month = [int(part) for part in salary_month.split("-")]
-        month_start = date(year, month, 1)
-        payroll_run = PayrollRun.objects.filter(school=school, salary_month=month_start).first()
-        if payroll_run and payroll_run.status == "Locked":
-            raise serializers.ValidationError(
-                {"message": f"Payroll for {salary_month} is Locked and cannot be modified."}
-            )
+        salary_month = attrs.get("salary_month") or getattr(self.instance, "salary_month", None)
+        if salary_month:
+            try:
+                parts = str(salary_month).split("-")
+                month_start = date(int(parts[0]), int(parts[1]), 1)
+                payroll_run = PayrollRun.objects.filter(school=school, salary_month=month_start).first()
+                if payroll_run and payroll_run.status == "Locked":
+                    raise serializers.ValidationError(
+                        {"message": f"Payroll for {salary_month} is Locked and cannot be modified."}
+                    )
+            except (ValueError, IndexError):
+                pass
 
         return attrs
 
