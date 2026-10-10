@@ -809,6 +809,22 @@ class AnnouncementView(APIView):
             except Exception as e:
                 print("Failed to broadcast announcement WebSocket message:", e)
 
+            # Record activity log
+            try:
+                from .activity_logger import log_activity
+                log_activity(
+                    user=user,
+                    action="PUBLISH",
+                    module="ANNOUNCEMENTS",
+                    title="Announcement Published",
+                    description=f"Published announcement: '{announcement.title}' for audience: {announcement.announcement_for or 'ALL'}",
+                    school=school,
+                    extra_data={"announcement_id": announcement.id, "title": announcement.title, "audience": announcement.announcement_for},
+                    request=request,
+                )
+            except Exception:
+                pass
+
             response_serializer = AnnouncementSerializer(announcement, context={"request": request})
             return Response(response_serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -996,7 +1012,21 @@ class HolidayCalendarView(APIView):
 
         serializer = HolidaySerializer(data=request.data, context={"request": request})
         if serializer.is_valid():
-            serializer.save(school=school, created_by=user)
+            inst = serializer.save(school=school, created_by=user)
+            try:
+                from .activity_logger import log_activity
+                log_activity(
+                    user=user,
+                    action="CREATE",
+                    module="EVENTS",
+                    title=f"Created {inst.event_type.title()}: {inst.name}",
+                    description=f"{user.username} scheduled a new {inst.event_type.lower()} from {inst.start_date} to {inst.end_date}",
+                    school=school,
+                    extra_data={"event_id": inst.id, "name": inst.name, "event_type": inst.event_type},
+                    request=request,
+                )
+            except Exception:
+                pass
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -1022,7 +1052,21 @@ class HolidayCalendarView(APIView):
 
         serializer = HolidaySerializer(event, data=request.data, partial=True, context={"request": request})
         if serializer.is_valid():
-            serializer.save()
+            inst = serializer.save()
+            try:
+                from .activity_logger import log_activity
+                log_activity(
+                    user=user,
+                    action="UPDATE",
+                    module="EVENTS",
+                    title=f"Updated {inst.event_type.title()}: {inst.name}",
+                    description=f"{user.username} modified {inst.name}",
+                    school=school,
+                    extra_data={"event_id": inst.id, "name": inst.name},
+                    request=request,
+                )
+            except Exception:
+                pass
             return Response(serializer.data, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -1046,7 +1090,22 @@ class HolidayCalendarView(APIView):
         except Holiday.DoesNotExist:
             return Response({"error": "Event not found"}, status=status.HTTP_404_NOT_FOUND)
 
+        event_name = event.name
         event.delete()
+        try:
+            from .activity_logger import log_activity
+            log_activity(
+                user=user,
+                action="DELETE",
+                module="EVENTS",
+                title=f"Deleted Event/Holiday: {event_name}",
+                description=f"{user.username} removed event/holiday '{event_name}'",
+                school=school,
+                extra_data={"name": event_name},
+                request=request,
+            )
+        except Exception:
+            pass
         return Response({"message": "Event deleted successfully"}, status=status.HTTP_200_OK)
 
         

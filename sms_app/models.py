@@ -4280,3 +4280,76 @@ class StudentProfileValue(models.Model):
     value = models.CharField(max_length=255, blank=True)
     class Meta:
         constraints = [models.UniqueConstraint(fields=["student", "field"], name="unique_student_profile_value")]
+
+
+# =========================================================
+# SYSTEM-WIDE USER ACTIVITY LOGS
+# =========================================================
+
+class ActivityLog(models.Model):
+    MODULE_CHOICES = (
+        ("AUTH", "Authentication & Security"),
+        ("ACADEMICS", "Academics & Curriculum"),
+        ("ADMISSIONS", "Admissions & Students"),
+        ("FEES", "Finance & Fees"),
+        ("ATTENDANCE", "Attendance Desk"),
+        ("EXAMS", "Exams & Results"),
+        ("ANNOUNCEMENTS", "Announcements"),
+        ("EVENTS", "Events & Holidays"),
+        ("HR_LEAVES", "HR & Leaves"),
+        ("LIBRARY", "Library Management"),
+        ("INVENTORY", "Stock & Inventory"),
+        ("SETTINGS", "System Settings"),
+        ("OTHER", "General / Other"),
+    )
+
+    ACTION_CHOICES = (
+        ("LOGIN", "User Login"),
+        ("LOGOUT", "User Logout"),
+        ("PASSWORD_CHANGE", "Password Changed"),
+        ("CREATE", "Record Created"),
+        ("UPDATE", "Record Updated"),
+        ("DELETE", "Record Deleted"),
+        ("PUBLISH", "Result / Notice Published"),
+        ("PAYMENT", "Fee / Payment Processed"),
+        ("ATTENDANCE_MARK", "Attendance Marked"),
+        ("LEAVE_APPROVE", "Leave Approved"),
+        ("LEAVE_REJECT", "Leave Rejected"),
+        ("EXPORT", "Data Exported"),
+        ("OTHER", "Other Action"),
+    )
+
+    school = models.ForeignKey(
+        School, on_delete=models.CASCADE, related_name="activity_logs", null=True, blank=True
+    )
+    user = models.ForeignKey(
+        "CustomUser", on_delete=models.SET_NULL, null=True, blank=True, related_name="activity_logs"
+    )
+    user_name = models.CharField(max_length=255, null=True, blank=True)
+    user_role = models.CharField(max_length=100, null=True, blank=True)
+    module = models.CharField(max_length=50, choices=MODULE_CHOICES, default="OTHER")
+    action = models.CharField(max_length=50, choices=ACTION_CHOICES, default="OTHER")
+    title = models.CharField(max_length=255)
+    description = models.TextField(blank=True, null=True)
+    ip_address = models.CharField(max_length=64, null=True, blank=True)
+    user_agent = models.CharField(max_length=255, null=True, blank=True)
+    extra_data = models.JSONField(default=dict, blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        db_table = "activity_log"
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["school", "-created_at"]),
+            models.Index(fields=["user", "-created_at"]),
+            models.Index(fields=["module", "-created_at"]),
+            models.Index(fields=["action", "-created_at"]),
+        ]
+
+    def __str__(self):
+        return f"[{self.created_at}] {self.user_name or 'User'} ({self.user_role or 'Role'}) - {self.title}"
+
+
+from .support_models import SupportTicket, TicketMessage
+from .tutorial_models import PageTutorial
+
