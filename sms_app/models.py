@@ -2222,25 +2222,49 @@ class WorkingDay(models.Model):
 
 
 class Holiday(models.Model):
+    EVENT_TYPES = (
+        ("HOLIDAY", "Holiday"),
+        ("EVENT", "School Event"),
+        ("EXAM", "Exam / Assessment"),
+        ("MEETING", "Meeting / PTM"),
+        ("CELEBRATION", "Celebration / Activity"),
+        ("OTHER", "Other"),
+    )
 
     school = models.ForeignKey(
         School, on_delete=models.CASCADE, related_name="holidays"
     )
-
     name = models.CharField(max_length=255)
-
+    title = models.CharField(max_length=255, null=True, blank=True)
+    event_type = models.CharField(max_length=50, choices=EVENT_TYPES, default="HOLIDAY")
+    is_holiday = models.BooleanField(default=True)
     start_date = models.DateField()
-
     end_date = models.DateField(null=True, blank=True)
-
     description = models.TextField(blank=True, null=True)
+    target_audience = models.CharField(max_length=50, default="ALL")
+    location = models.CharField(max_length=255, null=True, blank=True)
+    color = models.CharField(max_length=50, null=True, blank=True)
+    created_by = models.ForeignKey(
+        "CustomUser", on_delete=models.SET_NULL, null=True, blank=True, related_name="created_events"
+    )
     created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True, null=True, blank=True)
 
     class Meta:
         db_table = "holiday"
+        ordering = ["start_date"]
+
+    def save(self, *args, **kwargs):
+        if not self.title and self.name:
+            self.title = self.name
+        elif not self.name and self.title:
+            self.name = self.title
+        if self.event_type == "HOLIDAY":
+            self.is_holiday = True
+        super().save(*args, **kwargs)
 
     def __str__(self):
-        return self.name
+        return self.title or self.name
 
 
 # THIS MODEL ALL REDAY HAVE

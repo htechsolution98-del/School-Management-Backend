@@ -38,7 +38,7 @@ def seed_features_and_school_features():
 
 @receiver(post_save, sender=School)
 def create_school_features_on_school_create(sender, instance, created, **kwargs):
-    """Automatically attach all system features to any newly created school."""
+    """Automatically attach all system features and seed default public holidays to any newly created school."""
     for name in DEFAULT_FEATURES:
         feat, _ = Feature.objects.get_or_create(name=name.strip().lower())
         SchoolFeature.objects.get_or_create(
@@ -46,6 +46,11 @@ def create_school_features_on_school_create(sender, instance, created, **kwargs)
             feature=feat,
             defaults={"is_enabled": True}
         )
+    try:
+        from .holiday_defaults import seed_default_school_holidays
+        seed_default_school_holidays(instance)
+    except Exception:
+        pass
 
 
 @receiver(post_save, sender=School)
