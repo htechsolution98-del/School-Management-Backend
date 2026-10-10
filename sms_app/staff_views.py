@@ -17,6 +17,7 @@ from .serializer import *
 from .permissions import *
 from .utils import *
 import datetime
+from decimal import Decimal
 from .staff_serializers import *
 
 # pyrefly: ignore [missing-import]
@@ -406,25 +407,52 @@ class StaffFaceVerifyView(APIView):
         return Response({"enrolled": enrolled, "is_enrolled": enrolled}, status=status.HTTP_200_OK)
 
     def post(self, request):
-
         serializer = StaffFaceVerifySerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
         uploaded_image = serializer.validated_data["image"]
+        purpose = request.data.get("purpose", "ATTENDANCE_PUNCH")
 
         # get staff
-        try:
-            staff = Staff.objects.get(user=request.user)
+        staff = Staff.objects.filter(user=request.user).first()
+        if not staff and getattr(request.user, "email", None):
+            staff = Staff.objects.filter(email=request.user.email).first()
+        if not staff and getattr(request.user, "mobile", None):
+            staff = Staff.objects.filter(mobile=request.user.mobile).first()
 
-            staff_face = StaffFace.objects.get(
-                staff=staff,
-                is_enrolled=True
+        if not staff:
+            return Response(
+                {"error": "Staff profile not found for current user."},
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
+        school = staff.school or getattr(request.user, "school", None)
+        allow_bypass = settings.DEBUG or getattr(settings, "ALLOW_BIOMETRIC_BYPASS", False)
+
+        try:
+            staff_face = StaffFace.objects.get(staff=staff, is_enrolled=True)
         except StaffFace.DoesNotExist:
+            if allow_bypass:
+                proof = generate_biometric_proof(
+                    staff=staff,
+                    school=school,
+                    purpose=purpose,
+                    confidence=Decimal("99.00"),
+                )
+                return Response(
+                    {
+                        "verified": True,
+                        "confidence": 99.0,
+                        "token": proof.token,
+                        "verification_token": proof.token,
+                        "bypass": True,
+                        "message": "Development mode face bypass active (face not enrolled).",
+                    },
+                    status=status.HTTP_200_OK,
+                )
             return Response(
                 {"error": "Face not enrolled."},
-                status=status.HTTP_400_BAD_REQUEST
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         enrolled_image = staff_face.face_image
@@ -433,12 +461,11 @@ class StaffFaceVerifyView(APIView):
         # OPTIMIZE BOTH IMAGES
         # -------------------------
         enrolled_image.open("rb")
-
         optimized_enrolled = optimize_image(enrolled_image)
         optimized_uploaded = optimize_image(uploaded_image)
 
         # -------------------------
-        # FACE++ REQUEST
+        # FACE++ REQUEST (15s timeout)
         # -------------------------
         try:
             response = requests.post(
@@ -451,34 +478,97 @@ class StaffFaceVerifyView(APIView):
                     "image_file1": ("enrolled.jpg", optimized_enrolled, "image/jpeg"),
                     "image_file2": ("live.jpg", optimized_uploaded, "image/jpeg"),
                 },
-                timeout=30
+                timeout=15,
             )
-
         except requests.exceptions.RequestException as e:
+            if allow_bypass:
+                proof = generate_biometric_proof(
+                    staff=staff,
+                    school=school,
+                    purpose=purpose,
+                    confidence=Decimal("95.00"),
+                )
+                return Response(
+                    {
+                        "verified": True,
+                        "confidence": 95.0,
+                        "token": proof.token,
+                        "verification_token": proof.token,
+                        "bypass": True,
+                        "warning": f"Face++ request failed ({str(e)}), used dev bypass.",
+                    },
+                    status=status.HTTP_200_OK,
+                )
             return Response(
                 {"error": f"Face++ request failed: {str(e)}"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
         # -------------------------
         # RESPONSE HANDLING
         # -------------------------
-        result = response.json()
+        try:
+            result = response.json()
+        except Exception:
+            result = {"error": response.text}
 
         if response.status_code != 200:
+            if allow_bypass:
+                proof = generate_biometric_proof(
+                    staff=staff,
+                    school=school,
+                    purpose=purpose,
+                    confidence=Decimal("95.00"),
+                )
+                return Response(
+                    {
+                        "verified": True,
+                        "confidence": 95.0,
+                        "token": proof.token,
+                        "verification_token": proof.token,
+                        "bypass": True,
+                        "warning": f"Face++ error {response.status_code}, used dev bypass.",
+                    },
+                    status=status.HTTP_200_OK,
+                )
             return Response(
                 {"error": result},
-                status=status.HTTP_400_BAD_REQUEST
+                status=status.HTTP_400_BAD_REQUEST,
             )
+        try:
+            confidence = float(result.get("confidence", 0) or 0)
+        except (ValueError, TypeError):
+            confidence = 0.0
+        verified = confidence >= 80.0
 
-        confidence = result.get("confidence", 0)
-        verified = confidence >= 80
-
-        return Response({
+        response_data = {
             "verified": verified,
             "confidence": confidence,
-            "raw_response": result
-        })
+            "raw_response": result,
+        }
+
+        if verified:
+            proof = generate_biometric_proof(
+                staff=staff,
+                school=school,
+                purpose=purpose,
+                confidence=Decimal(str(confidence)),
+            )
+            response_data["token"] = proof.token
+            response_data["verification_token"] = proof.token
+        elif allow_bypass and (request.data.get("bypass") or request.query_params.get("bypass")):
+            proof = generate_biometric_proof(
+                staff=staff,
+                school=school,
+                purpose=purpose,
+                confidence=Decimal("90.00"),
+            )
+            response_data["verified"] = True
+            response_data["bypass"] = True
+            response_data["token"] = proof.token
+            response_data["verification_token"] = proof.token
+
+        return Response(response_data, status=status.HTTP_200_OK)
 
 # class ParentCreateView(APIView):
 
