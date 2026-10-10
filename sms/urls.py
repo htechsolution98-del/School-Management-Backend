@@ -75,8 +75,12 @@ schema_view = get_schema_view(
 
 
 from sms_app.activity_views import ActivityLogViewSet
+from sms_app.support_views import SupportTicketViewSet
+from sms_app.tutorial_views import PageTutorialViewSet
 
 router = DefaultRouter()
+router.register(r'page-tutorials', PageTutorialViewSet, basename='page-tutorials')
+router.register(r'support-tickets', SupportTicketViewSet, basename='support-tickets')
 router.register(r'activity-logs', ActivityLogViewSet, basename='activity-logs')
 router.register(r'feature',FeatureView,basename='feature')
 router.register(r'subscription-plans', SubscriptionPlanViewSet, basename='subscription-plans')
