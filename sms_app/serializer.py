@@ -284,7 +284,7 @@ class GetFeatureSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = SchoolFeature
-        fields = ["created_at", "feature_id", "feature_name"]
+        fields = ["id", "created_at", "feature_id", "feature_name"]
 
 
 from rest_framework import serializers
@@ -2815,6 +2815,7 @@ def is_before_time(current_time, rule_time):
 
 class AttendanceSerializer(serializers.ModelSerializer):
 
+    status = serializers.CharField(source="canonical_status", read_only=True)
     latitude = serializers.CharField(write_only=True, required=False, allow_blank=True)
     longitude = serializers.CharField(write_only=True, required=False, allow_blank=True)
 
@@ -2822,6 +2823,7 @@ class AttendanceSerializer(serializers.ModelSerializer):
         model = Attendance
         fields = [
             "id",
+            "status",
             "latitude",
             "longitude",
             "school",
@@ -2842,6 +2844,7 @@ class AttendanceSerializer(serializers.ModelSerializer):
 
         read_only_fields = [
             "id",
+            "status",
             "school",
             "staff",
             "attendance_date",
@@ -3163,7 +3166,23 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
     class Meta:
         model = LeaveRequest
         fields = "__all__"
-        read_only_fields = ["school", "staff", "total_days", "approved_by"]
+        read_only_fields = [
+            "school",
+            "staff",
+            "total_days",
+            "status",
+            "approved_by",
+            "approved_at",
+            "rejection_reason",
+            "cancellation_status",
+            "cancellation_reason",
+            "cancellation_requested_at",
+            "cancellation_action_by",
+            "cancellation_action_at",
+            "cancellation_rejection_reason",
+            "audit_log",
+            "is_paid",
+        ]
 
     def create(self, validated_data):
         start_date = validated_data.get("start_date")
@@ -3173,6 +3192,14 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
 
         if end_date < start_date:
             raise serializers.ValidationError("End date cannot be before start date.")
+
+        # Force PENDING status and strip any attempted approval/workflow tampering
+        validated_data["status"] = "PENDING"
+        validated_data.pop("approved_by", None)
+        validated_data.pop("approved_at", None)
+        validated_data.pop("cancellation_status", None)
+        validated_data.pop("cancellation_action_by", None)
+        validated_data.pop("cancellation_action_at", None)
 
         # ✅ calculate total days
         total_days = (end_date - start_date).days + 1

@@ -17,6 +17,8 @@ from .models import (
     LeaveTemplate,
     LeaveType,
     LeaveBalance,
+    LeaveTransaction,
+    LeaveRequest,
     SalaryComponent,
     SalaryStructure,
     PayrollRun,
@@ -29,11 +31,14 @@ from .dynamic_hr_serializers import (
     DynamicLeaveTemplateSerializer,
     DynamicLeaveTypeSerializer,
     LeaveBalanceSerializer,
+    LeaveTransactionSerializer,
     DynamicSalaryComponentSerializer,
     SalaryStructureSerializer,
     PayrollRunSerializer,
     PayrollPayslipSerializer,
 )
+from sms_app.services.leave_service import LeaveCycleClosingService, LeaveAllocationService
+from django.core.exceptions import ValidationError as DjangoValidationError
 
 
 def get_request_school(request):
@@ -409,21 +414,61 @@ class LeaveCycleViewSet(viewsets.ModelViewSet):
             raise ValidationError("Authenticated user is not linked to any school.")
         serializer.save(school=school)
 
+    @action(detail=True, methods=["post"], url_path="close")
+    def close_cycle(self, request, pk=None):
+        cycle = self.get_object()
+        next_cycle_id = request.data.get("next_cycle_id")
+        if not next_cycle_id:
+            return Response({"error": "next_cycle_id is required to close a cycle and carry forward balances."}, status=400)
+        school = get_request_school(request)
+        next_cycle = LeaveCycle.objects.filter(id=next_cycle_id, school=school).first()
+        if not next_cycle:
+            return Response({"error": "Target next cycle not found or does not belong to school."}, status=404)
+        try:
+            LeaveCycleClosingService.close_cycle(cycle, next_cycle, user=request.user)
+            return Response({"message": f"Cycle '{cycle.name}' closed successfully. Balances carried forward to '{next_cycle.name}'."})
+        except (DjangoValidationError, ValidationError) as e:
+            return Response({"error": e.messages if hasattr(e, "messages") else str(e)}, status=400)
 
-class LeaveBalanceViewSet(viewsets.ModelViewSet):
+    @action(detail=True, methods=["post"], url_path="allocate")
+    def run_allocation(self, request, pk=None):
+        cycle = self.get_object()
+        school = get_request_school(request)
+        staff_id = request.data.get("staff_id")
+        if staff_id:
+            staff = Staff.objects.filter(id=staff_id, school=school).first()
+            if not staff:
+                return Response({"error": "Staff member not found."}, status=404)
+            allocated = LeaveAllocationService.allocate_leaves_for_staff(staff, cycle, user=request.user)
+            return Response({"message": f"Allocated leaves for {staff.name}", "details": allocated})
+        else:
+            total = LeaveAllocationService.run_bulk_allocation(school, cycle, user=request.user)
+            return Response({"message": f"Bulk allocation complete. {total} leave type balances processed."})
+
+
+class LeaveBalanceViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = LeaveBalanceSerializer
-    permission_classes = [IsAuthenticated, IsClerkOrAdmin]
+    permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
+        user = self.request.user
         school = get_request_school(self.request)
         if not school:
             return LeaveBalance.objects.none()
         qs = LeaveBalance.objects.filter(staff__school=school).select_related(
             "staff", "leave_type", "leave_cycle"
         )
-        staff_id = self.request.query_params.get("staff_id")
-        if staff_id:
-            qs = qs.filter(staff_id=staff_id)
+        is_mgmt = is_user_hr_management(user)
+        if not is_mgmt:
+            user_staff = get_staff_for_user(user)
+            if not user_staff:
+                return LeaveBalance.objects.none()
+            qs = qs.filter(staff=user_staff)
+        else:
+            staff_id = self.request.query_params.get("staff_id")
+            if staff_id:
+                qs = qs.filter(staff_id=staff_id)
+
         cycle_id = self.request.query_params.get("leave_cycle_id")
         if cycle_id:
             qs = qs.filter(leave_cycle_id=cycle_id)
@@ -431,6 +476,126 @@ class LeaveBalanceViewSet(viewsets.ModelViewSet):
         if type_id:
             qs = qs.filter(leave_type_id=type_id)
         return qs
+
+    def create(self, request, *args, **kwargs):
+        raise PermissionDenied("Direct creation of leave balances is prohibited. Use allocation workflows.")
+
+    def update(self, request, *args, **kwargs):
+        raise PermissionDenied("Direct modification of leave balances is prohibited.")
+
+    def partial_update(self, request, *args, **kwargs):
+        raise PermissionDenied("Direct modification of leave balances is prohibited.")
+
+    def destroy(self, request, *args, **kwargs):
+        raise PermissionDenied("Direct deletion of leave balances is prohibited.")
+
+
+class LeaveTransactionViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = LeaveTransactionSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        school = get_request_school(self.request)
+        if not school:
+            return LeaveTransaction.objects.none()
+        qs = LeaveTransaction.objects.filter(school=school).select_related(
+            "staff", "leave_type", "leave_cycle", "created_by"
+        )
+        is_mgmt = is_user_hr_management(user)
+        if not is_mgmt:
+            user_staff = get_staff_for_user(user)
+            if not user_staff:
+                return LeaveTransaction.objects.none()
+            qs = qs.filter(staff=user_staff)
+        else:
+            staff_id = self.request.query_params.get("staff_id")
+            if staff_id:
+                qs = qs.filter(staff_id=staff_id)
+
+        cycle_id = self.request.query_params.get("leave_cycle_id")
+        if cycle_id:
+            qs = qs.filter(leave_cycle_id=cycle_id)
+        type_id = self.request.query_params.get("leave_type_id")
+        if type_id:
+            qs = qs.filter(leave_type_id=type_id)
+        tx_type = self.request.query_params.get("transaction_type")
+        if tx_type:
+            qs = qs.filter(transaction_type=tx_type.upper())
+        return qs.order_by("-created_at")
+
+
+class LeaveReportViewSet(viewsets.ViewSet):
+    permission_classes = [IsAuthenticated, IsClerkOrAdmin]
+
+    @action(detail=False, methods=["get"], url_path="summary")
+    def summary(self, request):
+        school = get_request_school(request)
+        if not school:
+            return Response({"error": "No school associated with user"}, status=400)
+
+        cycle_id = request.query_params.get("cycle_id")
+        cycle = None
+        if cycle_id:
+            cycle = LeaveCycle.objects.filter(id=cycle_id, school=school).first()
+        if not cycle:
+            cycle = LeaveCycle.objects.filter(school=school, is_active=True).first()
+
+        bal_qs = LeaveBalance.objects.filter(staff__school=school)
+        if cycle:
+            bal_qs = bal_qs.filter(leave_cycle=cycle)
+
+        req_qs = LeaveRequest.objects.filter(school=school)
+        if cycle:
+            req_qs = req_qs.filter(start_date__gte=cycle.start_date, start_date__lte=cycle.end_date)
+
+        total_allocated = sum(b.allocated for b in bal_qs)
+        total_cf = sum(b.carry_forward for b in bal_qs)
+        total_used = sum(b.used for b in bal_qs)
+        total_pending = sum(b.pending for b in bal_qs)
+
+        pending_count = req_qs.filter(status="PENDING").count()
+        approved_count = req_qs.filter(status="APPROVED").count()
+        rejected_count = req_qs.filter(status="REJECTED").count()
+        cancelled_count = req_qs.filter(status="CANCELLED").count()
+        cancellation_requests_count = req_qs.filter(cancellation_status="REQUESTED").count()
+
+        staff_summary = []
+        for staff in Staff.objects.filter(school=school, is_active=True):
+            s_bals = bal_qs.filter(staff=staff)
+            staff_summary.append({
+                "staff_id": staff.id,
+                "staff_name": staff.name,
+                "department": staff.department.name if staff.department else None,
+                "allocated": float(sum(b.allocated for b in s_bals)),
+                "carry_forward": float(sum(b.carry_forward for b in s_bals)),
+                "used": float(sum(b.used for b in s_bals)),
+                "pending": float(sum(b.pending for b in s_bals)),
+                "available": float(sum(b.available for b in s_bals)),
+            })
+
+        return Response({
+            "cycle": {
+                "id": cycle.id if cycle else None,
+                "name": cycle.name if cycle else "All Cycles",
+                "is_closed": cycle.is_closed if cycle else False,
+            },
+            "totals": {
+                "total_allocated": float(total_allocated),
+                "total_carry_forward": float(total_cf),
+                "total_used": float(total_used),
+                "total_pending": float(total_pending),
+                "total_available": float((total_allocated + total_cf) - total_used - total_pending),
+            },
+            "request_counts": {
+                "pending": pending_count,
+                "approved": approved_count,
+                "rejected": rejected_count,
+                "cancelled": cancelled_count,
+                "cancellation_requests": cancellation_requests_count,
+            },
+            "staff_summary": staff_summary,
+        })
 
 
 class LeaveTemplateViewSet(viewsets.ModelViewSet):

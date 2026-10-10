@@ -290,7 +290,23 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
     class Meta:
         model = LeaveRequest
         fields = "__all__"
-        read_only_fields = ["school", "staff", "total_days", "approved_by"]
+        read_only_fields = [
+            "school",
+            "staff",
+            "total_days",
+            "status",
+            "approved_by",
+            "approved_at",
+            "rejection_reason",
+            "cancellation_status",
+            "cancellation_reason",
+            "cancellation_requested_at",
+            "cancellation_action_by",
+            "cancellation_action_at",
+            "cancellation_rejection_reason",
+            "audit_log",
+            "is_paid",
+        ]
 
     def create(self, validated_data):
         start_date = validated_data.get("start_date")
@@ -300,6 +316,14 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
 
         if end_date < start_date:
             raise serializers.ValidationError("End date cannot be before start date.")
+
+        # Force PENDING status and strip any attempted approval/workflow tampering
+        validated_data["status"] = "PENDING"
+        validated_data.pop("approved_by", None)
+        validated_data.pop("approved_at", None)
+        validated_data.pop("cancellation_status", None)
+        validated_data.pop("cancellation_action_by", None)
+        validated_data.pop("cancellation_action_at", None)
 
         # ✅ calculate total days
         total_days = (end_date - start_date).days + 1

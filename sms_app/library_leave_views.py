@@ -1,5 +1,6 @@
 from decimal import Decimal
 from django.utils import timezone
+from django.core.exceptions import ValidationError as DjangoValidationError, PermissionDenied as DjangoPermissionDenied
 from .models import StaffRemainingLeave
 from .models import *
 from rest_framework.viewsets import ModelViewSet, ViewSet
@@ -12,9 +13,10 @@ from .library_leave_serializers import *
 from rest_framework.generics import GenericAPIView, ListCreateAPIView, ListAPIView
 from rest_framework import status
 from rest_framework.exceptions import ValidationError
+from sms_app.services.leave_service import LeaveWorkflowService, LeaveAllocationService, LeaveCycleClosingService
 from rest_framework.decorators import action
 from uuid import uuid4
-from django.db.models import Count, Q
+from django.db.models import Count, Q, Sum
 from django.db.models.functions import TruncMonth
 
 
@@ -881,21 +883,158 @@ class LeaveTypeViewSet(ModelViewSet):
         
         
 class LeaveRequestView(ModelViewSet): #for requesting leave
-    # queryset = LeaveRequest.objects.all()
     serializer_class = LeaveRequestSerializer
     permission_classes = [IsAuthenticated]
     
     def get_queryset(self):
+        user = self.request.user
+        staff = Staff.objects.filter(user=user).first()
+        school = user.school or (staff.school if staff else None)
         
-        
-        staff = Staff.objects.filter(user=self.request.user).first()
-        
-        # print(staff.school)
-        
-        if staff and staff.school:
-            return LeaveRequest.objects.filter(staff=staff, school=staff.school)
-        
-        return LeaveRequest.objects.all()
+        show_all = self.request.query_params.get("all") == "true"
+        role_str = str(getattr(user, "role", "") or "").upper()
+        staff_cat = str(getattr(staff, "category", "") or "").upper() if staff else ""
+        is_admin_approver = (
+            user.is_superuser
+            or role_str in ["PRINCIPAL", "VICE PRINCIPAL", "TRUSTEE", "ADMIN", "SUPERADMIN", "ADMIN(TRUSTEE)"]
+            or staff_cat in ["PRINCIPAL", "VICE PRINCIPAL", "TRUSTEE"]
+        )
+        if show_all and is_admin_approver and school:
+            qs = LeaveRequest.objects.filter(school=school)
+        elif staff and staff.school:
+            qs = LeaveRequest.objects.filter(staff=staff, school=staff.school)
+        elif school:
+            qs = LeaveRequest.objects.filter(school=school)
+        else:
+            qs = LeaveRequest.objects.none()
+
+        status_param = self.request.query_params.get("status")
+        if status_param:
+            qs = qs.filter(status=status_param.upper())
+
+        cancellation_status = self.request.query_params.get("cancellation_status")
+        if cancellation_status:
+            qs = qs.filter(cancellation_status=cancellation_status.upper())
+
+        return qs.order_by("-id")
+
+    def update(self, request, *args, **kwargs):
+        instance = self.get_object()
+        user = request.user
+        user_staff = Staff.objects.filter(user=user).first()
+        role_str = str(getattr(user, "role", "") or "").upper()
+        is_admin_approver = (
+            user.is_superuser
+            or role_str in ["PRINCIPAL", "VICE PRINCIPAL", "TRUSTEE", "ADMIN", "SUPERADMIN"]
+        )
+        if instance.staff != user_staff and not is_admin_approver:
+            return Response({"error": "You can only update your own leave request."}, status=403)
+        if instance.status != "PENDING":
+            return Response(
+                {"error": f"Cannot update leave request with status '{instance.status}'. Only PENDING requests can be edited."},
+                status=400,
+            )
+        return super().update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        user = request.user
+        user_staff = Staff.objects.filter(user=user).first()
+        role_str = str(getattr(user, "role", "") or "").upper()
+        is_admin_approver = (
+            user.is_superuser
+            or role_str in ["PRINCIPAL", "VICE PRINCIPAL", "TRUSTEE", "ADMIN", "SUPERADMIN"]
+        )
+        if instance.staff != user_staff and not is_admin_approver:
+            return Response({"error": "You can only delete/withdraw your own leave request."}, status=403)
+        if instance.status != "PENDING":
+            return Response(
+                {"error": f"Cannot delete leave request with status '{instance.status}'. Only PENDING requests can be withdrawn."},
+                status=400,
+            )
+        try:
+            LeaveWorkflowService.withdraw_leave_request(instance, request.user)
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        except (DjangoValidationError, ValidationError) as e:
+            return Response({"error": e.messages if hasattr(e, "messages") else str(e)}, status=400)
+
+    @action(detail=True, methods=["post"], url_path="withdraw")
+    def withdraw(self, request, pk=None):
+        leave_req = self.get_object()
+        user_staff = Staff.objects.filter(user=request.user).first()
+        if leave_req.staff != user_staff and not request.user.is_superuser:
+            return Response({"error": "You can only withdraw your own leave request."}, status=403)
+        try:
+            LeaveWorkflowService.withdraw_leave_request(leave_req, request.user)
+            return Response({"message": "Leave request withdrawn successfully."})
+        except (DjangoValidationError, ValidationError) as e:
+            return Response({"error": e.messages if hasattr(e, "messages") else str(e)}, status=400)
+
+    @action(detail=True, methods=["post"], permission_classes=[IsAuthenticated, IsPrincipalOrTrustee], url_path="approve")
+    def approve(self, request, pk=None):
+        leave_req = self.get_object()
+        school = request.user.school or leave_req.school
+        try:
+            LeaveWorkflowService.approve_leave_request(leave_req, request.user, school)
+            return Response({"message": "Leave request approved successfully."})
+        except (DjangoPermissionDenied, PermissionDenied) as e:
+            return Response({"error": str(e)}, status=403)
+        except (DjangoValidationError, ValidationError) as e:
+            return Response({"error": e.messages if hasattr(e, "messages") else str(e)}, status=400)
+
+    @action(detail=True, methods=["post"], permission_classes=[IsAuthenticated, IsPrincipalOrTrustee], url_path="reject")
+    def reject(self, request, pk=None):
+        leave_req = self.get_object()
+        reason = request.data.get("reason", "Rejected by approver")
+        school = request.user.school or leave_req.school
+        try:
+            LeaveWorkflowService.reject_leave_request(leave_req, request.user, reason, school)
+            return Response({"message": "Leave request rejected."})
+        except (DjangoPermissionDenied, PermissionDenied) as e:
+            return Response({"error": str(e)}, status=403)
+        except (DjangoValidationError, ValidationError) as e:
+            return Response({"error": e.messages if hasattr(e, "messages") else str(e)}, status=400)
+
+    @action(detail=True, methods=["post"], url_path="request_cancellation")
+    def request_cancellation(self, request, pk=None):
+        leave_req = self.get_object()
+        user_staff = Staff.objects.filter(user=request.user).first()
+        if leave_req.staff != user_staff and not request.user.is_superuser:
+            return Response({"error": "You can only cancel your own leave request."}, status=403)
+        reason = request.data.get("reason", "")
+        if not reason:
+            return Response({"error": "Reason is required to request cancellation."}, status=400)
+        try:
+            LeaveWorkflowService.request_cancellation(leave_req, request.user, reason)
+            return Response({"message": "Cancellation requested successfully."})
+        except (DjangoValidationError, ValidationError) as e:
+            return Response({"error": e.messages if hasattr(e, "messages") else str(e)}, status=400)
+
+    @action(detail=True, methods=["post"], permission_classes=[IsAuthenticated, IsPrincipalOrTrustee], url_path="approve_cancellation")
+    def approve_cancellation(self, request, pk=None):
+        leave_req = self.get_object()
+        school = request.user.school or leave_req.school
+        try:
+            LeaveWorkflowService.approve_cancellation(leave_req, request.user, school)
+            return Response({"message": "Leave cancellation approved and balance refunded."})
+        except (DjangoPermissionDenied, PermissionDenied) as e:
+            return Response({"error": str(e)}, status=403)
+        except (DjangoValidationError, ValidationError) as e:
+            return Response({"error": e.messages if hasattr(e, "messages") else str(e)}, status=400)
+
+    @action(detail=True, methods=["post"], permission_classes=[IsAuthenticated, IsPrincipalOrTrustee], url_path="reject_cancellation")
+    def reject_cancellation(self, request, pk=None):
+        leave_req = self.get_object()
+        reason = request.data.get("reason", "Cancellation rejected")
+        school = request.user.school or leave_req.school
+        try:
+            LeaveWorkflowService.reject_cancellation(leave_req, request.user, reason, school)
+            return Response({"message": "Leave cancellation rejected."})
+        except (DjangoPermissionDenied, PermissionDenied) as e:
+            return Response({"error": str(e)}, status=403)
+        except (DjangoValidationError, ValidationError) as e:
+            return Response({"error": e.messages if hasattr(e, "messages") else str(e)}, status=400)
+
     
 
     
@@ -1015,13 +1154,19 @@ class ChangeLeaveView(ModelViewSet): # for approving day wise APPROVAL — princ
                 {"error": "You are not allowed to modify this record"}, status=403
             )
 
+        if instance.leave and instance.leave.staff and instance.leave.staff.user_id == request.user.id:
+            return Response(
+                {"error": "Self-approval is strictly forbidden. Another authorized Principal or Trustee must approve this request."},
+                status=403,
+            )
+
         return super().update(request, *args, **kwargs)
     
     
 
 
-class ChangeAllLeaveView(APIView): # for APPROVE all day leave — principal/clerk/trustee
-    permission_classes = [IsAuthenticated, IsClerkOrPrincipal]
+class ChangeAllLeaveView(APIView): # for APPROVE all day leave — principal/trustee
+    permission_classes = [IsAuthenticated, IsPrincipalOrTrustee]
 
     def patch(self, request, pk):
         status_value = request.data.get("status")
@@ -1037,71 +1182,46 @@ class ChangeAllLeaveView(APIView): # for APPROVE all day leave — principal/cle
                 status=404
             )
 
-        with transaction.atomic():
-            old_status = (leave_request.status or "PENDING").upper()
-            if old_status == new_status:
-                return Response({"message": f"Leave is already {new_status}"})
+        school = request.user.school or leave_request.school
+        try:
+            if new_status == "APPROVED":
+                LeaveWorkflowService.approve_leave_request(leave_request, request.user, school)
+            elif new_status == "REJECTED":
+                reason = request.data.get("reason", "Rejected by approver")
+                LeaveWorkflowService.reject_leave_request(leave_request, request.user, reason, school)
+            elif new_status == "CANCELLED":
+                if leave_request.cancellation_status == "REQUESTED":
+                    LeaveWorkflowService.approve_cancellation(leave_request, request.user, school)
+                else:
+                    LeaveWorkflowService.withdraw_leave_request(leave_request, request.user)
+            else:
+                return Response({"error": f"Unsupported status '{new_status}'"}, status=400)
 
-            staff = leave_request.staff
-            leave_type = leave_request.dynamic_leave_type or leave_request.leave_type
-            days = Decimal(str(leave_request.total_days or 1.0))
-
-            cycle = LeaveCycle.objects.filter(
-                school=leave_request.school,
-                start_date__lte=leave_request.start_date,
-                end_date__gte=leave_request.start_date,
-            ).first() or LeaveCycle.objects.filter(school=leave_request.school, is_active=True).first()
-
-            balance = LeaveBalance.objects.filter(
-                staff=staff, leave_type=leave_type, leave_cycle=cycle
-            ).first() if (staff and leave_type and cycle) else None
-
-            if balance:
-                if new_status == "APPROVED":
-                    if old_status == "PENDING":
-                        balance.pending = max(Decimal("0.0"), balance.pending - days)
-                        balance.used = balance.used + days
-                    elif old_status in ["REJECTED", "CANCELLED"]:
-                        balance.used = balance.used + days
-                    balance.save(update_fields=["pending", "used", "updated_at"])
-
-                elif new_status in ["REJECTED", "CANCELLED"]:
-                    if old_status == "PENDING":
-                        balance.pending = max(Decimal("0.0"), balance.pending - days)
-                        balance.save(update_fields=["pending", "updated_at"])
-                    elif old_status == "APPROVED":
-                        balance.used = max(Decimal("0.0"), balance.used - days)
-                        balance.save(update_fields=["used", "updated_at"])
-
-            leave_request.leave_days.all().update(
-                status=new_status,
-                approved_at=timezone.now() if new_status == "APPROVED" else None
-            )
-            leave_request.status = new_status
-            leave_request.save(update_fields=["status"])
-
-        return Response(
-            {"message": f"All leave days updated to {new_status}"}
-        )
+            return Response({"message": f"All leave days updated to {new_status}"})
+        except (DjangoPermissionDenied, PermissionDenied) as e:
+            return Response({"error": str(e)}, status=403)
+        except (DjangoValidationError, ValidationError) as e:
+            return Response({"error": e.messages if hasattr(e, "messages") else str(e)}, status=400)
     
             
 
         
 def get_approved_paid_leave_days(staff, start_date, end_date):
     """
-    Returns count of approved leave days that result in salary deduction.
+    Returns total approved leave days that result in salary deduction.
     According to standard HR logic:
       - Paid leaves (is_paid=True): no salary deduction
       - Unpaid leaves / Loss of Pay (is_paid=False): salary IS deducted
-    This function counts approved days where is_paid=False so callers multiplying
-    by per_day_salary accurately deduct Loss of Pay (LOP) days.
+    This function sums approved day weights where is_paid=False so callers multiplying
+    by per_day_salary accurately deduct Loss of Pay (LOP) days (including 0.5 for half-days).
     """
-    return LeavePerDay.objects.filter(
+    total = LeavePerDay.objects.filter(
         leave__staff=staff,
         status="APPROVED",
         date__range=(start_date, end_date),
         leave__is_paid=False  # Only unpaid / LOP leaves cause salary deduction
-    ).count()
+    ).aggregate(total_weight=Sum("day_weight"))["total_weight"]
+    return Decimal(str(total or "0.0"))
 
 
 def get_approved_unpaid_leave_days(staff, start_date, end_date):

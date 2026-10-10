@@ -8,6 +8,7 @@ from .models import (
     LeaveTemplate,
     LeaveType,
     LeaveBalance,
+    LeaveTransaction,
     SalaryComponent,
     SalaryStructure,
     PayrollRun,
@@ -91,6 +92,8 @@ class AttendanceRegularizationSerializer(serializers.ModelSerializer):
 
 
 class LeaveCycleSerializer(serializers.ModelSerializer):
+    closed_by_name = serializers.CharField(source="closed_by.username", read_only=True, default=None)
+
     class Meta:
         model = LeaveCycle
         fields = [
@@ -100,10 +103,14 @@ class LeaveCycleSerializer(serializers.ModelSerializer):
             "start_date",
             "end_date",
             "is_active",
+            "is_closed",
+            "closed_at",
+            "closed_by",
+            "closed_by_name",
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "school", "created_at", "updated_at"]
+        read_only_fields = ["id", "school", "closed_at", "closed_by", "created_at", "updated_at"]
 
 
 class DynamicLeaveTemplateSerializer(serializers.ModelSerializer):
@@ -116,6 +123,7 @@ class DynamicLeaveTemplateSerializer(serializers.ModelSerializer):
             "school",
             "name",
             "time_line",
+            "description",
             "is_active",
             "created_at",
             "leave_types",
@@ -123,6 +131,8 @@ class DynamicLeaveTemplateSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "school", "created_at"]
 
     def get_leave_types(self, obj):
+        if hasattr(obj, "leave_types"):
+            return DynamicLeaveTypeSerializer(obj.leave_types.all(), many=True).data
         if hasattr(obj, "leavetype_set"):
             return DynamicLeaveTypeSerializer(obj.leavetype_set.all(), many=True).data
         return []
@@ -146,6 +156,16 @@ class DynamicLeaveTypeSerializer(serializers.ModelSerializer):
             "carry_forward",
             "max_carry_forward",
             "allow_encashment",
+            "is_active",
+            "max_consecutive_days",
+            "half_day_allowed",
+            "include_weekends",
+            "include_holidays",
+            "allow_negative_balance",
+            "allow_future_leave",
+            "allow_backdated_leave",
+            "max_backdated_days",
+            "prorata_on_joining",
             "category",
             "created_at",
         ]
@@ -157,6 +177,7 @@ class LeaveBalanceSerializer(serializers.ModelSerializer):
     leave_type_name = serializers.CharField(source="leave_type.name", read_only=True, default=None)
     leave_cycle_name = serializers.CharField(source="leave_cycle.name", read_only=True, default=None)
     remaining = serializers.DecimalField(max_digits=6, decimal_places=2, read_only=True)
+    available = serializers.DecimalField(max_digits=6, decimal_places=2, read_only=True)
 
     class Meta:
         model = LeaveBalance
@@ -168,15 +189,63 @@ class LeaveBalanceSerializer(serializers.ModelSerializer):
             "leave_type_name",
             "leave_cycle",
             "leave_cycle_name",
+            "opening_balance",
             "allocated",
             "carry_forward",
             "used",
             "pending",
             "remaining",
+            "available",
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "remaining", "created_at", "updated_at"]
+        read_only_fields = [
+            "id",
+            "staff",
+            "staff_name",
+            "leave_type",
+            "leave_type_name",
+            "leave_cycle",
+            "leave_cycle_name",
+            "opening_balance",
+            "allocated",
+            "carry_forward",
+            "used",
+            "pending",
+            "remaining",
+            "available",
+            "created_at",
+            "updated_at",
+        ]
+
+
+class LeaveTransactionSerializer(serializers.ModelSerializer):
+    staff_name = serializers.CharField(source="staff.name", read_only=True, default=None)
+    leave_type_name = serializers.CharField(source="leave_type.name", read_only=True, default=None)
+    leave_cycle_name = serializers.CharField(source="leave_cycle.name", read_only=True, default=None)
+    created_by_name = serializers.CharField(source="created_by.username", read_only=True, default=None)
+
+    class Meta:
+        model = LeaveTransaction
+        fields = [
+            "id",
+            "school",
+            "staff",
+            "staff_name",
+            "leave_type",
+            "leave_type_name",
+            "leave_cycle",
+            "leave_cycle_name",
+            "leave_request",
+            "transaction_type",
+            "amount",
+            "balance_after",
+            "description",
+            "created_by",
+            "created_by_name",
+            "created_at",
+        ]
+        read_only_fields = ["id", "school", "balance_after", "created_at"]
 
 
 class DynamicSalaryComponentSerializer(serializers.ModelSerializer):

@@ -6,7 +6,7 @@ from django.db import migrations
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("sms_app", "0047_announcement_target_class_and_more"),
+        ("sms_app", "0048_alter_holiday_options_attendance_source_and_more"),
         ("sms_app", "0047_attendancesetting_biometric_required_and_more"),
     ]
 
