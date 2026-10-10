@@ -228,6 +228,21 @@ class CustomeLoginSerializer(TokenObtainPairSerializer):
 
         data["roles"] = list(role)
 
+        try:
+            from .activity_logger import log_activity
+            request = self.context.get("request")
+            role_str = list(role)[0] if list(role) else (getattr(user, "role", "") or "User")
+            log_activity(
+                user=user,
+                action="LOGIN",
+                module="AUTH",
+                title=f"{role_str} Signed In",
+                description=f"User {user.username} logged into the portal.",
+                request=request,
+            )
+        except Exception:
+            pass
+
         return data
 
 
@@ -353,8 +368,10 @@ class UserListSerialzer(serializers.ModelSerializer):
 
 def _user_display_name(user):
     """Best-effort human name for a user, since CustomUser has no name column."""
+    if not user:
+        return "System"
     full_name = " ".join(
-        part for part in [user.first_name, user.last_name] if part
+        part for part in [getattr(user, "first_name", ""), getattr(user, "last_name", "")] if part
     ).strip()
     if full_name:
         return full_name
@@ -363,15 +380,27 @@ def _user_display_name(user):
     if staff and staff.name:
         return staff.name
 
-    student = Student.objects.filter(user=user).only("name", "surname").first()
+    student = Student.objects.filter(user=user).first()
+    if not student and getattr(user, "username", None):
+        student = Student.objects.filter(gr_no=user.username).first()
     if student:
         student_name = " ".join(
-            part for part in [student.name, student.surname] if part
+            part for part in [student.name, student.father_name, student.surname] if part
         ).strip()
+        if not student_name:
+            student_name = " ".join(part for part in [student.name, student.surname] if part).strip()
         if student_name:
             return student_name
 
-    return user.username
+    parent = Perents.objects.filter(user=user).select_related("perents_of").first()
+    if parent:
+        if hasattr(parent, "father_name") and parent.father_name:
+            return parent.father_name
+        if parent.perents_of:
+            child_name = " ".join(part for part in [parent.perents_of.name, parent.perents_of.surname] if part).strip()
+            return f"Parent ({child_name})"
+
+    return getattr(user, "username", "Unknown User")
 
 
 class CurrentUserProfileSerializer(serializers.ModelSerializer):
@@ -434,7 +463,16 @@ class CurrentUserProfileSerializer(serializers.ModelSerializer):
         return self.get_roles(user)[0] if self.get_roles(user) else None
 
     def get_avatar(self, user):
-        school = user.school
+        school = getattr(user, "school", None) or getattr(user, "managed_school", None)
+        if not school:
+            student = Student.objects.filter(user=user).select_related("school").first()
+            if student:
+                school = student.school
+        if not school:
+            parent = Perents.objects.filter(user=user).select_related("perents_of__school").first()
+            if parent and parent.perents_of:
+                school = parent.perents_of.school
+
         if school and school.logo:
             request = self.context.get("request")
             url = school.logo.url
@@ -442,7 +480,18 @@ class CurrentUserProfileSerializer(serializers.ModelSerializer):
         return None
 
     def get_school(self, user):
-        school = user.school
+        school = getattr(user, "school", None) or getattr(user, "managed_school", None)
+        if not school:
+            student = Student.objects.filter(user=user).select_related("school").first()
+            if not student and getattr(user, "username", None):
+                student = Student.objects.filter(gr_no=user.username).select_related("school").first()
+            if student:
+                school = student.school
+        if not school:
+            parent = Perents.objects.filter(user=user).select_related("perents_of__school").first()
+            if parent and parent.perents_of:
+                school = parent.perents_of.school
+
         if not school:
             return None
         return {"id": school.id, "name": school.name, "slug": school.slug}
