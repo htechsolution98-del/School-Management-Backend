@@ -306,8 +306,23 @@ class AnnouncementConsumer(AsyncWebsocketConsumer):
     async def announcement_send(self,event):
         await self.send(
             text_data=json.dumps({
-                "title":event["title"],
-                "description":event["description"]
+                "type": "announcement",
+                "id": event.get("id"),
+                "title": event.get("title", "School Announcement"),
+                "description": event.get("description", ""),
+                "announcement_for": event.get("announcement_for", "ALL"),
+                "is_everyone": event.get("is_everyone", True),
+                "priority": event.get("priority", "NORMAL"),
+                "created_at": event.get("created_at"),
+                "expires_at": event.get("expires_at"),
+                "created_by": event.get("created_by"),
+                "created_by_name": event.get("created_by_name"),
+                "created_by_role": event.get("created_by_role"),
+                "target_class": event.get("target_class"),
+                "target_class_name": event.get("target_class_name"),
+                "target_division": event.get("target_division"),
+                "target_student": event.get("target_student"),
+                "target_student_name": event.get("target_student_name"),
             })
         )
 

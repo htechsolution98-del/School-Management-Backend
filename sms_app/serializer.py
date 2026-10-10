@@ -6031,13 +6031,78 @@ class BudgetExpenseSerializer(serializers.ModelSerializer):
         fields = ["created_at", "id","budget","expense_type","amount","description"]
 
 class AnnouncementSerializer(serializers.ModelSerializer):
+    created_by_name = serializers.SerializerMethodField()
+    is_created_by_me = serializers.SerializerMethodField()
+    can_manage = serializers.SerializerMethodField()
+    target_class_name = serializers.SerializerMethodField()
+    target_student_name = serializers.SerializerMethodField()
+
     class Meta:
-        model=Announcement
-        fields=["id","school","title","description","announcement_for","is_everyone","created_at","expires_at"]
-        read_only_fields=["school","created_at"]
-    
+        model = Announcement
+        fields = [
+            "id",
+            "school",
+            "title",
+            "description",
+            "announcement_for",
+            "is_everyone",
+            "priority",
+            "created_at",
+            "expires_at",
+            "created_by",
+            "created_by_name",
+            "created_by_role",
+            "is_created_by_me",
+            "can_manage",
+            "target_class",
+            "target_class_name",
+            "target_division",
+            "target_student",
+            "target_student_name",
+        ]
+        read_only_fields = ["school", "created_at", "created_by", "created_by_role"]
+
+    def get_is_created_by_me(self, obj):
+        request = self.context.get("request")
+        if not request or not request.user or not request.user.is_authenticated:
+            return False
+        return obj.created_by_id == request.user.id
+
+    def get_created_by_name(self, obj):
+        request = self.context.get("request")
+        if request and request.user and request.user.is_authenticated and obj.created_by_id == request.user.id:
+            return "Created by me"
+        if obj.created_by:
+            full_name = f"{obj.created_by.first_name} {obj.created_by.last_name}".strip()
+            return full_name if full_name else (obj.created_by.username or "Staff")
+        return obj.created_by_role or "Administration"
+
+    def get_can_manage(self, obj):
+        request = self.context.get("request")
+        if not request or not request.user or not request.user.is_authenticated:
+            return False
+        user = request.user
+        role = str(getattr(user, "role", "") or "").upper()
+        if user.is_superuser or user.is_staff or role in ["ADMIN(TRUSTEE)", "TRUSTEE", "ADMIN", "SUPERADMIN", "SUPER_ADMIN", "PRINCIPAL", "VICE PRINCIPAL"]:
+            return True
+        if obj.created_by_id == user.id:
+            return True
+        return False
+
+    def get_target_class_name(self, obj):
+        if obj.target_class:
+            return getattr(obj.target_class, "school_class", str(obj.target_class))
+        return None
+
+    def get_target_student_name(self, obj):
+        if obj.target_student:
+            full_name = f"{obj.target_student.name or ''} {obj.target_student.surname or ''}".strip()
+            roll_no = f" (Roll {obj.target_student.roll_no})" if obj.target_student.roll_no else ""
+            return f"{full_name}{roll_no}".strip()
+        return None
+
     def validate_expires_at(self, value):
-        if value <= timezone.now():
+        if value and value <= timezone.now():
             raise serializers.ValidationError(
                 "Expiry date and time must be in the future."
             )
