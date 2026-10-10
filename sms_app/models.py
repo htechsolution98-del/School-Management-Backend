@@ -4195,3 +4195,7 @@ class ActivityLog(models.Model):
     def __str__(self):
         return f"[{self.created_at}] {self.user_name or 'User'} ({self.user_role or 'Role'}) - {self.title}"
 
+
+from .support_models import SupportTicket, TicketMessage
+from .tutorial_models import PageTutorial
+
