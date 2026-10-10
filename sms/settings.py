@@ -392,3 +392,6 @@ DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
 
 FACEPP_API_KEY = os.getenv("FACEPP_API_KEY", "bjE_bVqsDDgX6ekpuqdDjwZnnydn27zG")
 FACEPP_API_SECRET = os.getenv("FACEPP_API_SECRET", "waQF9vWlZyH-HQtqKJezJlX7vAAjNYY4")
+
+# Biometric Verification Development Bypass Flag
+ALLOW_BIOMETRIC_BYPASS = os.getenv("ALLOW_BIOMETRIC_BYPASS", "True").lower() in ["true", "1", "yes"]

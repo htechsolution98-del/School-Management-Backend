@@ -1,11 +1,13 @@
 from rest_framework import serializers
 import math
+import datetime
 from datetime import date
 from decimal import Decimal
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 from .models import *
-from .utils import is_inside_radius, is_after_time, is_before_time
+from .utils import is_inside_radius, is_after_time, is_before_time, validate_and_consume_biometric_proof
 
 class ClassCategorySerializer(serializers.ModelSerializer):
     class Meta:
@@ -715,6 +717,7 @@ class AttendanceSerializer(serializers.ModelSerializer):
 
     latitude = serializers.CharField(write_only=True, required=False, allow_blank=True)
     longitude = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    verification_token = serializers.CharField(write_only=True, required=False, allow_blank=True)
 
     class Meta:
         model = Attendance
@@ -722,6 +725,7 @@ class AttendanceSerializer(serializers.ModelSerializer):
             "id",
             "latitude",
             "longitude",
+            "verification_token",
             "school",
             "staff",
             "attendance_date",
@@ -735,6 +739,8 @@ class AttendanceSerializer(serializers.ModelSerializer):
             "working_hours",
             "check_in",
             "check_out",
+            "source",
+            "correction_log",
             "created_at",
         ]
 
@@ -753,6 +759,8 @@ class AttendanceSerializer(serializers.ModelSerializer):
             "working_hours",
             "check_in",
             "check_out",
+            "source",
+            "correction_log",
             "created_at",
         ]
 
@@ -786,10 +794,18 @@ class AttendanceSerializer(serializers.ModelSerializer):
             )
 
         school = getattr(request.user, "school", None)
+        staff = Staff.objects.filter(user=request.user).first()
+        if not staff and getattr(request.user, "email", None):
+            staff = Staff.objects.filter(email=request.user.email).first()
+        if not staff and getattr(request.user, "mobile", None):
+            staff = Staff.objects.filter(mobile=request.user.mobile).first()
+
+        if not school and staff and staff.school:
+            school = staff.school
+
         if not school:
             raise serializers.ValidationError("User school is not configured.")
 
-        staff = Staff.objects.filter(user=request.user).first()
         if not staff:
             raise serializers.ValidationError(
                 "Staff profile not found for current user."
@@ -799,8 +815,29 @@ class AttendanceSerializer(serializers.ModelSerializer):
         if not policy:
             policy = AttendanceSetting.objects.filter(school=school, is_active=True).first()
 
-        geo_required = policy.geo_required if policy else True
+        # 1. Biometric Verification Pre-validation
+        biometric_required = getattr(policy, "biometric_required", False) if policy else False
+        verification_token = attrs.get("verification_token")
 
+        if verification_token:
+            from .models import BiometricVerificationProof
+            proof = BiometricVerificationProof.objects.filter(token=verification_token).first()
+            if not proof:
+                raise serializers.ValidationError(
+                    {"verification_token": "Invalid verification proof token."}
+                )
+            is_valid, err_msg = proof.is_valid_for(staff, school)
+            if not is_valid:
+                raise serializers.ValidationError({"verification_token": err_msg})
+        elif biometric_required:
+            allow_bypass = settings.DEBUG or getattr(settings, "ALLOW_BIOMETRIC_BYPASS", False)
+            if not allow_bypass:
+                raise serializers.ValidationError(
+                    {"verification_token": "Biometric verification proof is required."}
+                )
+
+        # 2. Geofence Location Pre-check
+        geo_required = policy.geo_required if policy else True
         if geo_required:
             attendance_location = AttendanceLocation.objects.filter(
                 school=school.id
@@ -810,28 +847,46 @@ class AttendanceSerializer(serializers.ModelSerializer):
                     "Attendance location is not configured for this school."
                 )
 
-        today = timezone.localdate()
-        attendance = Attendance.objects.filter(
-            staff=staff, attendance_date=today
-        ).first()
-        if attendance and attendance.check_out:
-            raise serializers.ValidationError(
-                "Check-out has already been recorded for today."
-            )
+        # 3. Overnight Shift & Duplicate Check
+        now = timezone.localtime()
+        cutoff = now - datetime.timedelta(hours=24)
+        open_attendance = (
+            Attendance.objects.filter(staff=staff, check_out__isnull=True, check_in__gte=cutoff)
+            .order_by("-check_in")
+            .first()
+        )
+        if not open_attendance:
+            today = timezone.localdate()
+            existing_today = Attendance.objects.filter(
+                staff=staff, attendance_date=today
+            ).first()
+            if existing_today and existing_today.check_out:
+                raise serializers.ValidationError(
+                    "Check-out has already been recorded for today."
+                )
 
         return attrs
 
     def create(self, validated_data):
         request = self.context.get("request")
-        school = request.user.school
         user = request.user
+        school = getattr(user, "school", None)
 
         latitude = validated_data.pop("latitude", None)
         longitude = validated_data.pop("longitude", None)
+        verification_token = validated_data.pop("verification_token", None)
 
         staff = Staff.objects.filter(user=user).first()
+        if not staff and getattr(user, "email", None):
+            staff = Staff.objects.filter(email=user.email).first()
+        if not staff and getattr(user, "mobile", None):
+            staff = Staff.objects.filter(mobile=user.mobile).first()
+
         if not staff:
             raise serializers.ValidationError("Staff profile not found for current user.")
+
+        if not school and staff.school:
+            school = staff.school
 
         # 1. Dynamic Policy Retrieval (staff assigned -> school active -> fallback)
         policy = getattr(staff, "attendance_setting", None)
@@ -881,17 +936,50 @@ class AttendanceSerializer(serializers.ModelSerializer):
 
         now = timezone.localtime()
         current_time = now.time()
+        cutoff = now - datetime.timedelta(hours=24)
 
         with transaction.atomic():
-            today = timezone.localdate()
+            # 3. Consume Biometric Verification Proof Atomically (Replay Protection)
+            if verification_token:
+                is_valid, err_msg = validate_and_consume_biometric_proof(
+                    token=verification_token,
+                    staff=staff,
+                    school=school,
+                    purpose="ATTENDANCE_PUNCH",
+                )
+                if not is_valid:
+                    raise serializers.ValidationError(
+                        {"verification_token": err_msg}
+                    )
+            else:
+                biometric_required = getattr(policy, "biometric_required", False) if policy else False
+                allow_bypass = settings.DEBUG or getattr(settings, "ALLOW_BIOMETRIC_BYPASS", False)
+                if biometric_required and not allow_bypass:
+                    raise serializers.ValidationError(
+                        {"verification_token": "Biometric verification proof is required."}
+                    )
+
+            # 4. Find open session (supports overnight shifts crossing midnight)
             attendance = (
                 Attendance.objects.select_for_update()
-                .filter(staff=staff, attendance_date=today)
+                .filter(staff=staff, check_out__isnull=True, check_in__gte=cutoff)
+                .order_by("-check_in")
                 .first()
             )
 
             if not attendance:
-                # 3. Dynamic Late & Half-Day Calculation (Check-in)
+                today = timezone.localdate()
+                existing_today = (
+                    Attendance.objects.select_for_update()
+                    .filter(staff=staff, attendance_date=today)
+                    .first()
+                )
+                if existing_today and existing_today.check_out:
+                    raise serializers.ValidationError(
+                        "Check-out has already been recorded for today."
+                    )
+
+                # 5. Dynamic Late & Half-Day Calculation (Check-in)
                 is_late = False
                 is_half_day = False
 
@@ -929,7 +1017,7 @@ class AttendanceSerializer(serializers.ModelSerializer):
                 return attendance
 
             else:
-                # 4. Early Exit Calculation & Working Hours (Check-out)
+                # 6. Early Exit Calculation & Working Hours (Check-out)
                 if attendance.check_out:
                     raise serializers.ValidationError(
                         "Check-out has already been recorded for today."
@@ -938,7 +1026,7 @@ class AttendanceSerializer(serializers.ModelSerializer):
                 attendance.check_out = now
                 update_fields = ["check_out"]
 
-                # Working hours calculation
+                # Working hours calculation across midnight or same-day
                 if attendance.check_in:
                     duration = attendance.check_out - attendance.check_in
                     total_seconds = max(0.0, duration.total_seconds())

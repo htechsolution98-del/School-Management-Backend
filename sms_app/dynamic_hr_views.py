@@ -3,10 +3,10 @@ from decimal import Decimal
 from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import ValidationError, PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from .permissions import IsClerkOrAdmin
+from .permissions import IsClerkOrAdmin, IsHRAttendanceAdmin
 
 from .models import (
     Staff,
@@ -49,9 +49,62 @@ def get_request_school(request):
     return None
 
 
+def get_staff_for_user(user):
+    """Retrieve staff record linked to user via FK, email, or mobile."""
+    if not user or not getattr(user, "is_authenticated", False):
+        return None
+    staff = Staff.objects.filter(user=user).select_related("school").first()
+    if not staff:
+        try:
+            staff = getattr(user, "staff", None)
+        except Exception:
+            staff = None
+    if not staff and getattr(user, "email", None):
+        staff = Staff.objects.filter(email=user.email).select_related("school").first()
+    if not staff and getattr(user, "mobile", None):
+        staff = Staff.objects.filter(mobile=user.mobile).select_related("school").first()
+    return staff
+
+
+def is_user_hr_management(user):
+    """
+    Check if the user has school-wide HR/Attendance management authority.
+    Explicitly returns False for Librarian, Inventory, Fees Management, and regular staff.
+    """
+    if not user or not getattr(user, "is_authenticated", False):
+        return False
+    if getattr(user, "is_superuser", False) or getattr(user, "is_staff", False):
+        return True
+    role = str(getattr(user, "role", "") or "").strip().upper()
+    if role in ["FEES MANAGEMENT", "FEE MANAGEMENT", "LIBRARIAN", "INVENTORY", "STUDENT", "PARENT"]:
+        return False
+    from .permissions import CLERK_ROLES, CLERK_GROUPS
+    if role in CLERK_ROLES or role in [
+        "HR", "HR_ADMIN", "PRINCIPAL", "VICE PRINCIPAL", "TRUSTEE", "ADMIN", "SUPERADMIN", "SUPER_ADMIN"
+    ]:
+        return True
+    staff = get_staff_for_user(user)
+    if staff:
+        cat = str(getattr(staff, "category", "") or "").strip().upper()
+        if cat in ["FEES MANAGEMENT", "FEE MANAGEMENT", "LIBRARIAN", "INVENTORY"]:
+            return False
+        if cat in CLERK_ROLES or cat in ["HR", "PRINCIPAL", "VICE PRINCIPAL", "TRUSTEE", "ADMIN"]:
+            return True
+    return (
+        user.groups.filter(name__in=[
+            "PRINCIPAL", "principal", "Principal",
+            "VICE PRINCIPAL", "vice principal", "Vice Principal",
+            "admin(trustee)", "trustee", "Trustee",
+            "ADMIN", "admin", "Admin",
+            "super_admin", "superadmin", "Super Admin",
+            "HR", "hr",
+        ] + CLERK_GROUPS).exclude(name__in=["FEES MANAGEMENT", "Fee Management", "fees management"]).exists()
+    )
+
+
 class AttendanceSettingViewSet(viewsets.ModelViewSet):
     serializer_class = AttendanceSettingSerializer
-    permission_classes = [IsAuthenticated, IsClerkOrAdmin]
+    permission_classes = [IsAuthenticated, IsHRAttendanceAdmin]
 
     def get_queryset(self):
         school = get_request_school(self.request)
@@ -71,28 +124,34 @@ class AttendanceRegularizationViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in ["approve", "reject"]:
-            return [IsAuthenticated(), IsClerkOrAdmin()]
+            return [IsAuthenticated(), IsHRAttendanceAdmin()]
         return [IsAuthenticated()]
 
     def get_queryset(self):
+        user = self.request.user
         school = get_request_school(self.request)
         if not school:
             return AttendanceRegularization.objects.none()
+
         qs = AttendanceRegularization.objects.filter(staff__school=school).select_related(
             "staff", "approved_by"
         )
-        user = self.request.user
-        role = str(getattr(user, "role", "") or "").strip().upper()
-        if role in ["TEACHER", "STAFF"]:
-            staff = Staff.objects.filter(user=user).first()
-            if staff:
-                qs = qs.filter(staff=staff)
-            else:
-                return AttendanceRegularization.objects.none()
 
-        staff_id = self.request.query_params.get("staff_id")
-        if staff_id:
-            qs = qs.filter(staff_id=staff_id)
+        is_mgmt = is_user_hr_management(user)
+
+        if not is_mgmt:
+            # Regular staff (Teacher, Librarian, Inventory, Fees Management, etc.):
+            # ONLY view their own regularization requests.
+            current_staff = get_staff_for_user(user)
+            if not current_staff:
+                return AttendanceRegularization.objects.none()
+            qs = qs.filter(staff=current_staff)
+        else:
+            # Management roles can filter by specific staff_id
+            staff_id = self.request.query_params.get("staff_id")
+            if staff_id:
+                qs = qs.filter(staff_id=staff_id)
+
         status_param = self.request.query_params.get("status")
         if status_param:
             qs = qs.filter(status=status_param)
@@ -100,47 +159,97 @@ class AttendanceRegularizationViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         user = self.request.user
-        role = str(getattr(user, "role", "") or "").strip().upper()
-        staff = serializer.validated_data.get("staff")
+        is_mgmt = is_user_hr_management(user)
+        school = get_request_school(self.request)
 
-        # Resolve staff from user if not provided, or enforce own staff for teacher/staff roles
-        if role in ["TEACHER", "STAFF"] or not staff:
-            user_staff = None
-            try:
-                user_staff = getattr(user, "staff", None)
-            except Exception:
-                user_staff = None
+        user_staff = get_staff_for_user(user)
+
+        if not is_mgmt:
+            # Regular employees MUST ALWAYS use authenticated user's staff profile.
+            # Client-supplied staff ID is strictly ignored and untrusted.
             if not user_staff:
-                try:
-                    user_staff = getattr(user, "staff_profile", None)
-                except Exception:
-                    user_staff = None
-            if not user_staff and getattr(user, "is_authenticated", False):
-                user_staff = Staff.objects.filter(user=user).first()
-            if not user_staff and getattr(user, "email", None):
-                user_staff = Staff.objects.filter(email=user.email).first()
-            if not user_staff and getattr(user, "mobile", None):
-                user_staff = Staff.objects.filter(mobile=user.mobile).first()
-
-            if user_staff:
+                raise ValidationError({"staff": "No staff profile linked to authenticated user."})
+            staff = user_staff
+        else:
+            # Management creating a request: can specify staff from their school or default to own
+            client_staff = serializer.validated_data.get("staff")
+            if client_staff:
+                if school and client_staff.school_id != school.id:
+                    raise ValidationError({"staff": "Specified staff does not belong to your school."})
+                staff = client_staff
+            else:
+                if not user_staff:
+                    raise ValidationError({"staff": "No staff profile linked to authenticated user."})
                 staff = user_staff
-
-        if not staff:
-            raise ValidationError({"staff": "No staff profile linked to authenticated user."})
 
         initial_log = [
             {
                 "action": "Requested",
                 "by": user.id if user and getattr(user, "is_authenticated", False) else None,
+                "by_username": getattr(user, "username", ""),
                 "timestamp": timezone.now().isoformat(),
                 "reason": serializer.validated_data.get("reason", ""),
             }
         ]
         serializer.save(staff=staff, audit_log=initial_log)
 
+    def perform_update(self, serializer):
+        user = self.request.user
+        instance = self.get_object()
+        is_mgmt = is_user_hr_management(user)
+
+        if not is_mgmt:
+            current_staff = get_staff_for_user(user)
+            if not current_staff or instance.staff_id != current_staff.id:
+                raise PermissionDenied("You can only update your own regularization request.")
+            if instance.status != "Pending":
+                raise ValidationError("Only pending regularization requests can be updated.")
+            serializer.validated_data.pop("staff", None)
+        else:
+            client_staff = serializer.validated_data.get("staff")
+            if client_staff and client_staff.school_id != instance.staff.school_id:
+                raise ValidationError({"staff": "Specified staff does not belong to the school."})
+
+        logs = list(instance.audit_log or [])
+        logs.append({
+            "action": "Updated",
+            "by": user.id,
+            "by_username": getattr(user, "username", ""),
+            "timestamp": timezone.now().isoformat(),
+            "reason": serializer.validated_data.get("reason", instance.reason),
+        })
+        serializer.save(audit_log=logs)
+
+    def perform_destroy(self, instance):
+        user = self.request.user
+        is_mgmt = is_user_hr_management(user)
+
+        if not is_mgmt:
+            current_staff = get_staff_for_user(user)
+            if not current_staff or instance.staff_id != current_staff.id:
+                raise PermissionDenied("You can only delete your own regularization request.")
+            if instance.status != "Pending":
+                raise ValidationError("Only pending regularization requests can be deleted.")
+        else:
+            if instance.status not in ["Pending", "Rejected"]:
+                raise ValidationError("Approved regularization requests cannot be deleted directly.")
+
+        instance.delete()
+
     @action(detail=True, methods=["post"], url_path="approve")
     def approve(self, request, pk=None):
         regularization = self.get_object()
+
+        # Strict rule: Staff cannot approve their own regularization request
+        current_staff = get_staff_for_user(request.user)
+        if (
+            regularization.staff.user_id == request.user.id
+            or (current_staff and regularization.staff_id == current_staff.id)
+        ):
+            return Response(
+                {"error": "You cannot approve your own regularization request."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
         # 1. Update or create underlying Attendance record
         attendance, _ = Attendance.objects.get_or_create(
@@ -254,6 +363,18 @@ class AttendanceRegularizationViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["post"], url_path="reject")
     def reject(self, request, pk=None):
         regularization = self.get_object()
+
+        # Strict rule: Staff cannot reject their own regularization request
+        current_staff = get_staff_for_user(request.user)
+        if (
+            regularization.staff.user_id == request.user.id
+            or (current_staff and regularization.staff_id == current_staff.id)
+        ):
+            return Response(
+                {"error": "You cannot reject your own regularization request."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         current_time = timezone.now().isoformat()
         log_entry = {
             "action": "Rejected",

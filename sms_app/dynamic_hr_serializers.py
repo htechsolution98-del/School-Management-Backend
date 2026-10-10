@@ -72,10 +72,9 @@ class AttendanceRegularizationSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "approved_by", "audit_log", "created_at", "updated_at"]
+        read_only_fields = ["id", "status", "approved_by", "audit_log", "created_at", "updated_at"]
         extra_kwargs = {
             "staff": {"required": False, "allow_null": True},
-            "status": {"required": False},
         }
 
     def get_original_check_in(self, obj):
