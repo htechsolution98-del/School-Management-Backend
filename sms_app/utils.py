@@ -401,6 +401,61 @@ def get_student_fee_payment_for_online_verify(user, order_id):
     return queryset.get(school=school)
 
 
+import secrets
+
+def generate_biometric_proof(staff, school, purpose="ATTENDANCE_PUNCH", confidence=None, expires_in_minutes=10):
+    """
+    Generate a signed, short-lived, replay-protected server-side verification proof
+    bound to specific staff, school, and purpose.
+    """
+    from .models import BiometricVerificationProof
+    token = secrets.token_urlsafe(48)
+    expires_at = timezone.now() + datetime.timedelta(minutes=expires_in_minutes)
+    conf = Decimal(str(confidence if confidence is not None else "100.00"))
+    proof = BiometricVerificationProof.objects.create(
+        token=token,
+        staff=staff,
+        school=school,
+        purpose=purpose,
+        confidence=conf,
+        expires_at=expires_at,
+    )
+    return proof
+
+
+def validate_and_consume_biometric_proof(token, staff, school, purpose="ATTENDANCE_PUNCH"):
+    """
+    Atomically validate and consume a biometric verification proof.
+    Ensures single-use, expiry enforcement, and correct staff/school binding.
+    """
+    from .models import BiometricVerificationProof
+    if not token:
+        return False, "Verification token is required."
+    
+    with transaction.atomic():
+        proof = (
+            BiometricVerificationProof.objects.select_for_update()
+            .filter(token=token)
+            .first()
+        )
+        if not proof:
+            return False, "Invalid verification proof token."
+
+        is_valid, msg = proof.is_valid_for(staff, school)
+        if not is_valid:
+            return False, msg
+
+        if proof.purpose != purpose:
+            return False, f"Verification proof is not valid for purpose '{purpose}'."
+
+        # Mark as consumed immediately (Replay protection)
+        proof.is_used = True
+        proof.used_at = timezone.now()
+        proof.save(update_fields=["is_used", "used_at"])
+        return True, "Valid"
+
+
+
 
 
 

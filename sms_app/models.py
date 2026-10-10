@@ -1098,6 +1098,7 @@ class AttendanceSetting(models.Model):
     grace_period_mins = models.PositiveIntegerField(default=15)
     half_day_threshold_mins = models.PositiveIntegerField(default=120)
     geo_required = models.BooleanField(default=True)
+    biometric_required = models.BooleanField(default=False)
     geo_radius_meters = models.DecimalField(max_digits=10, decimal_places=2, default=100.0)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
@@ -1196,6 +1197,7 @@ class Attendance(models.Model):
     check_in = models.DateTimeField(null=True, blank=True)
     check_out = models.DateTimeField(null=True, blank=True)
     source = models.CharField(max_length=50, default="Punch", null=True, blank=True)
+    correction_log = models.JSONField(default=list, blank=True)
     created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     class Meta:
@@ -2770,6 +2772,38 @@ class StaffFace(models.Model):
 
     def __str__(self):
         return f"Face - {self.staff.name}"
+
+
+class BiometricVerificationProof(models.Model):
+    token = models.CharField(max_length=128, unique=True, db_index=True)
+    staff = models.ForeignKey(Staff, on_delete=models.CASCADE, related_name="biometric_proofs", db_index=True)
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name="biometric_proofs", db_index=True)
+    purpose = models.CharField(max_length=50, default="ATTENDANCE_PUNCH")
+    confidence = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal("100.00"), null=True, blank=True)
+    is_used = models.BooleanField(default=False, db_index=True)
+    used_at = models.DateTimeField(null=True, blank=True)
+    expires_at = models.DateTimeField(db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "biometric_verification_proof"
+        indexes = [
+            models.Index(fields=["staff", "is_used", "expires_at"], name="bio_proof_staff_idx"),
+        ]
+
+    def is_valid_for(self, staff, school):
+        if self.is_used:
+            return False, "Verification proof has already been used."
+        if timezone.now() > self.expires_at:
+            return False, "Verification proof has expired."
+        if self.staff_id != staff.id:
+            return False, "Verification proof does not belong to this staff member."
+        if self.school_id != school.id:
+            return False, "Verification proof does not belong to this school."
+        return True, ""
+
+    def __str__(self):
+        return f"Proof({self.staff.name} - {self.token[:8]}... - Used: {self.is_used})"
 
 
 # class StudentParent(models.Model):

@@ -908,6 +908,7 @@ class DeleteUpdateLocationView(APIView):
 class AttendanceView(ModelViewSet):
     serializer_class = AttendanceSerializer
     permission_classes = [IsAuthenticated]
+    http_method_names = ["get", "post", "head", "options"]
 
     def get_queryset(self):
         user = getattr(self.request, "user", None)
@@ -929,19 +930,23 @@ class AttendanceView(ModelViewSet):
             or getattr(user, "is_staff", False)
             or role in [
                 "CLERK", "ASSISTANT CLERK", "ADMIN", "SUPERADMIN",
-                "SUPER_ADMIN", "PRINCIPAL", "VICE PRINCIPAL", "TRUSTEE"
+                "SUPER_ADMIN", "PRINCIPAL", "VICE PRINCIPAL", "TRUSTEE", "HR", "HR_ADMIN"
             ]
             or user.groups.filter(name__in=[
                 "CLERK", "clerk", "Clerk", "ASSISTANT CLERK", "assistant clerk",
                 "Assistant Clerk", "admin(trustee)", "trustee", "ADMIN",
-                "PRINCIPAL", "principal", "VICE PRINCIPAL", "vice principal"
-            ]).exists()
+                "PRINCIPAL", "principal", "VICE PRINCIPAL", "vice principal", "HR", "hr"
+            ]).exclude(name__in=["FEES MANAGEMENT", "Fee Management", "fees management"]).exists()
         )
 
         params = getattr(self.request, "query_params", getattr(self.request, "GET", {}))
 
         if not is_management:
             staff = Staff.objects.filter(user=user).first()
+            if not staff and getattr(user, "email", None):
+                staff = Staff.objects.filter(email=user.email).first()
+            if not staff and getattr(user, "mobile", None):
+                staff = Staff.objects.filter(mobile=user.mobile).first()
             if not staff:
                 return Attendance.objects.none()
             qs = qs.filter(staff=staff)
@@ -973,6 +978,120 @@ class AttendanceView(ModelViewSet):
             status=status.HTTP_201_CREATED,
         )
 
+    @action(detail=True, methods=["post"], url_path="correct", permission_classes=[IsAuthenticated, IsHRAttendanceAdmin])
+    def correct(self, request, pk=None):
+        attendance = self.get_object()
+        user = request.user
+        
+        reason = str(request.data.get("reason", "") or "").strip()
+        if not reason:
+            return Response(
+                {"error": "Correction reason is required for audit trail."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        orig_state = {
+            "check_in": attendance.check_in.isoformat() if attendance.check_in else None,
+            "check_out": attendance.check_out.isoformat() if attendance.check_out else None,
+            "is_present": attendance.is_present,
+            "is_late": attendance.is_late,
+            "is_half_day": attendance.is_half_day,
+            "is_early_exit": attendance.is_early_exit,
+            "working_hours": str(attendance.working_hours) if attendance.working_hours is not None else None,
+            "source": attendance.source,
+        }
+
+        att_date = attendance.attendance_date
+
+        check_in_val = request.data.get("check_in")
+        if check_in_val is not None:
+            if check_in_val == "" or check_in_val is False:
+                attendance.check_in = None
+            else:
+                try:
+                    if isinstance(check_in_val, str) and ("T" in check_in_val or "-" in check_in_val):
+                        dt = datetime.datetime.fromisoformat(check_in_val.replace("Z", "+00:00"))
+                        attendance.check_in = timezone.make_aware(dt) if timezone.is_naive(dt) else dt
+                    else:
+                        t = datetime.time.fromisoformat(str(check_in_val).strip())
+                        combined = datetime.datetime.combine(att_date, t)
+                        attendance.check_in = timezone.make_aware(combined) if timezone.is_naive(combined) else combined
+                except Exception as e:
+                    return Response({"error": f"Invalid check_in format: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+
+        check_out_val = request.data.get("check_out")
+        if check_out_val is not None:
+            if check_out_val == "" or check_out_val is False:
+                attendance.check_out = None
+            else:
+                try:
+                    if isinstance(check_out_val, str) and ("T" in check_out_val or "-" in check_out_val):
+                        dt = datetime.datetime.fromisoformat(check_out_val.replace("Z", "+00:00"))
+                        attendance.check_out = timezone.make_aware(dt) if timezone.is_naive(dt) else dt
+                    else:
+                        t = datetime.time.fromisoformat(str(check_out_val).strip())
+                        combined = datetime.datetime.combine(att_date, t)
+                        attendance.check_out = timezone.make_aware(combined) if timezone.is_naive(combined) else combined
+                except Exception as e:
+                    return Response({"error": f"Invalid check_out format: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if "is_present" in request.data:
+            attendance.is_present = bool(request.data.get("is_present"))
+        if "is_late" in request.data:
+            attendance.is_late = bool(request.data.get("is_late"))
+        if "is_half_day" in request.data:
+            attendance.is_half_day = bool(request.data.get("is_half_day"))
+        if "is_early_exit" in request.data:
+            attendance.is_early_exit = bool(request.data.get("is_early_exit"))
+
+        working_hours_val = request.data.get("working_hours")
+        if working_hours_val is not None and working_hours_val != "":
+            try:
+                attendance.working_hours = Decimal(str(working_hours_val))
+            except Exception:
+                pass
+        elif attendance.check_in and attendance.check_out:
+            duration = attendance.check_out - attendance.check_in
+            total_sec = max(0.0, duration.total_seconds())
+            attendance.working_hours = round(Decimal(str(total_sec)) / Decimal("3600.0"), 2)
+
+        attendance.source = "Admin Correction"
+
+        new_state = {
+            "check_in": attendance.check_in.isoformat() if attendance.check_in else None,
+            "check_out": attendance.check_out.isoformat() if attendance.check_out else None,
+            "is_present": attendance.is_present,
+            "is_late": attendance.is_late,
+            "is_half_day": attendance.is_half_day,
+            "is_early_exit": attendance.is_early_exit,
+            "working_hours": str(attendance.working_hours) if attendance.working_hours is not None else None,
+            "source": attendance.source,
+        }
+
+        log_entry = {
+            "action": "Correction",
+            "by": user.id,
+            "by_username": getattr(user, "username", str(user)),
+            "corrected_by": getattr(user, "username", str(user)),
+            "timestamp": timezone.now().isoformat(),
+            "reason": reason,
+            "previous_state": orig_state,
+            "new_state": new_state,
+        }
+
+        logs = list(getattr(attendance, "correction_log", []) or [])
+        logs.append(log_entry)
+        attendance.correction_log = logs
+        attendance.save()
+
+        return Response(
+            {
+                "message": "Attendance record corrected successfully.",
+                "data": self.get_serializer(attendance).data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
 
 
 
@@ -981,10 +1100,15 @@ class TodayAttendanceStatusView(APIView):
 
     def get(self, request):
         user = request.user
-        print("USER", user)
         staff = Staff.objects.filter(user=request.user).first()
+        if not staff and getattr(request.user, "email", None):
+            staff = Staff.objects.filter(email=request.user.email).first()
+        if not staff and getattr(request.user, "mobile", None):
+            staff = Staff.objects.filter(mobile=request.user.mobile).first()
+
         today = timezone.localdate()
-        print(staff)
+        now = timezone.localtime()
+        cutoff = now - datetime.timedelta(hours=24)
 
         if not staff:
             return Response(
@@ -1001,10 +1125,20 @@ class TodayAttendanceStatusView(APIView):
                 status=status.HTTP_200_OK,
             )
 
-        attendance = Attendance.objects.filter(
-            staff=staff,
-            attendance_date=today,
-        ).first()
+        # Look for open shift in past 24h first (handles overnight shift across midnight)
+        attendance = (
+            Attendance.objects.filter(
+                staff=staff, check_out__isnull=True, check_in__gte=cutoff
+            )
+            .order_by("-check_in")
+            .first()
+        )
+
+        if not attendance:
+            attendance = Attendance.objects.filter(
+                staff=staff,
+                attendance_date=today,
+            ).first()
 
         if not attendance:
             return Response(
