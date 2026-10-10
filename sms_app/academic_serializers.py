@@ -716,6 +716,7 @@ class AttendanceLocationSerializer(serializers.ModelSerializer):
 class AttendanceSerializer(serializers.ModelSerializer):
 
     status = serializers.CharField(source="canonical_status", read_only=True)
+    department_name = serializers.CharField(source="staff.department.name", read_only=True, default=None)
     latitude = serializers.CharField(write_only=True, required=False, allow_blank=True)
     longitude = serializers.CharField(write_only=True, required=False, allow_blank=True)
     verification_token = serializers.CharField(write_only=True, required=False, allow_blank=True)
@@ -725,6 +726,7 @@ class AttendanceSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "status",
+            "department_name",
             "latitude",
             "longitude",
             "verification_token",
@@ -749,6 +751,7 @@ class AttendanceSerializer(serializers.ModelSerializer):
         read_only_fields = [
             "id",
             "status",
+            "department_name",
             "school",
             "staff",
             "attendance_date",
@@ -812,6 +815,26 @@ class AttendanceSerializer(serializers.ModelSerializer):
         if not staff:
             raise serializers.ValidationError(
                 "Staff profile not found for current user."
+            )
+
+        # Employment Boundary Validations
+        if not staff.is_active:
+            raise serializers.ValidationError(
+                "Inactive staff cannot mark attendance."
+            )
+
+        punch_date = attrs.get("attendance_date") or attrs.get("date") or timezone.localdate()
+        if hasattr(punch_date, "date"):
+            punch_date = punch_date.date()
+
+        if staff.joining_date and punch_date < staff.joining_date:
+            raise serializers.ValidationError(
+                f"Cannot mark attendance before joining date ({staff.joining_date})."
+            )
+
+        if staff.exit_date and punch_date > staff.exit_date:
+            raise serializers.ValidationError(
+                f"Cannot mark attendance after exit date ({staff.exit_date})."
             )
 
         policy = getattr(staff, "attendance_setting", None)

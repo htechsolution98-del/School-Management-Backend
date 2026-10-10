@@ -187,6 +187,21 @@ class AttendanceRegularizationViewSet(viewsets.ModelViewSet):
                     raise ValidationError({"staff": "No staff profile linked to authenticated user."})
                 staff = user_staff
 
+        # Employment Boundary Validations
+        if not staff.is_active:
+            raise ValidationError({"staff": "Inactive staff cannot request attendance regularization."})
+
+        att_date = serializer.validated_data.get("attendance_date")
+        if att_date:
+            if staff.joining_date and att_date < staff.joining_date:
+                raise ValidationError(
+                    {"attendance_date": f"Cannot regularize attendance before joining date ({staff.joining_date})."}
+                )
+            if staff.exit_date and att_date > staff.exit_date:
+                raise ValidationError(
+                    {"attendance_date": f"Cannot regularize attendance after exit date ({staff.exit_date})."}
+                )
+
         initial_log = [
             {
                 "action": "Requested",
@@ -214,6 +229,21 @@ class AttendanceRegularizationViewSet(viewsets.ModelViewSet):
             client_staff = serializer.validated_data.get("staff")
             if client_staff and client_staff.school_id != instance.staff.school_id:
                 raise ValidationError({"staff": "Specified staff does not belong to the school."})
+
+        # Employment Boundary Validations
+        target_staff = serializer.validated_data.get("staff", instance.staff)
+        if not target_staff.is_active:
+            raise ValidationError({"staff": "Inactive staff cannot request attendance regularization."})
+        att_date = serializer.validated_data.get("attendance_date", instance.attendance_date)
+        if att_date:
+            if target_staff.joining_date and att_date < target_staff.joining_date:
+                raise ValidationError(
+                    {"attendance_date": f"Cannot regularize attendance before joining date ({target_staff.joining_date})."}
+                )
+            if target_staff.exit_date and att_date > target_staff.exit_date:
+                raise ValidationError(
+                    {"attendance_date": f"Cannot regularize attendance after exit date ({target_staff.exit_date})."}
+                )
 
         logs = list(instance.audit_log or [])
         logs.append({
@@ -254,6 +284,23 @@ class AttendanceRegularizationViewSet(viewsets.ModelViewSet):
             return Response(
                 {"error": "You cannot approve your own regularization request."},
                 status=status.HTTP_403_FORBIDDEN,
+            )
+
+        # Employment Boundary Validations
+        if not regularization.staff.is_active:
+            return Response(
+                {"error": "Cannot approve regularization for inactive staff."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if regularization.staff.joining_date and regularization.attendance_date < regularization.staff.joining_date:
+            return Response(
+                {"error": f"Cannot approve regularization before joining date ({regularization.staff.joining_date})."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if regularization.staff.exit_date and regularization.attendance_date > regularization.staff.exit_date:
+            return Response(
+                {"error": f"Cannot approve regularization after exit date ({regularization.staff.exit_date})."},
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         # 1. Update or create underlying Attendance record
@@ -768,7 +815,11 @@ class PayrollRunViewSet(viewsets.ModelViewSet):
 
 class PayrollPayslipViewSet(viewsets.ModelViewSet):
     serializer_class = PayrollPayslipSerializer
-    permission_classes = [IsAuthenticated, IsClerkOrAdmin]
+
+    def get_permissions(self):
+        if self.action in ["list", "retrieve"]:
+            return [IsAuthenticated()]
+        return [IsAuthenticated(), IsClerkOrAdmin()]
 
     def get_queryset(self):
         school = get_request_school(self.request)
@@ -777,13 +828,42 @@ class PayrollPayslipViewSet(viewsets.ModelViewSet):
         qs = PayrollPayslip.objects.filter(payroll_run__school=school).select_related(
             "staff", "payroll_run"
         )
-        payroll_run_id = self.request.query_params.get("payroll_run_id")
-        if payroll_run_id:
-            qs = qs.filter(payroll_run_id=payroll_run_id)
-        staff_id = self.request.query_params.get("staff_id")
-        if staff_id:
-            qs = qs.filter(staff_id=staff_id)
-        return qs
+        user = getattr(self.request, "user", None)
+        if not user or not user.is_authenticated:
+            return PayrollPayslip.objects.none()
+
+        role = str(getattr(user, "role", "") or "").strip().upper()
+        is_management = (
+            getattr(user, "is_superuser", False)
+            or getattr(user, "is_staff", False)
+            or role in [
+                "CLERK", "ASSISTANT CLERK", "ADMIN", "SUPERADMIN",
+                "SUPER_ADMIN", "PRINCIPAL", "VICE PRINCIPAL", "TRUSTEE", "HR", "HR_ADMIN"
+            ]
+            or user.groups.filter(name__in=[
+                "CLERK", "clerk", "Clerk", "ASSISTANT CLERK", "assistant clerk",
+                "Assistant Clerk", "admin(trustee)", "trustee", "ADMIN",
+                "PRINCIPAL", "principal", "VICE PRINCIPAL", "vice principal", "HR", "hr"
+            ]).exclude(name__in=["FEES MANAGEMENT", "Fee Management", "fees management"]).exists()
+        )
+
+        if not is_management:
+            staff = Staff.objects.filter(user=user).first()
+            if not staff and getattr(user, "email", None):
+                staff = Staff.objects.filter(email=user.email).first()
+            if not staff and getattr(user, "mobile", None):
+                staff = Staff.objects.filter(mobile=user.mobile).first()
+            if not staff:
+                return PayrollPayslip.objects.none()
+            qs = qs.filter(staff=staff)
+        else:
+            payroll_run_id = self.request.query_params.get("payroll_run_id")
+            if payroll_run_id:
+                qs = qs.filter(payroll_run_id=payroll_run_id)
+            staff_id = self.request.query_params.get("staff_id")
+            if staff_id:
+                qs = qs.filter(staff_id=staff_id)
+        return qs.order_by("-payroll_run__salary_month", "-id")
 
     def perform_update(self, serializer):
         instance = serializer.instance

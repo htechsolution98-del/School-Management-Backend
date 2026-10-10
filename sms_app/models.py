@@ -1234,8 +1234,11 @@ class Attendance(models.Model):
         if self.check_in is not None and self.check_out is None:
             return "MISSING_PUNCH"
 
-        if self.source == "Leave" and not self.is_present:
-            return "LEAVE"
+        if self.source == "Leave":
+            if self.is_half_day:
+                return "HALF_DAY"
+            if not self.is_present:
+                return "LEAVE"
 
         if self.source in ["Holiday", "Week Off"]:
             return self.source.upper().replace(" ", "_")

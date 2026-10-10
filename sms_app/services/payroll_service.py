@@ -1,6 +1,7 @@
 import ast
 import calendar
 import operator
+import re
 from datetime import date
 from decimal import Decimal
 from typing import Any
@@ -98,6 +99,121 @@ def safe_eval(expr: str, variables: dict[str, Any] | None = None) -> Decimal:
         return Decimal(str(result))
     except Exception:
         return Decimal("0.00")
+
+
+def extract_formula_dependencies(expr: str) -> set[str]:
+    """
+    Safely extract variable names (identifiers) referenced in a mathematical expression.
+    """
+    if not expr or not isinstance(expr, str):
+        return set()
+    try:
+        parsed = ast.parse(expr.strip(), mode="eval")
+        return {
+            node.id.strip().lower()
+            for node in ast.walk(parsed)
+            if isinstance(node, ast.Name)
+        }
+    except Exception:
+        return {
+            tok.lower() for tok in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", str(expr))
+        }
+
+
+def topological_sort_components(comps: list) -> list:
+    """
+    Topologically sorts components so that dependencies are evaluated first.
+    If Component B references Component A in its formula or uses Component A as calc_base,
+    Component A will precede Component B in the returned list.
+    Preserves original relative order when there are no dependencies.
+    Gracefully handles dependency cycles without hanging.
+    """
+    if not comps or len(comps) <= 1:
+        return list(comps)
+
+    def _get_name(c):
+        return getattr(c, "name", None) or getattr(getattr(c, "component", None), "name", "")
+
+    def _get_calc_type(c):
+        return (getattr(c, "calc_type", None) or getattr(c, "calculation_type", "") or "").strip().lower()
+
+    def _get_formula(c):
+        return (
+            getattr(c, "formula", None)
+            or getattr(getattr(c, "component", None), "formula", None)
+            or getattr(c, "calc_base", None)
+            or getattr(getattr(c, "component", None), "calc_base", None)
+            or (str(c.value) if _get_calc_type(c) == "formula" and getattr(c, "value", None) else "")
+        )
+
+    def _get_calc_base(c):
+        return getattr(c, "calc_base", None) or getattr(getattr(c, "component", None), "calc_base", None)
+
+    # Map name variants to component
+    comp_map: dict[str, Any] = {}
+    for comp in comps:
+        name = _get_name(comp)
+        if name:
+            clean = name.strip().lower()
+            comp_map[clean] = comp
+            comp_map[clean.replace(" ", "_").replace("-", "_")] = comp
+            comp_map[clean.replace(" ", "").replace("-", "")] = comp
+        cid = getattr(comp, "id", None) or getattr(getattr(comp, "component", None), "id", None)
+        if cid is not None:
+            comp_map[str(cid)] = comp
+
+    # Build dependency map: comp -> set of comps it depends on
+    deps: dict[int, set[int]] = {id(comp): set() for comp in comps}
+    for comp in comps:
+        comp_id = id(comp)
+        formula_str = _get_formula(comp)
+        if formula_str:
+            referenced_names = extract_formula_dependencies(str(formula_str))
+            for ref_name in referenced_names:
+                dep_comp = comp_map.get(ref_name)
+                if dep_comp and id(dep_comp) != comp_id:
+                    deps[comp_id].add(id(dep_comp))
+
+        calc_base = _get_calc_base(comp)
+        if calc_base:
+            cb_str = str(calc_base).strip().lower()
+            dep_comp = (
+                comp_map.get(cb_str)
+                or comp_map.get(cb_str.replace(" ", "_").replace("-", "_"))
+                or comp_map.get(cb_str.replace(" ", "").replace("-", ""))
+            )
+            if dep_comp and id(dep_comp) != comp_id:
+                deps[comp_id].add(id(dep_comp))
+
+    # Reverse graph for in-degrees
+    in_degree: dict[int, int] = {id(comp): 0 for comp in comps}
+    dependents: dict[int, list[int]] = {id(comp): [] for comp in comps}
+
+    for comp_id, needed_ids in deps.items():
+        for needed_id in needed_ids:
+            if needed_id in in_degree:
+                dependents[needed_id].append(comp_id)
+                in_degree[comp_id] += 1
+
+    id_to_comp = {id(comp): comp for comp in comps}
+    queue = [id(comp) for comp in comps if in_degree[id(comp)] == 0]
+    sorted_comps = []
+
+    while queue:
+        curr_id = queue.pop(0)
+        sorted_comps.append(id_to_comp[curr_id])
+        for dep_id in dependents[curr_id]:
+            in_degree[dep_id] -= 1
+            if in_degree[dep_id] == 0:
+                queue.append(dep_id)
+
+    # In case of cycles, append any remaining components in original order
+    visited = {id(c) for c in sorted_comps}
+    for comp in comps:
+        if id(comp) not in visited:
+            sorted_comps.append(comp)
+
+    return sorted_comps
 
 
 def calculate_total_worked_hours(staff, effective_start, effective_end) -> Decimal:
@@ -429,8 +545,15 @@ def generate_payslip(
             },
         )
 
-    # Pass 2: Percentage, Per Day, Per Hour, and Formula components
-    for comp in components:
+    # Pass 2:
+    # 2a. Percentage, Per Day, and Per Hour components
+    non_formula_components = [
+        comp
+        for comp in components
+        if (comp.calc_type or "").strip().lower() != "formula"
+        and (comp.calc_type or "").strip().capitalize() != "Fixed"
+    ]
+    for comp in non_formula_components:
         c_type = comp.type.capitalize() if comp.type else "Earning"
         c_calc_raw = (comp.calc_type or "").strip()
         c_calc_lower = c_calc_raw.lower()
@@ -503,60 +626,84 @@ def generate_payslip(
             else:
                 deductions_list.append(item)
 
-        elif c_calc_lower == "formula":
-            # Formula: Safe evaluation using ast
-            formula_str = (
-                getattr(comp, "formula", None)
-                or comp.calc_base
-                or (str(comp.value) if comp.value else "")
-            )
-            # Build variables dictionary mapping known values to their calculated base amounts
-            formula_vars: dict[str, Any] = {}
-            for k, v in calculated_map.items():
-                formula_vars[k] = v
-                clean_k = str(k).replace(" ", "_").replace("-", "_")
-                formula_vars[clean_k] = v
+    # 2b. Formula components: Topologically sorted so dependencies evaluate first
+    formula_components = [
+        comp
+        for comp in components
+        if (comp.calc_type or "").strip().lower() == "formula"
+    ]
+    sorted_formula_components = topological_sort_components(formula_components)
+    for comp in sorted_formula_components:
+        c_type = comp.type.capitalize() if comp.type else "Earning"
+        val = Decimal(str(comp.value or 0))
 
-            basic_val = (
-                calculated_map.get("basic")
-                or calculated_map.get("basic salary")
-                or (base_salary_val * pro_rata_multiplier)
-            )
-            formula_vars["basic"] = basic_val
-            formula_vars["basicsalary"] = basic_val
-            formula_vars["basic_salary"] = basic_val
-            formula_vars["base_salary"] = base_salary_val
-            formula_vars["payable_days"] = payable_days
-            formula_vars["working_days"] = Decimal(eligible_working_days)
-            formula_vars["total_working_days"] = total_working_days_dec
-            formula_vars["pro_rata_multiplier"] = pro_rata_multiplier
-            formula_vars["worked_hours"] = total_worked_hours
+        # Formula: Safe evaluation using ast
+        formula_str = (
+            getattr(comp, "formula", None)
+            or comp.calc_base
+            or (str(comp.value) if comp.value else "")
+        )
+        # Build variables dictionary mapping known values to their calculated base amounts
+        formula_vars: dict[str, Any] = {}
+        for k, v in calculated_map.items():
+            formula_vars[k] = v
+            clean_k = str(k).replace(" ", "_").replace("-", "_")
+            formula_vars[clean_k] = v
 
-            raw_evaluated = safe_eval(formula_str, formula_vars)
-            amount = Decimal(str(raw_evaluated)).quantize(Decimal("0.01"))
-            calculated_map[comp.name.strip().lower()] = amount
+        basic_val = (
+            calculated_map.get("basic")
+            or calculated_map.get("basic salary")
+            or (base_salary_val * pro_rata_multiplier)
+        )
+        formula_vars["basic"] = basic_val
+        formula_vars["basicsalary"] = basic_val
+        formula_vars["basic_salary"] = basic_val
+        formula_vars["base_salary"] = base_salary_val
+        formula_vars["payable_days"] = payable_days
+        formula_vars["working_days"] = Decimal(eligible_working_days)
+        formula_vars["total_working_days"] = total_working_days_dec
+        formula_vars["pro_rata_multiplier"] = pro_rata_multiplier
+        formula_vars["worked_hours"] = total_worked_hours
 
-            item = {
-                "component_id": comp.id,
-                "name": comp.name,
-                "type": c_type,
-                "calc_type": "Formula",
-                "calc_base": formula_str or "Formula",
-                "value": str(val),
-                "amount": str(Decimal(str(amount))),
-            }
-            if c_type == "Earning":
-                earnings_list.append(item)
-            else:
-                deductions_list.append(item)
+        raw_evaluated = safe_eval(formula_str, formula_vars)
+        amount = Decimal(str(raw_evaluated)).quantize(Decimal("0.01"))
+        calculated_map[comp.name.strip().lower()] = amount
+
+        item = {
+            "component_id": comp.id,
+            "name": comp.name,
+            "type": c_type,
+            "calc_type": "Formula",
+            "calc_base": formula_str or "Formula",
+            "value": str(val),
+            "amount": str(Decimal(str(amount))),
+        }
+        if c_type == "Earning":
+            earnings_list.append(item)
+        else:
+            deductions_list.append(item)
 
     # Fallback to StaffSalaryComponent if structure had no components
     if not components:
-        staff_comps = StaffSalaryComponent.objects.filter(
-            staff=staff, is_active=True, component__is_active=True
-        ).select_related("component")
+        staff_comps = list(
+            StaffSalaryComponent.objects.filter(
+                staff=staff, is_active=True, component__is_active=True
+            ).select_related("component")
+        )
 
-        for sc in staff_comps:
+        non_formula_sc = [
+            sc
+            for sc in staff_comps
+            if (sc.calculation_type or "").strip().lower() != "formula"
+        ]
+        formula_sc = [
+            sc
+            for sc in staff_comps
+            if (sc.calculation_type or "").strip().lower() == "formula"
+        ]
+        sorted_formula_sc = topological_sort_components(formula_sc)
+
+        for sc in non_formula_sc + sorted_formula_sc:
             c = sc.component
             val = Decimal(str(sc.value or 0))
             calc_type_raw = (sc.calculation_type or "").strip()
@@ -577,12 +724,22 @@ def generate_payslip(
             elif calc_type_lower == "formula":
                 formula_str = getattr(c, "formula", None) or c.calc_base or str(val)
                 formula_vars = {k: v for k, v in calculated_map.items()}
+                for k, v in calculated_map.items():
+                    clean_k = str(k).replace(" ", "_").replace("-", "_")
+                    formula_vars[clean_k] = v
                 basic_val = calculated_map.get("basic") or (base_salary_val * pro_rata_multiplier)
                 formula_vars["basic"] = basic_val
+                formula_vars["basicsalary"] = basic_val
+                formula_vars["basic_salary"] = basic_val
+                formula_vars["base_salary"] = base_salary_val
                 formula_vars["payable_days"] = payable_days
+                formula_vars["working_days"] = Decimal(eligible_working_days)
+                formula_vars["total_working_days"] = total_working_days_dec
+                formula_vars["pro_rata_multiplier"] = pro_rata_multiplier
                 formula_vars["worked_hours"] = total_worked_hours
                 raw_evaluated = safe_eval(formula_str, formula_vars)
                 amount = Decimal(str(raw_evaluated)).quantize(Decimal("0.01"))
+                calculated_map[c.name.strip().lower()] = amount
             else:
                 amount = (val * pro_rata_multiplier).quantize(Decimal("0.01"))
 
