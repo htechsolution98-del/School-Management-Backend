@@ -12,8 +12,9 @@ from .permissions import IsClerkOrPrincipal, IsCLerk, Isprincipal, IsPrincipalOr
 from .library_leave_serializers import *
 from rest_framework.generics import GenericAPIView, ListCreateAPIView, ListAPIView
 from rest_framework import status
+from datetime import datetime
 from rest_framework.exceptions import ValidationError
-from sms_app.services.leave_service import LeaveWorkflowService, LeaveAllocationService, LeaveCycleClosingService
+from sms_app.services.leave_service import LeaveWorkflowService, LeaveAllocationService, LeaveCycleClosingService, LeaveValidationService
 from rest_framework.decorators import action
 from uuid import uuid4
 from django.db.models import Count, Q, Sum
@@ -1038,12 +1039,28 @@ class LeaveRequestView(ModelViewSet): #for requesting leave
     
 
     
+def _resolve_staff_for_user(user):
+    if not user or not getattr(user, "is_authenticated", False):
+        return None
+    staff = Staff.objects.filter(user=user).select_related("school", "leave_template").first()
+    if not staff:
+        try:
+            staff = getattr(user, "staff", None)
+        except Exception:
+            staff = None
+    if not staff and getattr(user, "email", None):
+        staff = Staff.objects.filter(email=user.email).select_related("school", "leave_template").first()
+    if not staff and getattr(user, "mobile", None):
+        staff = Staff.objects.filter(mobile=user.mobile).select_related("school", "leave_template").first()
+    return staff
+
+
 class GetStaffRemainingleave(APIView): # perticular staff remaining leaves
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         user = request.user
-        staff = Staff.objects.filter(user=user).first()
+        staff = _resolve_staff_for_user(user)
         if not staff:
             return Response([])
 
@@ -1057,9 +1074,15 @@ class GetStaffRemainingleave(APIView): # perticular staff remaining leaves
 
         leave_types = []
         if staff.leave_template:
-            leave_types = list(staff.leave_template.leave_types.all())
+            leave_types = list(staff.leave_template.leave_types.filter(is_active=True))
+        if not leave_types and staff.category and school:
+            leave_types = list(LeaveType.objects.filter(
+                leave_template__school=school,
+                category__feature__name__iexact=staff.category,
+                is_active=True
+            ))
         if not leave_types and school:
-            leave_types = list(LeaveType.objects.filter(leave_template__school=school))
+            leave_types = list(LeaveType.objects.filter(leave_template__school=school, is_active=True))
 
         results = []
         for lt in leave_types:
@@ -1100,16 +1123,163 @@ class GetStaffRemainingleave(APIView): # perticular staff remaining leaves
                 "is_paid": lt.is_paid,
             })
         return Response(results)
-    
-    
-    
-    
+
+
+class CalculateLeaveDaysView(APIView):
+    """
+    Authoritative server-side Leave Days preview & calculation API.
+    Computes effective working days, policy exclusions (Sundays, school holidays, weekly offs),
+    overlapping status, and available leave balance.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def _parse_date(self, val):
+        if not val:
+            return None
+        val_str = str(val).strip()
+        for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%Y/%m/%d", "%d/%m/%Y"):
+            try:
+                return datetime.strptime(val_str, fmt).date()
+            except ValueError:
+                pass
+        return None
+
+    def post(self, request):
+        return self._calculate(request.data, request.user)
+
+    def get(self, request):
+        return self._calculate(request.query_params, request.user)
+
+    def _calculate(self, data, user):
+        staff = _resolve_staff_for_user(user)
+        school = user.school or (staff.school if staff else None)
+        if not staff or not school:
+            return Response({"error": "Staff profile and school context required."}, status=400)
+
+        start_date = self._parse_date(data.get("start_date"))
+        end_date = self._parse_date(data.get("end_date"))
+        leave_type_id = data.get("leave_type") or data.get("leave_type_id") or data.get("dynamic_leave_type")
+        is_half_day = str(data.get("is_half_day", "")).lower() in ("true", "1")
+        half_day_session = data.get("half_day_session", "FIRST_HALF" if is_half_day else "FULL_DAY")
+
+        if not start_date or not end_date:
+            return Response({"error": "Valid start_date and end_date are required."}, status=400)
+        if start_date > end_date:
+            return Response({"error": "Start date cannot be after end date."}, status=400)
+        if not leave_type_id:
+            return Response({"error": "leave_type is required."}, status=400)
+
+        leave_type = LeaveType.objects.filter(id=leave_type_id).first()
+        if not leave_type:
+            return Response({"error": f"Leave type with id {leave_type_id} not found."}, status=404)
+
+        # 1. Fetch breakdown and effective days
+        try:
+            breakdown_data = LeaveValidationService.get_effective_leave_breakdown(
+                school=school,
+                leave_type=leave_type,
+                start_date=start_date,
+                end_date=end_date,
+                is_half_day=is_half_day,
+                half_day_session=half_day_session,
+            )
+        except DjangoValidationError as e:
+            return Response(
+                {
+                    "is_valid": False,
+                    "error": e.messages if hasattr(e, "messages") else str(e),
+                    "total_effective_days": 0,
+                    "day_breakdown": [],
+                },
+                status=400,
+            )
+
+        effective_days = breakdown_data["effective_days"]
+        total_effective_days = breakdown_data["total_effective_days"]
+
+        # 2. Check overlapping requests
+        overlapping_error = None
+        try:
+            LeaveValidationService.check_overlapping_requests(staff, effective_days)
+        except DjangoValidationError as e:
+            overlapping_error = e.messages[0] if hasattr(e, "messages") and e.messages else str(e)
+
+        # 3. Check LeaveBalance
+        cycle = LeaveCycle.objects.filter(
+            school=school,
+            start_date__lte=start_date,
+            end_date__gte=start_date,
+        ).first() or LeaveCycle.objects.filter(school=school, is_active=True).first()
+
+        balance = None
+        if cycle:
+            balance, _ = LeaveBalance.objects.get_or_create(
+                staff=staff,
+                leave_type=leave_type,
+                leave_cycle=cycle,
+                defaults={
+                    "allocated": Decimal(str(leave_type.allocation_count or leave_type.leave_num or 0)),
+                    "carry_forward": Decimal("0.0"),
+                    "used": Decimal("0.0"),
+                    "pending": Decimal("0.0"),
+                },
+            )
+
+        allocated = float(balance.allocated) if balance else float(leave_type.allocation_count or leave_type.leave_num or 0)
+        carry_forward = float(balance.carry_forward) if balance else 0.0
+        used = float(balance.used) if balance else 0.0
+        pending = float(balance.pending) if balance else 0.0
+        available = float(balance.available) if balance else allocated
+
+        has_sufficient_balance = True
+        if leave_type.is_paid and not getattr(leave_type, "allow_negative_balance", False):
+            has_sufficient_balance = (available >= float(total_effective_days))
+
+        is_valid = (overlapping_error is None) and (has_sufficient_balance)
+
+        messages = []
+        if breakdown_data["excluded_weekends"] > 0:
+            messages.append(f"{breakdown_data['excluded_weekends']} weekend(s) excluded")
+        if breakdown_data["excluded_holidays"] > 0:
+            messages.append(f"{breakdown_data['excluded_holidays']} holiday(s) excluded")
+        if not messages:
+            summary_msg = f"{total_effective_days} working day(s) counted."
+        else:
+            summary_msg = f"{total_effective_days} working day(s) counted ({', '.join(messages)} by school policy)."
+
+        return Response({
+            "start_date": start_date.strftime("%Y-%m-%d"),
+            "end_date": end_date.strftime("%Y-%m-%d"),
+            "total_effective_days": float(total_effective_days),
+            "calendar_days": breakdown_data["calendar_days"],
+            "excluded_weekends": breakdown_data["excluded_weekends"],
+            "excluded_holidays": breakdown_data["excluded_holidays"],
+            "is_half_day": is_half_day,
+            "half_day_session": half_day_session,
+            "day_breakdown": breakdown_data["breakdown"],
+            "balance": {
+                "allocated": allocated,
+                "carry_forward": carry_forward,
+                "total_entitlement": allocated + carry_forward,
+                "used": used,
+                "pending": pending,
+                "available": available,
+            },
+            "is_valid": is_valid,
+            "has_sufficient_balance": has_sufficient_balance,
+            "overlapping": overlapping_error is not None,
+            "overlapping_error": overlapping_error,
+            "summary_message": summary_msg,
+            "is_paid": leave_type.is_paid,
+        })
+
+
 class GetStaffLeaveRequest(APIView): # particular staff leave request to staff see their leave request
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         user = request.user
-        staff = Staff.objects.filter(user=user).first()
+        staff = _resolve_staff_for_user(user)
         if not staff:
             return Response([])
 
