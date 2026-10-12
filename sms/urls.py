@@ -406,6 +406,7 @@ urlpatterns = [
      
      # To get remaining leave for staff when click on apply leave button for show remaining leave
      path('api/get-leave-requests-staff/',GetStaffLeaveRequest.as_view()),
+     path('api/calculate-leave-days/', CalculateLeaveDaysView.as_view()),
      
      
      path("api/approve-all-leave/<int:pk>/",ChangeAllLeaveView.as_view()),
@@ -462,6 +463,7 @@ urlpatterns = [
     path('api/exam-notification/',ExamView.as_view()),
     path('api/exam-notification/<int:id>/',ExamView.as_view()),
     path('api/attendance-notification/',StudentNotificationView.as_view()),
+    path('api/fcm/register-token/', FCMTokenRegisterView.as_view(), name='register-fcm-token'),
     path('api/monthly-report/',MonthlyProgressReportView.as_view()),
     path("api/monthly-report/<int:id>/",MonthlyProgressReportView.as_view()),
     path('api/parent/children/', ParentChildrenView.as_view()),

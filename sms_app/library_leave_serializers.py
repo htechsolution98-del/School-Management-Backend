@@ -162,12 +162,22 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
             school = request.user.school
             qs = LeaveType.objects.filter(leave_template__school=school)
             staff = Staff.objects.filter(user=request.user, school=school).first()
+            if not staff:
+                try:
+                    staff = getattr(request.user, "staff", None)
+                except Exception:
+                    staff = None
+            if not staff and getattr(request.user, "email", None):
+                staff = Staff.objects.filter(email=request.user.email, school=school).first()
+            if not staff and getattr(request.user, "mobile", None):
+                staff = Staff.objects.filter(mobile=request.user.mobile, school=school).first()
+
             if staff and getattr(staff, "leave_template", None):
-                tpl_qs = qs.filter(leave_template=staff.leave_template)
+                tpl_qs = qs.filter(leave_template=staff.leave_template, is_active=True)
                 if tpl_qs.exists():
                     qs = tpl_qs
             elif staff and getattr(staff, "category", None):
-                cat_qs = qs.filter(category__feature__name=staff.category)
+                cat_qs = qs.filter(category__feature__name__iexact=staff.category, is_active=True)
                 if cat_qs.exists():
                     qs = cat_qs
             self.fields["leave_type"].queryset = qs
@@ -214,6 +224,15 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Authentication required.")
 
         staff = Staff.objects.filter(user=user).first()
+        if not staff:
+            try:
+                staff = getattr(user, "staff", None)
+            except Exception:
+                staff = None
+        if not staff and getattr(user, "email", None):
+            staff = Staff.objects.filter(email=user.email).first()
+        if not staff and getattr(user, "mobile", None):
+            staff = Staff.objects.filter(mobile=user.mobile).first()
         if not staff:
             raise serializers.ValidationError("Staff profile not found for user.")
 
@@ -288,17 +307,26 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
         # 3. Calculate available balance = (allocated + carry_forward) - (used + pending)
         available_balance = Decimal(str(balance.remaining))
 
-        # 4. Calculate requested_days (support 0.5 for half-days)
-        passed_days = attrs.get("total_days")
-        if passed_days is not None and Decimal(str(passed_days)) > 0:
-            requested_days = Decimal(str(passed_days))
-        else:
-            requested_days = Decimal((end_date - start_date).days + 1)
+        # 4. Calculate authoritative effective days using LeaveValidationService
+        is_half_day = attrs.get("is_half_day", False)
+        half_day_session = attrs.get("half_day_session", "FIRST_HALF" if is_half_day else "FULL_DAY")
+        try:
+            effective_days = LeaveValidationService.get_effective_leave_days(
+                school=school,
+                leave_type=leave_type,
+                start_date=start_date,
+                end_date=end_date,
+                is_half_day=is_half_day,
+                half_day_session=half_day_session,
+            )
+            requested_days = sum(d[1] for d in effective_days)
+        except DjangoValidationError as e:
+            raise serializers.ValidationError(e.messages if hasattr(e, "messages") else str(e))
 
         # 5. Overdraft validation:
         # IF requested_days > available_balance AND the LeaveType does not explicitly allow unpaid/LOP overdrafts,
         # raise a serializers.ValidationError("Insufficient leave balance")
-        if leave_type.is_paid and requested_days > available_balance:
+        if leave_type.is_paid and not getattr(leave_type, "allow_negative_balance", False) and requested_days > available_balance:
             raise serializers.ValidationError(
                 f"Insufficient leave balance. You have {available_balance} days available, but requested {requested_days} days."
             )
@@ -332,6 +360,15 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
         request = self.context.get("request")
         user = request.user if request else None
         staff = Staff.objects.filter(user=user).first()
+        if not staff:
+            try:
+                staff = getattr(user, "staff", None)
+            except Exception:
+                staff = None
+        if not staff and getattr(user, "email", None):
+            staff = Staff.objects.filter(email=user.email).first()
+        if not staff and getattr(user, "mobile", None):
+            staff = Staff.objects.filter(mobile=user.mobile).first()
         school = getattr(user, "school", None) or (staff.school if staff else None)
         leave_type = validated_data.get("dynamic_leave_type") or validated_data.get("leave_type")
         start_date = validated_data.get("start_date")
@@ -892,51 +929,106 @@ class CertificateFieldOptionSerializer(serializers.Serializer):
         
 
 class CertificateRequestSerializer(serializers.ModelSerializer):
-
-    certificate_type_name = serializers.CharField(source="certificate_type.name",read_only=True)
-
+    certificate_type_name = serializers.CharField(source="certificate_type.name", read_only=True)
     status = serializers.CharField(read_only=True)
+    certificate_file = serializers.SerializerMethodField()
+    certificate_number = serializers.SerializerMethodField()
+    generated_data = serializers.SerializerMethodField()
+    student_name = serializers.SerializerMethodField()
+    student_gr_no = serializers.CharField(source="student.gr_no", read_only=True, default="")
+    student_class = serializers.CharField(source="student.school_class.school_class", read_only=True, default="")
 
     class Meta:
         model = CertificateRequest
         fields = [
             "id",
+            "student",
+            "student_name",
+            "student_gr_no",
+            "student_class",
             "certificate_type",
             "certificate_type_name",
             "status",
+            "certificate_file",
+            "certificate_number",
+            "generated_data",
             "created_at",
         ]
         read_only_fields = [
             "status",
             "created_at",
         ]
-    
-    
-    
+
+    def get_certificate_file(self, obj):
+        if hasattr(obj, "certificate") and obj.certificate and obj.certificate.file:
+            return obj.certificate.file.url
+        return None
+
+    def get_certificate_number(self, obj):
+        if hasattr(obj, "certificate") and obj.certificate:
+            return obj.certificate.certificate_number
+        return None
+
+    def get_generated_data(self, obj):
+        if hasattr(obj, "certificate") and obj.certificate:
+            return obj.certificate.generated_data
+        return None
+
+    def get_student_name(self, obj):
+        if obj.student:
+            parts = [p for p in [obj.student.surname, obj.student.name, obj.student.father_name] if p]
+            return " ".join(parts) if parts else str(obj.student)
+        return "Student"
+
+
 class ClerkCertificateRequestSerializer(serializers.ModelSerializer):
-
     student_name = serializers.SerializerMethodField()
-
-    certificate_type = serializers.CharField(
-        source="certificate_type.name"
-    )
+    student_gr_no = serializers.CharField(source="student.gr_no", read_only=True, default="")
+    student_class = serializers.CharField(source="student.school_class.school_class", read_only=True, default="")
+    certificate_type = serializers.CharField(source="certificate_type.name", read_only=True)
+    certificate_type_id = serializers.IntegerField(source="certificate_type.id", read_only=True)
+    certificate_file = serializers.SerializerMethodField()
+    certificate_number = serializers.SerializerMethodField()
+    generated_data = serializers.SerializerMethodField()
 
     class Meta:
         model = CertificateRequest
-
         fields = [
             "id",
+            "student",
             "student_name",
+            "student_gr_no",
+            "student_class",
             "certificate_type",
+            "certificate_type_id",
             "status",
+            "certificate_file",
+            "certificate_number",
+            "generated_data",
             "created_at",
         ]
 
+    def get_certificate_file(self, obj):
+        if hasattr(obj, "certificate") and obj.certificate and obj.certificate.file:
+            return obj.certificate.file.url
+        return None
+
+    def get_certificate_number(self, obj):
+        if hasattr(obj, "certificate") and obj.certificate:
+            return obj.certificate.certificate_number
+        return None
+
+    def get_generated_data(self, obj):
+        if hasattr(obj, "certificate") and obj.certificate:
+            return obj.certificate.generated_data
+        return None
+
     def get_student_name(self, obj):
-
         student = obj.student
-
-        return f"{student.name} {student.surname}".strip()
+        if student:
+            parts = [p for p in [student.surname, student.name, student.father_name] if p]
+            return " ".join(parts) if parts else str(student)
+        return "Student"
         
         
         
