@@ -629,7 +629,14 @@ class SchoolView(ModelViewSet):
         student_list = []
         for s in sch_students.select_related("school_class", "academic_year").order_by("school_class__school_class", "roll_no", "name"):
             g_val = "Male" if s.id in boy_ids else ("Female" if s.id in girl_ids else "Other")
-            full_name = " ".join(part for part in [s.name, s.father_name, s.surname] if part).strip() or s.name or "Student"
+            # Avoid repeating surname if father_name already ends with surname
+            fn_parts = [s.name]
+            if s.father_name:
+                fn_parts.append(s.father_name)
+            if s.surname:
+                if not (s.father_name and s.father_name.strip().lower().endswith(s.surname.strip().lower())):
+                    fn_parts.append(s.surname)
+            full_name = " ".join(part for part in fn_parts if part).strip() or s.name or "Student"
             student_list.append({
                 "id": s.id,
                 "name": full_name,

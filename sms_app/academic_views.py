@@ -2031,6 +2031,18 @@ class StudentAttendanceView(APIView):
         except Exception as e:
             print("Channel send notification error:", e)
 
+        # Trigger Firebase Push Notification to Parents if student is absent
+        if attendance.is_absent:
+            try:
+                from .firebase_service import send_student_absence_notification
+                send_student_absence_notification(
+                    student=attendance.student,
+                    attendance_date=attendance.attendance_date,
+                    reason=getattr(attendance, "reason", "") or "",
+                )
+            except Exception as fe:
+                print("Firebase absence push notification dispatch note:", fe)
+
         response_serializer = StudentAttendanceSerializer(attendance)
 
         return Response(
@@ -2093,6 +2105,18 @@ class StudentAttendanceView(APIView):
         except Exception as e:
             print("Channel send notification error:", e)
 
+        # Trigger Firebase Push Notification to Parents if student is absent
+        if attendance.is_absent:
+            try:
+                from .firebase_service import send_student_absence_notification
+                send_student_absence_notification(
+                    student=attendance.student,
+                    attendance_date=attendance.attendance_date,
+                    reason=getattr(attendance, "reason", "") or "",
+                )
+            except Exception as fe:
+                print("Firebase absence push notification dispatch note:", fe)
+
         return Response(serializer.data)
     def delete(self, request, id):
         attendance = get_object_or_404(
@@ -2107,6 +2131,26 @@ class StudentAttendanceView(APIView):
             {"message": "Attendance deleted successfully."},
             status=status.HTTP_204_NO_CONTENT
         )
+
+
+class FCMTokenRegisterView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        token = request.data.get("token")
+        if not token:
+            return Response({"error": "Device token is required"}, status=status.HTTP_400_BAD_REQUEST)
+        device_type = request.data.get("device_type", "web")
+        from .firebase_service import register_user_fcm_token
+        device_obj = register_user_fcm_token(request.user, token, device_type)
+        return Response(
+            {
+                "message": "FCM device token registered successfully",
+                "id": getattr(device_obj, "id", None),
+            },
+            status=status.HTTP_200_OK,
+        )
+
 
       
 # from .homework_serializer import (
@@ -2995,16 +3039,24 @@ class HomeworkSubmissionViewSet(ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
+        homework_id = self.request.query_params.get("homework")
+
         student = Student.objects.filter(user=user).first()
         if student:
-            return HomeworkSubmissions.objects.filter(student=student)
+            qs = HomeworkSubmissions.objects.filter(student=student)
+            if homework_id:
+                qs = qs.filter(homework_id=homework_id)
+            return qs
 
         staff = Staff.objects.filter(user=user).first()
         if staff:
-            return HomeworkSubmissions.objects.filter(
-                homework__teacher=staff,
-                homework__school=staff.school
+            school = getattr(user, "school", None) or (staff.school if staff else None)
+            qs = HomeworkSubmissions.objects.filter(
+                Q(homework__school=school) | Q(homework__teacher=staff)
             )
+            if homework_id:
+                qs = qs.filter(homework_id=homework_id)
+            return qs
 
         return HomeworkSubmissions.objects.none()
 
@@ -3021,6 +3073,8 @@ class HomeworkSubmissionViewSet(ModelViewSet):
 
         homework = serializer.validated_data.get("homework")
         uploaded_file = serializer.validated_data.get("file")
+        is_late = bool(homework and homework.due_date and timezone.now().date() > homework.due_date)
+        sub_status = "late" if is_late else "submitted"
 
         # Handle Re-submission (Upsert)
         existing = HomeworkSubmissions.objects.filter(student=student, homework=homework).first()
@@ -3028,12 +3082,13 @@ class HomeworkSubmissionViewSet(ModelViewSet):
             if uploaded_file:
                 existing.file = uploaded_file
             existing.submitted_at = timezone.now()
-            existing.status = "submitted"
+            if existing.status != "checked":
+                existing.status = sub_status
             existing.save()
             out_serializer = self.get_serializer(existing)
             return Response(out_serializer.data, status=status.HTTP_200_OK)
 
-        instance = serializer.save(student=student)
+        instance = serializer.save(student=student, status=sub_status)
         out_serializer = self.get_serializer(instance)
         return Response(out_serializer.data, status=status.HTTP_201_CREATED)
 

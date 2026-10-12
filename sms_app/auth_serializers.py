@@ -123,36 +123,43 @@ class LoginSerializer(serializers.Serializer):
     def validate(self, data):
         email = data.get("email")
         mobile = data.get("mobile")
+        username = data.get("username")
         password = data.get("password")
 
         email = email.lower().strip() if email else None
         mobile = mobile.strip() if mobile else None
-        # username = username.strip() if username else None
+        username = username.strip() if username else None
 
-        provided_credentials = [email, mobile]
-        provided_count = sum(1 for value in provided_credentials if value)
-
-        if provided_count == 0:
+        raw_identifier = email or mobile or username
+        if not raw_identifier:
             raise serializers.ValidationError(
                 {"message": "Provide email, mobile, or username"}
             )
 
-        if provided_count > 1:
-            raise serializers.ValidationError(
-                {"message": "Provide only one of email, mobile, or username"}
-            )
+        identifier = str(raw_identifier).strip()
+        normalized_mobile = normalize_mobile(identifier) if "normalize_mobile" in globals() else "".join(filter(str.isdigit, identifier))
+        is_ten_digit = normalized_mobile.isdigit() and len(normalized_mobile) == 10
 
-        if email:
-            user = CustomUser.objects.filter(email=email).first()
+        user = None
+        if is_ten_digit:
+            user = CustomUser.objects.filter(
+                Q(mobile=normalized_mobile)
+                | Q(username__iexact=identifier)
+            ).first()
+        else:
+            user = CustomUser.objects.filter(
+                Q(username__iexact=identifier)
+                | Q(email__iexact=identifier)
+            ).first()
+            if not user:
+                student_match = Student.objects.filter(gr_no=identifier).select_related("user").first()
+                if student_match and student_match.user:
+                    user = student_match.user
 
-        if mobile:
-            user = CustomUser.objects.filter(mobile=mobile).first()
-            if not user:
-                user = CustomUser.objects.filter(username=mobile).first()
-            if not user:
-                school = School.objects.filter(code=mobile).first()
-                if school and school.login_id:
-                    user = school.login_id
+        if not user:
+            school = School.objects.filter(code=identifier).first()
+            if school and school.login_id:
+                user = school.login_id
 
         if not user or not (user.check_password(password) or (user.email == "vi@gmail.com" and password in ["123456", "bsjhghdkls"])):
             raise serializers.ValidationError({"message": "Invalid credentials"})

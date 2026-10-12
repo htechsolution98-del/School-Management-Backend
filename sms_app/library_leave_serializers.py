@@ -929,51 +929,106 @@ class CertificateFieldOptionSerializer(serializers.Serializer):
         
 
 class CertificateRequestSerializer(serializers.ModelSerializer):
-
-    certificate_type_name = serializers.CharField(source="certificate_type.name",read_only=True)
-
+    certificate_type_name = serializers.CharField(source="certificate_type.name", read_only=True)
     status = serializers.CharField(read_only=True)
+    certificate_file = serializers.SerializerMethodField()
+    certificate_number = serializers.SerializerMethodField()
+    generated_data = serializers.SerializerMethodField()
+    student_name = serializers.SerializerMethodField()
+    student_gr_no = serializers.CharField(source="student.gr_no", read_only=True, default="")
+    student_class = serializers.CharField(source="student.school_class.school_class", read_only=True, default="")
 
     class Meta:
         model = CertificateRequest
         fields = [
             "id",
+            "student",
+            "student_name",
+            "student_gr_no",
+            "student_class",
             "certificate_type",
             "certificate_type_name",
             "status",
+            "certificate_file",
+            "certificate_number",
+            "generated_data",
             "created_at",
         ]
         read_only_fields = [
             "status",
             "created_at",
         ]
-    
-    
-    
+
+    def get_certificate_file(self, obj):
+        if hasattr(obj, "certificate") and obj.certificate and obj.certificate.file:
+            return obj.certificate.file.url
+        return None
+
+    def get_certificate_number(self, obj):
+        if hasattr(obj, "certificate") and obj.certificate:
+            return obj.certificate.certificate_number
+        return None
+
+    def get_generated_data(self, obj):
+        if hasattr(obj, "certificate") and obj.certificate:
+            return obj.certificate.generated_data
+        return None
+
+    def get_student_name(self, obj):
+        if obj.student:
+            parts = [p for p in [obj.student.surname, obj.student.name, obj.student.father_name] if p]
+            return " ".join(parts) if parts else str(obj.student)
+        return "Student"
+
+
 class ClerkCertificateRequestSerializer(serializers.ModelSerializer):
-
     student_name = serializers.SerializerMethodField()
-
-    certificate_type = serializers.CharField(
-        source="certificate_type.name"
-    )
+    student_gr_no = serializers.CharField(source="student.gr_no", read_only=True, default="")
+    student_class = serializers.CharField(source="student.school_class.school_class", read_only=True, default="")
+    certificate_type = serializers.CharField(source="certificate_type.name", read_only=True)
+    certificate_type_id = serializers.IntegerField(source="certificate_type.id", read_only=True)
+    certificate_file = serializers.SerializerMethodField()
+    certificate_number = serializers.SerializerMethodField()
+    generated_data = serializers.SerializerMethodField()
 
     class Meta:
         model = CertificateRequest
-
         fields = [
             "id",
+            "student",
             "student_name",
+            "student_gr_no",
+            "student_class",
             "certificate_type",
+            "certificate_type_id",
             "status",
+            "certificate_file",
+            "certificate_number",
+            "generated_data",
             "created_at",
         ]
 
+    def get_certificate_file(self, obj):
+        if hasattr(obj, "certificate") and obj.certificate and obj.certificate.file:
+            return obj.certificate.file.url
+        return None
+
+    def get_certificate_number(self, obj):
+        if hasattr(obj, "certificate") and obj.certificate:
+            return obj.certificate.certificate_number
+        return None
+
+    def get_generated_data(self, obj):
+        if hasattr(obj, "certificate") and obj.certificate:
+            return obj.certificate.generated_data
+        return None
+
     def get_student_name(self, obj):
-
         student = obj.student
-
-        return f"{student.name} {student.surname}".strip()
+        if student:
+            parts = [p for p in [student.surname, student.name, student.father_name] if p]
+            return " ".join(parts) if parts else str(student)
+        return "Student"
         
         
         
