@@ -511,8 +511,9 @@ class GenerateStaffSalaryPaymentSerializer(serializers.ModelSerializer):
             "payment_status",
             "payment_date",
             "note",
-            "created_at"
+            "created_at",
         ]
+        validators = []
 
     def validate_salary_month(self, value):
         if not re.match(r"^\d{4}-\d{2}$", value):
@@ -544,16 +545,6 @@ class GenerateStaffSalaryPaymentSerializer(serializers.ModelSerializer):
                 {"transaction_id": "Transaction ID is required for online payment."}
             )
 
-        existing = StaffSalaryPayment.objects.filter(
-            staff=staff, salary_month=attrs.get("salary_month")
-        )
-        if self.instance:
-            existing = existing.exclude(pk=self.instance.pk)
-        if existing.exists():
-            raise serializers.ValidationError(
-                {"message": "Salary payment already exists for this staff and month."}
-            )
-
         salary_month = attrs.get("salary_month") or getattr(self.instance, "salary_month", None)
         if salary_month:
             try:
@@ -568,6 +559,9 @@ class GenerateStaffSalaryPaymentSerializer(serializers.ModelSerializer):
                 pass
 
         return attrs
+
+    def update(self, instance, validated_data):
+        return self.create(validated_data)
 
     def calculate_component_amount(self, component, basic_salary):
         if component.calculation_type == "percentage":
