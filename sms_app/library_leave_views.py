@@ -128,7 +128,9 @@ def carry_forward_leave(staff):
         
         
         
-class AttendanceLocationViewSet(ModelViewSet):
+from .trustee_staff_access import TrusteeStaffReadOnlyMixin
+
+class AttendanceLocationViewSet(TrusteeStaffReadOnlyMixin, ModelViewSet):
     serializer_class = AttendanceLocationViewSerializer
     permission_classes = [IsAuthenticated, IsCLerk]
 
@@ -812,7 +814,9 @@ def get_clerk_school(request):
 
 
 # LeaveTemplate ViewSet
-class LeaveTemplateViewSet(ModelViewSet):
+from .trustee_staff_access import TrusteeStaffReadOnlyMixin
+
+class LeaveTemplateViewSet(TrusteeStaffReadOnlyMixin, ModelViewSet):
     permission_classes = [IsAuthenticated, IsClerkOrAdmin]
     serializer_class = NewLeaveTemplateSerializer
  
@@ -845,7 +849,7 @@ class LeaveTemplateViewSet(ModelViewSet):
  
  
  
-class LeaveTypeViewSet(ModelViewSet):
+class LeaveTypeViewSet(TrusteeStaffReadOnlyMixin, ModelViewSet):
  
     permission_classes = [IsAuthenticated, IsClerkOrAdmin]
     serializer_class = NewLeaveTypeSerializer
@@ -882,7 +886,7 @@ class LeaveTypeViewSet(ModelViewSet):
         
         
         
-class LeaveRequestView(ModelViewSet): #for requesting leave
+class LeaveRequestView(TrusteeStaffReadOnlyMixin, ModelViewSet): #for requesting leave
     serializer_class = LeaveRequestSerializer
     permission_classes = [IsAuthenticated]
     
@@ -1125,7 +1129,7 @@ class GetStaffLeaveRequest(APIView): # particular staff leave request to staff s
         
         
         
-class GetLeaveRequestView(ModelViewSet): #for all the leaves — clerk/principal/trustee can view
+class GetLeaveRequestView(TrusteeStaffReadOnlyMixin, ModelViewSet): #for all the leaves — clerk/principal/trustee can view
     queryset = LeaveRequest.objects.all()
     serializer_class = GetLeaveRequestSerializer
     permission_classes = [IsAuthenticated, IsClerkOrPrincipal]
@@ -1140,7 +1144,7 @@ class GetLeaveRequestView(ModelViewSet): #for all the leaves — clerk/principal
     
     
     
-class ChangeLeaveView(ModelViewSet): # for approving day wise APPROVAL — principal/clerk/trustee
+class ChangeLeaveView(TrusteeStaffReadOnlyMixin, ModelViewSet): # for approving day wise APPROVAL — principal/clerk/trustee
     queryset = LeavePerDay.objects.all()
     serializer_class = ChangeLeavePerDaySerializer
     permission_classes = [IsAuthenticated, IsClerkOrPrincipal]
@@ -1165,7 +1169,7 @@ class ChangeLeaveView(ModelViewSet): # for approving day wise APPROVAL — princ
     
 
 
-class ChangeAllLeaveView(APIView): # for APPROVE all day leave — principal/trustee
+class ChangeAllLeaveView(TrusteeStaffReadOnlyMixin, APIView): # for APPROVE all day leave — principal/trustee
     permission_classes = [IsAuthenticated, IsPrincipalOrTrustee]
 
     def patch(self, request, pk):
@@ -2139,7 +2143,14 @@ class BookIssuedView(ModelViewSet):
         staff = Staff.objects.filter(user=self.request.user).first()
         if staff is None:
             raise PermissionDenied("You are not registered as staff for any school.")
-        return BookIssued.objects.filter(school=staff.school).select_related("book", "student", "book_copy")
+        return BookIssued.objects.filter(school=staff.school).select_related("book", "student", "staff", "book_copy")
+
+    @action(detail=False, methods=['get'], url_path='staff-borrowers')
+    def staff_borrowers(self, request):
+        librarian = Staff.objects.filter(user=request.user).first()
+        if not librarian:
+            raise PermissionDenied('You are not registered as staff.')
+        return Response(list(Staff.objects.filter(school=librarian.school, is_active=True).order_by('name').values('id', 'name', 'category')))
 
     def perform_create(self, serializer):
         staff = Staff.objects.filter(user=self.request.user).first()
@@ -2147,15 +2158,19 @@ class BookIssuedView(ModelViewSet):
             raise PermissionDenied("You are not registered as staff for any school.")
 
         book = serializer.validated_data["book"]
-        student = serializer.validated_data["student"]
+        student = serializer.validated_data.get("student")
+        borrower_staff = serializer.validated_data.get("staff")
         due_date = serializer.validated_data.get("due_date")
 
         if book.school_id != staff.school_id:
             raise ValidationError("That book does not belong to your school.")
-        if student.school_id != staff.school_id:
-            raise ValidationError("That student does not belong to your school.")
+        borrower = student or borrower_staff
+        if not borrower or borrower.school_id != staff.school_id:
+            raise ValidationError("That borrower does not belong to your school.")
+        if borrower_staff and not borrower_staff.is_active:
+            raise ValidationError('That staff account is inactive.')
 
-        _issue_book(book=book, student=student, school=staff.school, serializer=serializer, due_date=due_date)
+        _issue_book(book=book, student=student, borrower_staff=borrower_staff, school=staff.school, serializer=serializer, due_date=due_date)
 
     @action(detail=True, methods=["post"], url_path="return")
     def return_book(self, request, pk=None):
@@ -2205,15 +2220,28 @@ class BookIssuedView(ModelViewSet):
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
-def _issue_book(*, book, student, school, serializer, due_date=None):
+def _issue_book(*, book, student, school, serializer, due_date=None, borrower_staff=None):
+    from django.db import transaction
+    with transaction.atomic():
+        book = Book.objects.select_for_update().get(pk=book.pk, school=school)
+        borrower = student or borrower_staff
+        if not borrower or bool(student) == bool(borrower_staff) or borrower.school_id != school.pk:
+            raise ValidationError('Select one borrower from your school.')
+        # Serialize checkouts for a borrower across different titles too.
+        type(borrower).objects.select_for_update().get(pk=borrower.pk)
+        return _issue_book_locked(book=book, student=student, borrower_staff=borrower_staff, school=school, serializer=serializer, due_date=due_date)
+
+
+def _issue_book_locked(*, book, student, school, serializer, due_date=None, borrower_staff=None):
     setting = _get_or_create_library_setting(school)
+    borrower_filter = {'student': student} if student else {'staff': borrower_staff}
 
     # 1. Rule Check: Active Loan Limit per student
     active_loans_count = BookIssued.objects.filter(
-        school=school, student=student, status="ISSUED"
+        school=school, status="ISSUED", **borrower_filter
     ).count()
     if active_loans_count >= setting.max_books_per_student:
-        raise ValidationError(f"Student has reached the maximum allowed limit of {setting.max_books_per_student} books.")
+        raise ValidationError(f"Borrower has reached the maximum allowed limit of {setting.max_books_per_student} books.")
 
     # 2. Rule Check: Book Availability
     if book.available_copies <= 0:
@@ -2221,10 +2249,10 @@ def _issue_book(*, book, student, school, serializer, due_date=None):
 
     # 3. Rule Check: Student duplicate checkout
     already_issued = BookIssued.objects.filter(
-        student=student, book=book, status="ISSUED"
+        school=school, book=book, status="ISSUED", **borrower_filter
     ).exists()
     if already_issued:
-        raise ValidationError("This student already has a copy of this book checked out.")
+        raise ValidationError("This borrower already has a copy of this book checked out.")
 
     # 4. Find available physical BookCopy
     available_copy = BookCopy.objects.filter(
@@ -2250,6 +2278,7 @@ def _issue_book(*, book, student, school, serializer, due_date=None):
     serializer.save(
         school=school,
         student=student,
+        staff=borrower_staff,
         book=book,
         book_copy=available_copy,
         book_issued_date=now,
@@ -2282,8 +2311,10 @@ def _renew_book_loan(issued: BookIssued):
 
 
 def _finalize_return(issued: BookIssued, condition="GOOD", remarks="", custom_damage_fee=None, custom_lost_fee=None):
-    if issued.status in ["RETURNED", "LOST"]:
+    if issued.status != "ISSUED" or issued.actual_return_date is not None:
         raise ValidationError("This book transaction has already been closed.")
+    if condition not in ['GOOD', 'MINOR_DAMAGE', 'MAJOR_DAMAGE', 'DAMAGED', 'LOST']:
+        raise ValidationError('Invalid return condition.')
 
     now = timezone.now()
     issued.actual_return_date = now
@@ -2654,7 +2685,7 @@ class ReportsView(ViewSet):
         limit = max(1, min(limit, 200))
  
         qs = (
-            BookIssued.objects.filter(school=staff.school)
+            BookIssued.objects.filter(school=staff.school, student__isnull=False)
             .values("student_id", "student__name")
             .annotate(
                 total_loans=Count("id"),

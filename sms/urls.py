@@ -77,6 +77,10 @@ schema_view = get_schema_view(
 
 
 from sms_app.activity_views import ActivityLogViewSet
+from sms_app.trustee_inventory_report import TrusteeInventoryReport
+from sms_app.trustee_library_report import TrusteeLibraryReport
+from sms_app.trustee_student_report import TrusteeStudentReport
+from sms_app.trustee_staff_report import TrusteeStaffReport
 from sms_app.support_views import SupportTicketViewSet
 from sms_app.tutorial_views import PageTutorialViewSet
 
@@ -462,6 +466,10 @@ urlpatterns = [
     path("api/monthly-report/<int:id>/",MonthlyProgressReportView.as_view()),
     path('api/parent/children/', ParentChildrenView.as_view()),
     path('api/trustee/analytics/', TrusteeAnalyticsView.as_view()),
+    path('api/trustee/inventory-report/', TrusteeInventoryReport.as_view(), name='trustee-inventory-report'),
+    path('api/trustee/library-report/', TrusteeLibraryReport.as_view(), name='trustee-library-report'),
+    path('api/trustee/student-report/', TrusteeStudentReport.as_view(), name='trustee-student-report'),
+    path('api/trustee/staff-report/', TrusteeStaffReport.as_view(), name='trustee-staff-report'),
     path('api/rte/summary/', RTESummaryView.as_view()),
     path('api/duefeesview/',DueFeesView.as_view()),
     path('api/payment-history/',PaymentHistoryView.as_view()),
@@ -601,6 +609,7 @@ urlpatterns += [
     path('', include('services.academic_timetable.urls')),
     path('', include('services.student_admission.urls')),
     path('', include('services.staff_hr.urls')),
+    path('', include('sms_app.staff_activation_urls')),
     path('', include('services.examination_result.urls')),
     path('', include('services.finance_accounting.urls')),
     path('', include('services.library_management.urls')),

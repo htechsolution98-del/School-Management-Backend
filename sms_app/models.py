@@ -3755,7 +3755,8 @@ class BookIssued(models.Model):
     school = models.ForeignKey(School, on_delete=models.CASCADE)
     book = models.ForeignKey(Book, on_delete=models.CASCADE)
     book_copy = models.ForeignKey(BookCopy, on_delete=models.SET_NULL, null=True, blank=True, related_name='issues')
-    student = models.ForeignKey(Student, on_delete=models.CASCADE)
+    student = models.ForeignKey(Student, on_delete=models.CASCADE, null=True, blank=True)
+    staff = models.ForeignKey(Staff, on_delete=models.CASCADE, null=True, blank=True, related_name='library_loans')
     book_issued_date = models.DateTimeField()
     due_date = models.DateTimeField()
     actual_return_date = models.DateTimeField(null=True, blank=True)
@@ -3771,10 +3772,14 @@ class BookIssued(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
     def __str__(self):
-        return f"{self.student.name} - {self.book.title}"
+        return f"{(self.student or self.staff).name} - {self.book.title}"
 
     class Meta:
         db_table = "book_issued"
+        constraints = [models.CheckConstraint(
+            condition=(models.Q(student__isnull=False, staff__isnull=True) | models.Q(student__isnull=True, staff__isnull=False)),
+            name='library_loan_exactly_one_borrower',
+        )]
 
 
 class BookReservation(models.Model):
