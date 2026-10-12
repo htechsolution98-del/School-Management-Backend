@@ -480,6 +480,8 @@ class CurrentUserProfileSerializer(serializers.ModelSerializer):
         return None
 
     def get_school(self, user):
+        if getattr(user, "is_superuser", False) or getattr(user, "role", "").lower() in ["superadmin", "super_admin"]:
+            return None
         school = getattr(user, "school", None) or getattr(user, "managed_school", None)
         if not school:
             student = Student.objects.filter(user=user).select_related("school").first()

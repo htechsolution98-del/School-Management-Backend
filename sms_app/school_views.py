@@ -4,8 +4,8 @@ from rest_framework import generics
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.decorators import action
-from django.db.models import Q, Count
-from django.contrib.auth import authenticate
+from django.db.models import Q, Count, Sum
+from django.db.models.functions import TruncMonth
 from django.utils import timezone
 from .models import *
 from .serializer import *
@@ -433,6 +433,9 @@ class SchoolView(ModelViewSet):
             sch_active_staff = all_staff.filter(school=school, is_active=True).count()
             sch_features = SchoolFeature.objects.filter(school=school, is_enabled=True).count()
 
+            sch_classes = SchoolClass.objects.filter(school=school).count()
+            sch_sub = SchoolSubscription.objects.filter(school=school).first()
+
             school_list.append({
                 "id": school.id,
                 "name": school.name or "Unnamed School",
@@ -451,7 +454,84 @@ class SchoolView(ModelViewSet):
                 "total_staff": sch_staff,
                 "active_staff": sch_active_staff,
                 "enabled_features": sch_features,
+                "classes_count": sch_classes,
+                "subscription_status": sch_sub.status if sch_sub else "NO_PLAN",
+                "subscription_plan": sch_sub.plan.name if sch_sub and sch_sub.plan else (sch_sub.plan_type if sch_sub else "NO_PLAN"),
             })
+
+        # Demographics
+        rte_count = all_students.filter(is_rte=True).count()
+        regular_count = max(total_students - rte_count, 0)
+
+        # Monthly enrollment trends
+        enrollment_trend = []
+        trend_qs = (
+            all_students.filter(admission_date__isnull=False)
+            .annotate(month=TruncMonth("admission_date"))
+            .values("month")
+            .annotate(admissions=Count("id"))
+            .order_by("month")
+        )
+        cum_total = 0
+        for entry in trend_qs:
+            m_dt = entry.get("month")
+            if m_dt:
+                adm = entry.get("admissions", 0)
+                cum_total += adm
+                enrollment_trend.append({
+                    "month": m_dt.strftime("%b %Y"),
+                    "raw_date": str(m_dt),
+                    "admissions": adm,
+                    "withdrawals": 0,
+                    "total": cum_total,
+                })
+
+        # Class distribution
+        class_distribution = []
+        for c in (
+            SchoolClass.objects.annotate(student_count=Count("student"))
+            .filter(student_count__gt=0)
+            .order_by("-student_count")[:8]
+        ):
+            class_distribution.append({
+                "class_name": c.school_class or "Class",
+                "students": c.student_count,
+            })
+
+        # Financials
+        fee_agg = StudentFee.objects.aggregate(total=Sum("amount"), paid=Sum("paid_amount"))
+        total_fees = float(fee_agg.get("total") or 0)
+        paid_fees = float(fee_agg.get("paid") or 0)
+        pending_fees = max(total_fees - paid_fees, 0)
+
+        active_subs = SchoolSubscription.objects.filter(status="ACTIVE")
+        monthly_rev = float(active_subs.aggregate(total=Sum("flat_amount")).get("total") or 0)
+        today = timezone.now().date()
+        expiring_soon = SchoolSubscription.objects.filter(
+            due_date__gte=today,
+            due_date__lte=today + datetime.timedelta(days=30),
+        ).count()
+        expired_count = SchoolSubscription.objects.filter(due_date__lt=today).count()
+
+        financials = {
+            "total_student_fees": total_fees,
+            "collected_student_fees": paid_fees,
+            "pending_student_fees": pending_fees,
+            "subscription_monthly_projected": monthly_rev,
+            "subscription_annual_projected": monthly_rev * 12,
+            "active_subscriptions": active_subs.count(),
+            "trial_subscriptions": SchoolSubscription.objects.filter(status="TRIAL").count(),
+            "expiring_soon": expiring_soon,
+            "expired_overdue": expired_count,
+        }
+
+        # Status distribution
+        status_distribution = {
+            "active": active_schools,
+            "inactive": inactive_schools,
+            "suspended": SchoolSubscription.objects.filter(status="SUSPENDED").count(),
+            "activation_rate": round((active_schools / total_schools * 100), 1) if total_schools > 0 else 0,
+        }
 
         return Response({
             "summary": {
@@ -462,6 +542,8 @@ class SchoolView(ModelViewSet):
                 "total_boys": total_boys,
                 "total_girls": total_girls,
                 "other_gender": other_gender,
+                "rte_students": rte_count,
+                "regular_students": regular_count,
                 "total_staff": total_staff,
                 "active_staff": active_staff,
                 "teachers_count": teachers_count,
@@ -469,6 +551,10 @@ class SchoolView(ModelViewSet):
                 "total_features": total_features,
             },
             "schools": school_list,
+            "enrollment_trend": enrollment_trend,
+            "class_distribution": class_distribution,
+            "financials": financials,
+            "status_distribution": status_distribution,
         })
 
     # 🔹 School specific telemetry & demographics detail
@@ -608,6 +694,15 @@ class SchoolView(ModelViewSet):
             "students": student_list,
             "staff": staff_list,
             "features": features,
+            "fees": {
+                "total": float(StudentFee.objects.filter(school=school).aggregate(total=Sum("amount")).get("total") or 0),
+                "collected": float(StudentFee.objects.filter(school=school).aggregate(paid=Sum("paid_amount")).get("paid") or 0),
+                "pending": max(
+                    float(StudentFee.objects.filter(school=school).aggregate(total=Sum("amount")).get("total") or 0)
+                    - float(StudentFee.objects.filter(school=school).aggregate(paid=Sum("paid_amount")).get("paid") or 0),
+                    0,
+                ),
+            },
         })
 
 
