@@ -2818,6 +2818,7 @@ class CertificateType(models.Model):
     
     class Meta:
         db_table = "certificate_type"
+        unique_together = ("school", "name")
         
         
         
@@ -3156,6 +3157,21 @@ class StudentNotification(models.Model):
     def __str__(self):
         return f"{self.student.name} - {self.title}"
     
+
+class FCMDeviceToken(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="fcm_device_tokens")
+    token = models.TextField(unique=True)
+    device_type = models.CharField(max_length=50, default="web", blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "fcm_device_tokens"
+        ordering = ["-updated_at"]
+
+    def __str__(self):
+        return f"{self.user.username} - {self.token[:20]}..."
+
 
 class ResultWeightageConfig(models.Model):
     STATUS_CHOICES = (
