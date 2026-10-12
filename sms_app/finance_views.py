@@ -23,6 +23,10 @@ from django.db import transaction
 from django.db.models import Q
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.decorators import api_view, permission_classes, action
+from sms_app.finance_serializers import (
+    StaffSalaryPaymentSerializer,
+    GenerateStaffSalaryPaymentSerializer,
+)
 
 class FeeVerifyView(ModelViewSet):
     queryset = Admission.objects.all()
@@ -542,13 +546,30 @@ class StaffSalaryPaymentViewSet(ModelViewSet):
         return StaffSalaryPaymentSerializer
 
     def create(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.data)
+        staff_id = request.data.get("staff")
+        salary_month = request.data.get("salary_month")
+        instance = None
+        if staff_id and salary_month:
+            school = getattr(request.user, "school", None)
+            if not school:
+                staff_user = getattr(request.user, "staff", None)
+                if staff_user and staff_user.school:
+                    school = staff_user.school
+            query = {"staff_id": staff_id, "salary_month": salary_month}
+            if school:
+                query["school"] = school
+            instance = StaffSalaryPayment.objects.filter(**query).first()
+
+        serializer = self.get_serializer(instance=instance, data=request.data)
         serializer.is_valid(raise_exception=True)
         payment = serializer.save()
         response_serializer = StaffSalaryPaymentSerializer(
             payment, context={"request": request}
         )
-        return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+        return Response(
+            response_serializer.data,
+            status=status.HTTP_201_CREATED if not instance else status.HTTP_200_OK,
+        )
 
     def get_queryset(self):
         queryset = StaffSalaryPayment.objects.filter(
