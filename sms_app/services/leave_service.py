@@ -41,11 +41,17 @@ class LeaveValidationService:
     """
 
     @staticmethod
-    def get_effective_leave_days(school, leave_type, start_date, end_date, is_half_day=False, half_day_session="FULL_DAY"):
+    def get_effective_leave_breakdown(school, leave_type, start_date, end_date, is_half_day=False, half_day_session="FULL_DAY"):
         """
         Determines the list of actual calendar dates that count as leave days,
-        taking into account weekends and school holidays based on leave_type settings.
-        Returns list of tuples: [(date, day_weight, session)]
+        taking into account weekends and school calendar holidays based on leave_type settings.
+        Returns a rich dictionary containing:
+        - total_effective_days: Decimal
+        - calendar_days: int
+        - excluded_weekends: int
+        - excluded_holidays: int
+        - effective_days: list of tuples [(date, day_weight, session)]
+        - breakdown: list of detailed dicts for UI preview
         """
         if start_date > end_date:
             raise ValidationError("Start date cannot be after end date.")
@@ -57,52 +63,176 @@ class LeaveValidationService:
                 raise ValidationError(f"Leave type '{leave_type.name or leave_type.leave_type}' does not permit half-day leave.")
             if half_day_session not in ["FIRST_HALF", "SECOND_HALF"]:
                 half_day_session = "FIRST_HALF"
-            return [(start_date, Decimal("0.5"), half_day_session)]
+
+            day_name = start_date.strftime("%A")
+            is_sunday = (start_date.weekday() == 6)
+
+            if is_sunday and not leave_type.include_weekends:
+                return {
+                    "total_effective_days": Decimal("0.0"),
+                    "calendar_days": 1,
+                    "excluded_weekends": 1,
+                    "excluded_holidays": 0,
+                    "effective_days": [],
+                    "breakdown": [
+                        {
+                            "date": start_date.strftime("%Y-%m-%d"),
+                            "day_name": day_name,
+                            "weight": 0.0,
+                            "is_effective": False,
+                            "reason": "Sunday Weekly Off (Policy Excluded)",
+                            "category": "WEEKEND",
+                        }
+                    ],
+                }
+
+            if not leave_type.include_holidays:
+                holiday_obj = Holiday.objects.filter(
+                    Q(school=school),
+                    Q(is_holiday=True) | Q(event_type__in=["HOLIDAY", "WEEK_OFF"]),
+                    Q(start_date__lte=start_date),
+                    Q(end_date__gte=start_date) | Q(end_date__isnull=True, start_date=start_date),
+                ).first()
+                if holiday_obj:
+                    h_name = holiday_obj.name or holiday_obj.title or "School Holiday"
+                    return {
+                        "total_effective_days": Decimal("0.0"),
+                        "calendar_days": 1,
+                        "excluded_weekends": 0,
+                        "excluded_holidays": 1,
+                        "effective_days": [],
+                        "breakdown": [
+                            {
+                                "date": start_date.strftime("%Y-%m-%d"),
+                                "day_name": day_name,
+                                "weight": 0.0,
+                                "is_effective": False,
+                                "reason": f"Holiday: {h_name} (Policy Excluded)",
+                                "category": "HOLIDAY",
+                            }
+                        ],
+                    }
+
+            return {
+                "total_effective_days": Decimal("0.5"),
+                "calendar_days": 1,
+                "excluded_weekends": 0,
+                "excluded_holidays": 0,
+                "effective_days": [(start_date, Decimal("0.5"), half_day_session)],
+                "breakdown": [
+                    {
+                        "date": start_date.strftime("%Y-%m-%d"),
+                        "day_name": day_name,
+                        "weight": 0.5,
+                        "is_effective": True,
+                        "reason": f"Half Day ({half_day_session.replace('_', ' ').title()})",
+                        "category": "HALF_DAY",
+                    }
+                ],
+            }
 
         # Multi-day or single full-day leave
-        holiday_dates = set()
+        holiday_map = {}
         if not leave_type.include_holidays:
-            # Query holidays for this school spanning the range
-            # Supports both multi-day holidays (with end_date) and single-day holidays (where end_date is NULL)
             holidays = Holiday.objects.filter(
                 Q(school=school),
-                Q(is_holiday=True),
+                Q(is_holiday=True) | Q(event_type__in=["HOLIDAY", "WEEK_OFF"]),
                 Q(start_date__lte=end_date),
                 Q(end_date__gte=start_date) | Q(end_date__isnull=True, start_date__gte=start_date),
             )
             for h in holidays:
-                holiday_end = h.end_date or h.start_date
-                curr = max(h.start_date, start_date)
-                h_end = min(holiday_end, end_date)
-                while curr <= h_end:
-                    holiday_dates.add(curr)
-                    curr += timedelta(days=1)
+                h_name = h.name or h.title or "School Holiday"
+                h_end = h.end_date or h.start_date
+                curr_h = max(h.start_date, start_date)
+                end_bound = min(h_end, end_date)
+                while curr_h <= end_bound:
+                    holiday_map[curr_h] = h_name
+                    curr_h += timedelta(days=1)
 
         result = []
+        breakdown = []
+        excluded_weekends = 0
+        excluded_holidays = 0
+        calendar_days = 0
+
         curr = start_date
         while curr <= end_date:
-            is_weekend = (curr.weekday() == 6)  # Sunday
-            if is_weekend and not leave_type.include_weekends:
+            calendar_days += 1
+            day_name = curr.strftime("%A")
+            is_sunday = (curr.weekday() == 6)
+
+            if is_sunday and not leave_type.include_weekends:
+                excluded_weekends += 1
+                breakdown.append({
+                    "date": curr.strftime("%Y-%m-%d"),
+                    "day_name": day_name,
+                    "weight": 0.0,
+                    "is_effective": False,
+                    "reason": "Sunday Weekly Off (Policy Excluded)",
+                    "category": "WEEKEND",
+                })
                 curr += timedelta(days=1)
                 continue
 
-            if curr in holiday_dates and not leave_type.include_holidays:
+            if curr in holiday_map and not leave_type.include_holidays:
+                excluded_holidays += 1
+                breakdown.append({
+                    "date": curr.strftime("%Y-%m-%d"),
+                    "day_name": day_name,
+                    "weight": 0.0,
+                    "is_effective": False,
+                    "reason": f"Holiday: {holiday_map[curr]} (Policy Excluded)",
+                    "category": "HOLIDAY",
+                })
                 curr += timedelta(days=1)
                 continue
 
+            # Counted working day
             result.append((curr, Decimal("1.0"), "FULL_DAY"))
+            breakdown.append({
+                "date": curr.strftime("%Y-%m-%d"),
+                "day_name": day_name,
+                "weight": 1.0,
+                "is_effective": True,
+                "reason": "Working Day",
+                "category": "WORKING_DAY",
+            })
             curr += timedelta(days=1)
 
         if not result:
             raise ValidationError("Selected date range contains only holidays or weekends excluded by policy.")
 
-        # Check consecutive days limit
         if leave_type.max_consecutive_days > 0 and len(result) > leave_type.max_consecutive_days:
             raise ValidationError(
                 f"Maximum consecutive days allowed for {leave_type.name or leave_type.leave_type} is {leave_type.max_consecutive_days} days. (Requested: {len(result)} days)"
             )
 
-        return result
+        total_effective = sum(d[1] for d in result)
+        return {
+            "total_effective_days": total_effective,
+            "calendar_days": calendar_days,
+            "excluded_weekends": excluded_weekends,
+            "excluded_holidays": excluded_holidays,
+            "effective_days": result,
+            "breakdown": breakdown,
+        }
+
+    @staticmethod
+    def get_effective_leave_days(school, leave_type, start_date, end_date, is_half_day=False, half_day_session="FULL_DAY"):
+        """
+        Determines the list of actual calendar dates that count as leave days,
+        taking into account weekends and school holidays based on leave_type settings.
+        Returns list of tuples: [(date, day_weight, session)]
+        """
+        breakdown_data = LeaveValidationService.get_effective_leave_breakdown(
+            school=school,
+            leave_type=leave_type,
+            start_date=start_date,
+            end_date=end_date,
+            is_half_day=is_half_day,
+            half_day_session=half_day_session,
+        )
+        return breakdown_data["effective_days"]
 
     @staticmethod
     def validate_request_rules(staff, leave_type, start_date, end_date, is_half_day=False):
@@ -386,6 +516,22 @@ class LeaveWorkflowService:
         if leave_req.staff.user_id and leave_req.staff.user_id == approver_user.id:
             raise PermissionDenied("Self-approval is strictly forbidden. Another authorized Principal or Trustee must approve this request.")
 
+        # Hierarchy check: Principal's leave request can ONLY be approved by Trustee / SuperAdmin
+        applicant_cat = str(getattr(leave_req.staff, "category", "") or "").strip().upper()
+        applicant_role = str(getattr(getattr(leave_req.staff, "user", None), "role", "") or "").strip().upper()
+        if applicant_cat == "PRINCIPAL" or applicant_role == "PRINCIPAL":
+            approver_role = str(getattr(approver_user, "role", "") or "").strip().upper()
+            approver_staff = getattr(approver_user, "staff", None)
+            approver_cat = str(getattr(approver_staff, "category", "") or "").strip().upper() if approver_staff else ""
+            is_trustee_or_admin = (
+                approver_user.is_superuser
+                or approver_role in ["TRUSTEE", "ADMIN", "SUPERADMIN", "SUPER_ADMIN", "ADMIN(TRUSTEE)"]
+                or approver_cat in ["TRUSTEE"]
+                or approver_user.groups.filter(name__in=["TRUSTEE", "trustee", "admin(trustee)", "ADMIN"]).exists()
+            )
+            if not is_trustee_or_admin:
+                raise PermissionDenied("Principal's leave requests can only be approved by a Trustee or School Administrator.")
+
         if leave_req.pk:
             leave_req = LeaveRequest.objects.select_for_update().get(pk=leave_req.pk)
 
@@ -464,6 +610,22 @@ class LeaveWorkflowService:
         if leave_req.staff.user_id and leave_req.staff.user_id == approver_user.id:
             raise PermissionDenied("Self-rejection is not allowed via approver action. Use withdraw instead.")
 
+        # Hierarchy check: Principal's leave request can ONLY be rejected by Trustee / SuperAdmin
+        applicant_cat = str(getattr(leave_req.staff, "category", "") or "").strip().upper()
+        applicant_role = str(getattr(getattr(leave_req.staff, "user", None), "role", "") or "").strip().upper()
+        if applicant_cat == "PRINCIPAL" or applicant_role == "PRINCIPAL":
+            approver_role = str(getattr(approver_user, "role", "") or "").strip().upper()
+            approver_staff = getattr(approver_user, "staff", None)
+            approver_cat = str(getattr(approver_staff, "category", "") or "").strip().upper() if approver_staff else ""
+            is_trustee_or_admin = (
+                approver_user.is_superuser
+                or approver_role in ["TRUSTEE", "ADMIN", "SUPERADMIN", "SUPER_ADMIN", "ADMIN(TRUSTEE)"]
+                or approver_cat in ["TRUSTEE"]
+                or approver_user.groups.filter(name__in=["TRUSTEE", "trustee", "admin(trustee)", "ADMIN"]).exists()
+            )
+            if not is_trustee_or_admin:
+                raise PermissionDenied("Principal's leave requests can only be rejected by a Trustee or School Administrator.")
+
         if leave_req.pk:
             leave_req = LeaveRequest.objects.select_for_update().get(pk=leave_req.pk)
 
@@ -518,6 +680,9 @@ class LeaveWorkflowService:
         """
         Staff or authorized user requests cancellation of an APPROVED leave request.
         """
+        if leave_req.pk:
+            leave_req = LeaveRequest.objects.select_for_update().get(pk=leave_req.pk)
+
         if leave_req.status != "APPROVED":
             raise ValidationError(f"Only APPROVED leave requests can be cancelled. Current status is '{leave_req.status}'.")
 
@@ -563,6 +728,17 @@ class LeaveWorkflowService:
             end_date__gte=leave_req.start_date,
         ).first() or LeaveCycle.objects.filter(school=school, is_active=True).first()
 
+        now = timezone.now()
+
+        # Check if any cancelled leave day belongs to a Locked Payroll month
+        month_starts = {date(ld.date.year, ld.date.month, 1) for ld in leave_req.leave_days.all()}
+        from sms_app.models import PayrollRun
+        locked_runs = PayrollRun.objects.filter(school=school, salary_month__in=month_starts, status="Locked")
+        adjustment_note = ""
+        if locked_runs.exists():
+            months_str = ", ".join(r.salary_month.strftime("%B %Y") for r in locked_runs)
+            adjustment_note = f" (Notice: Payroll for {months_str} is Locked. Historical payslips preserved; adjustment entry will apply to upcoming payroll run)."
+
         if leave_cycle:
             balance = LeaveBalance.objects.select_for_update().filter(
                 staff=leave_req.staff, leave_type=leave_req.leave_type, leave_cycle=leave_cycle
@@ -580,11 +756,10 @@ class LeaveWorkflowService:
                     transaction_type="CANCELLATION",
                     amount=leave_req.total_days,
                     balance_after=balance.available,
-                    description=f"Refunded {leave_req.total_days} days following cancellation approval",
+                    description=f"Refunded {leave_req.total_days} days following cancellation approval{adjustment_note}",
                     created_by=approver_user,
                 )
 
-        now = timezone.now()
         leave_req.status = "CANCELLED"
         leave_req.cancellation_status = "APPROVED"
         leave_req.cancellation_action_by = approver_user
@@ -593,6 +768,7 @@ class LeaveWorkflowService:
             {
                 "action": "CANCELLATION_APPROVED",
                 "by_user_id": approver_user.id,
+                "notes": adjustment_note.strip() if adjustment_note else None,
                 "timestamp": now.isoformat(),
             }
         )

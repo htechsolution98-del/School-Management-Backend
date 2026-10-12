@@ -402,6 +402,7 @@ urlpatterns = [
      
      # To get remaining leave for staff when click on apply leave button for show remaining leave
      path('api/get-leave-requests-staff/',GetStaffLeaveRequest.as_view()),
+     path('api/calculate-leave-days/', CalculateLeaveDaysView.as_view()),
      
      
      path("api/approve-all-leave/<int:pk>/",ChangeAllLeaveView.as_view()),
