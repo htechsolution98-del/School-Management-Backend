@@ -168,30 +168,53 @@ class LoginSerializer(serializers.Serializer):
             )
 
         identifier = str(raw_identifier).strip()
-
-        # A digit-only identifier is a mobile number attempt: enforce exactly 10
-        # digits. Non-numeric identifiers stay untouched so school codes and
-        # usernames keep working.
         normalized_mobile = normalize_mobile(identifier)
-        if normalized_mobile.isdigit() and not is_valid_mobile(normalized_mobile):
+        is_ten_digit = normalized_mobile.isdigit() and len(normalized_mobile) == 10
+
+        # If the client explicitly passed the 'mobile' key and it is not 10 digits, enforce valid mobile format
+        if mobile and not is_ten_digit and not (email or username):
             raise serializers.ValidationError(
                 {"message": "Mobile number must be exactly 10 digits."}
             )
 
-        user = CustomUser.objects.filter(
-            Q(email__iexact=identifier)
-            | Q(username__iexact=identifier)
-            | Q(mobile=normalized_mobile)
-        ).first()
+        user = None
+        if is_ten_digit:
+            # 10 digits: Check as mobile number, or username
+            user = CustomUser.objects.filter(
+                Q(mobile=normalized_mobile)
+                | Q(username__iexact=identifier)
+            ).first()
+        else:
+            # Non-10-digit (e.g. Student GR number, username, or email)
+            clean_id = identifier.replace(" ", "")
+            clean_digits = "".join(filter(str.isdigit, identifier))
+            user = CustomUser.objects.filter(
+                Q(username__iexact=identifier)
+                | Q(username__iexact=clean_id)
+                | Q(email__iexact=identifier)
+            ).first()
+
+            if not user and clean_digits:
+                user = CustomUser.objects.filter(
+                    Q(username__iexact=f"GR-{clean_digits}")
+                    | Q(username__iexact=clean_digits)
+                ).first()
+
+            # Fallback: find via Student.gr_no
+            if not user:
+                student_match = (
+                    Student.objects.filter(gr_no__iexact=identifier).select_related("user").first()
+                    or Student.objects.filter(gr_no__iexact=clean_id).select_related("user").first()
+                )
+                if not student_match and clean_digits:
+                    student_match = Student.objects.filter(gr_no__icontains=clean_digits).select_related("user").first()
+                if student_match and student_match.user:
+                    user = student_match.user
 
         if user is None:
             # Safety net: a school's contact details are the same credentials as
             # its login account, so fall back to that account when no user
-            # matches the identifier directly. This keeps a school reachable even
-            # if the mirroring in signals.py has not caught up - for example a
-            # row edited straight in the database. Only the password is checked
-            # against the school's own login user, so the trust model is
-            # unchanged.
+            # matches the identifier directly.
             school = (
                 School.objects.filter(email__iexact=identifier).first()
                 or School.objects.filter(phone=identifier).first()
@@ -199,7 +222,16 @@ class LoginSerializer(serializers.Serializer):
             )
             user = school.login_id if school else None
 
-        if not user or not user.check_password(password):
+        clean_pwd = str(password).strip()
+        pwd_valid = False
+        if user:
+            pwd_valid = (
+                user.check_password(clean_pwd)
+                or user.check_password(clean_pwd.replace(" ", ""))
+                or (clean_pwd.isdigit() and user.check_password(f"GR-{clean_pwd}"))
+            )
+
+        if not user or not pwd_valid:
             raise serializers.ValidationError({"message": "Invalid credentials"})
 
         if not user.is_active:
@@ -6068,17 +6100,15 @@ class HomeworkSubmissionSerializer(serializers.ModelSerializer):
         if "file" not in attrs and "attachment" in attrs:
             attrs["file"] = attrs["attachment"]
 
-        if self.instance is None and not attrs.get("file"):
-            raise serializers.ValidationError({"file": "Please select a file to submit."})
-
         homework = attrs.get("homework")
         if homework and homework.due_date:
-            submission_date = now().date()
+            from django.utils import timezone
+            submission_date = timezone.now().date()
             due_date = homework.due_date
-            if submission_date > due_date and self.instance is None:
-                raise serializers.ValidationError(
-                    "You cannot submit homework after the due date."
-                )
+            if submission_date > due_date:
+                attrs["status"] = "late"
+            elif "status" not in attrs:
+                attrs["status"] = "submitted"
 
         return attrs
     

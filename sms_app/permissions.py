@@ -134,9 +134,24 @@ class Isparent(BasePermission):
             return False
         if getattr(user, "is_superuser", False):
             return True
+        from .models import Perents
         return (
             user.groups.filter(name__in=["PARENT", "PARENTS", "parent", "parents"]).exists()
             or getattr(user, "role", "").lower() in ["parent", "parents"]
+            or Perents.objects.filter(user=user).exists()
+        )
+
+
+class IsStudentOrParent(BasePermission):
+    def has_permission(self, request, view):
+        user = getattr(request, "user", None)
+        if not user or not user.is_authenticated:
+            return False
+        if getattr(user, "is_superuser", False):
+            return True
+        return (
+            Isstudent().has_permission(request, view)
+            or Isparent().has_permission(request, view)
         )
 
 

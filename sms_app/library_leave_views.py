@@ -26,6 +26,7 @@ from .permissions import (
     Isstudent,
     Isteacher,
     Isparent,
+    IsStudentOrParent,
     Is_super_admin,
     Is_admin_trustee,
     IsFeeManager,
@@ -607,123 +608,178 @@ class CertificateAPIView(ModelViewSet):
 
 
 
-class CertificateTypeViewSet(ModelViewSet): #for create, read, update, delete  certificate type - Bonafide
+class CertificateTypeViewSet(ModelViewSet): # for create, read, update, delete certificate types
     serializer_class = CerificateTypeSerializer
-    permission_classes = [IsAuthenticated, IsCLerk]
+    permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
         user = self.request.user
 
-        # Clerk access (same as before)
+        # Clerk/Staff access
+        school = None
         staff = Staff.objects.filter(user=user).first()
-        if staff:
-            return CertificateType.objects.filter(school=staff.school)
+        if staff and staff.school:
+            school = staff.school
 
         # Student access
-        student = Student.objects.filter(user=user).first()
-        if student:
-            return CertificateType.objects.filter(school=student.school)
+        if not school:
+            student = Student.objects.filter(user=user).first()
+            if student and student.school:
+                school = student.school
+
+        # Parent access
+        if not school:
+            from .models import Perents
+            parent_records = Perents.objects.filter(user=user)
+            if parent_records.exists():
+                first_parent = parent_records.first()
+                if first_parent and first_parent.perents_of and first_parent.perents_of.school:
+                    school = first_parent.perents_of.school
+
+        if not school and hasattr(user, "school") and user.school:
+            school = user.school
+
+        if school:
+            # Seed default certificate types if none exist
+            existing = CertificateType.objects.filter(school=school)
+            if not existing.exists():
+                defaults = [
+                    "Bonafide Certificate",
+                    "School Leaving Certificate",
+                    "Character Certificate",
+                    "Fee Clearance / No Dues Certificate",
+                ]
+                for name in defaults:
+                    if not CertificateType.objects.filter(school=school, name__iexact=name).exists():
+                        CertificateType.objects.create(school=school, name=name)
+
+            qs = CertificateType.objects.filter(school=school).order_by("id")
+            seen_names = set()
+            unique_ids = []
+            for item in qs:
+                k = (item.name or "").strip().lower()
+                if k and k not in seen_names:
+                    seen_names.add(k)
+                    unique_ids.append(item.id)
+            return CertificateType.objects.filter(id__in=unique_ids).order_by("name")
 
         return CertificateType.objects.none()
 
-
     def perform_create(self, serializer):
-        staff = Staff.objects.filter(
-            user=self.request.user
-        ).first()
-
+        staff = Staff.objects.filter(user=self.request.user).first()
         if not staff:
             raise ValidationError("Staff profile not found.")
 
         name = serializer.validated_data.get("name")
-
-        if CertificateType.objects.filter(
-            school=staff.school,
-            name__iexact=name
-        ).exists():
-            raise ValidationError(
-                {"name": "This Certificate already exists."}
-            )
+        if CertificateType.objects.filter(school=staff.school, name__iexact=name).exists():
+            raise ValidationError({"name": "This Certificate already exists."})
 
         serializer.save(school=staff.school)
 
 
-
-
-
 class CertificateRequestViewSet(ModelViewSet):
-    """Student-facing viewset: create requests, view status & certificate."""
+    """Student and Parent facing viewset: create requests, view status & certificate."""
     serializer_class = CertificateRequestSerializer
-    permission_classes = [IsAuthenticated, Isstudent]
-    http_method_names = ["get", "post", "head", "options"]  # Students can't update/delete
+    permission_classes = [IsAuthenticated, IsStudentOrParent]
+    http_method_names = ["get", "post", "head", "options"]
 
     def get_queryset(self):
-        student = Student.objects.filter(user=self.request.user).first()
+        user = self.request.user
+        student = Student.objects.filter(user=user).first()
 
-        if not student:
-            return CertificateRequest.objects.none()
+        if student:
+            return (
+                CertificateRequest.objects.filter(student=student)
+                .select_related("certificate_type", "student")
+                .prefetch_related("certificate")
+                .order_by("-created_at")
+            )
 
-        return (
-            CertificateRequest.objects.filter(student=student)
-            .select_related("certificate_type")
-            .prefetch_related("certificate")
-        )
+        # Parent access: view all children's certificate requests
+        from .models import Perents
+        parent_records = Perents.objects.filter(user=user)
+        if parent_records.exists():
+            student_ids = [p.perents_of_id for p in parent_records if p.perents_of_id]
+            student_param = self.request.query_params.get("student")
+            if student_param:
+                return (
+                    CertificateRequest.objects.filter(student_id=student_param, student_id__in=student_ids)
+                    .select_related("certificate_type", "student")
+                    .prefetch_related("certificate")
+                    .order_by("-created_at")
+                )
+            return (
+                CertificateRequest.objects.filter(student_id__in=student_ids)
+                .select_related("certificate_type", "student")
+                .prefetch_related("certificate")
+                .order_by("-created_at")
+            )
+
+        return CertificateRequest.objects.none()
 
     def perform_create(self, serializer):
-        student = Student.objects.filter(user=self.request.user).first()
+        user = self.request.user
+        student = Student.objects.filter(user=user).first()
+
+        if not student:
+            from .models import Perents
+            parent_records = Perents.objects.filter(user=user)
+            if parent_records.exists():
+                student_id = self.request.data.get("student")
+                if student_id:
+                    student = Student.objects.filter(id=student_id, id__in=[p.perents_of_id for p in parent_records]).first()
+                if not student:
+                    first_parent = parent_records.first()
+                    student = first_parent.perents_of if first_parent else None
 
         if not student:
             raise ValidationError("Student profile not found.")
 
         certificate_type = serializer.validated_data["certificate_type"]
 
-        # Prevent duplicate pending requests for the same certificate type
+        # Prevent duplicate pending or approved requests for the same certificate type
         if CertificateRequest.objects.filter(
             student=student,
             certificate_type=certificate_type,
-            status="PENDING"
+            status__in=["PENDING", "APPROVED"]
         ).exists():
             raise ValidationError(
-                "You already have a pending request for this certificate type."
+                "A certificate request for this certificate type has already been submitted or issued."
             )
 
         serializer.save(student=student, school=student.school)
-        
-        
-        
-        
-        
+
+
 class ClerkCertificateRequestViewSet(ModelViewSet):
     """Clerk-facing viewset: view all school requests, approve/reject."""
     serializer_class = ClerkCertificateRequestSerializer
     permission_classes = [IsAuthenticated, IsCLerk]
-    http_method_names = ["get", "patch", "head", "options"]  # Clerks can only read + update
+    http_method_names = ["get", "patch", "head", "options"]
 
     def get_queryset(self):
-        staff = Staff.objects.filter(
-            user=self.request.user
-        ).first()
+        staff = Staff.objects.filter(user=self.request.user).first()
+        school = staff.school if staff else getattr(self.request.user, "school", None)
 
-        if not staff:
+        if not school:
             return CertificateRequest.objects.none()
 
         queryset = (
-            CertificateRequest.objects.filter(school=staff.school)
+            CertificateRequest.objects.filter(school=school)
             .select_related("student__user", "certificate_type")
             .prefetch_related("certificate")
+            .order_by("-created_at")
         )
 
-        # Optional filtering by status: /clerk-requests/?status=PENDING
-        status = self.request.query_params.get("status")
-        if status:
-            queryset = queryset.filter(status=status.upper())
+        status_param = self.request.query_params.get("status")
+        if status_param:
+            queryset = queryset.filter(status=status_param.upper())
 
         return queryset
 
     def perform_update(self, serializer):
+        from uuid import uuid4
         instance = self.get_object()
 
-        # Prevent re-processing an already handled request
         if instance.status != "PENDING":
             raise ValidationError(
                 f"This request has already been {instance.status.lower()}."
@@ -732,32 +788,49 @@ class ClerkCertificateRequestViewSet(ModelViewSet):
         new_status = serializer.validated_data.get("status")
 
         if new_status == "APPROVED":
-            # Validate file BEFORE saving status, so we don't save APPROVED with no file
             file = self.request.FILES.get("file")
-            if not file:
-                raise ValidationError(
-                    "A certificate file (PDF) is required to approve this request."
-                )
+            raw_gen_data = self.request.data.get("generated_data")
+            if isinstance(raw_gen_data, str):
+                try:
+                    import json
+                    generated_data = json.loads(raw_gen_data)
+                except Exception:
+                    generated_data = {"html": raw_gen_data}
+            elif isinstance(raw_gen_data, dict):
+                generated_data = raw_gen_data
+            else:
+                generated_data = {}
 
-            # Now safe to save
+            cert_number = (
+                self.request.data.get("certificate_number")
+                or f"CERT-{uuid4().hex[:8].upper()}"
+            )
             serializer.save(status="APPROVED")
 
-            Certificate.objects.create(
+            cert, created = Certificate.objects.get_or_create(
                 request=instance,
-                certificate_number=f"CERT-{uuid4().hex[:8].upper()}",
-                file=file
+                defaults={
+                    "certificate_number": cert_number,
+                    "file": file,
+                    "generated_data": generated_data,
+                }
             )
-            
-            
+            if not created:
+                if file:
+                    cert.file = file
+                if generated_data:
+                    cert.generated_data = generated_data
+                if cert_number:
+                    cert.certificate_number = cert_number
+                cert.save()
+
             instance.refresh_from_db()
 
         elif new_status == "REJECTED":
             serializer.save(status="REJECTED")
 
         else:
-            raise ValidationError(
-                "Status must be either APPROVED or REJECTED."
-            )
+            raise ValidationError("Status must be either APPROVED or REJECTED.")
 
 
 

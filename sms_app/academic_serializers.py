@@ -2119,17 +2119,14 @@ class HomeworkSubmissionSerializer(serializers.ModelSerializer):
         if "file" not in attrs and "attachment" in attrs:
             attrs["file"] = attrs["attachment"]
 
-        if self.instance is None and not attrs.get("file"):
-            raise serializers.ValidationError({"file": "Please select a file to submit."})
-
         homework = attrs.get("homework")
         if homework and homework.due_date:
             submission_date = timezone.now().date()
             due_date = homework.due_date
-            if submission_date > due_date and self.instance is None:
-                raise serializers.ValidationError(
-                    "You cannot submit homework after the due date."
-                )
+            if submission_date > due_date:
+                attrs["status"] = "late"
+            elif "status" not in attrs:
+                attrs["status"] = "submitted"
 
         return attrs
     

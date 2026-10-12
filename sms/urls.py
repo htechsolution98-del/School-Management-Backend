@@ -458,6 +458,7 @@ urlpatterns = [
     path('api/exam-notification/',ExamView.as_view()),
     path('api/exam-notification/<int:id>/',ExamView.as_view()),
     path('api/attendance-notification/',StudentNotificationView.as_view()),
+    path('api/fcm/register-token/', FCMTokenRegisterView.as_view(), name='register-fcm-token'),
     path('api/monthly-report/',MonthlyProgressReportView.as_view()),
     path("api/monthly-report/<int:id>/",MonthlyProgressReportView.as_view()),
     path('api/parent/children/', ParentChildrenView.as_view()),
