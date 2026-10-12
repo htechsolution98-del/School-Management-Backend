@@ -36,7 +36,9 @@ from rest_framework.exceptions import PermissionDenied
 
 User = get_user_model()
 
-class DepartmentViewSet(ModelViewSet):
+from .trustee_staff_access import TrusteeStaffReadOnlyMixin
+
+class DepartmentViewSet(TrusteeStaffReadOnlyMixin, ModelViewSet):
     queryset = Department.objects.all()
     serializer_class = DepartmentSerializer
     permission_classes = [IsAuthenticated, IsClerkOrTrustee | IsClerkOrPrincipal]
@@ -70,7 +72,8 @@ class DepartmentViewSet(ModelViewSet):
             raise serializers.ValidationError({"name": "A department with this name already exists in your school."})
         serializer.save(school=school)
 
-class StaffView(ModelViewSet):
+class StaffView(TrusteeStaffReadOnlyMixin, ModelViewSet):
+    trustee_report_only = True
     queryset = Staff.objects.all()
     serializer_class = StaffSerializer
     permission_classes = [IsAuthenticated, IsClerkOrTrustee | IsClerkOrPrincipal]
@@ -228,7 +231,8 @@ class StaffView(ModelViewSet):
 
 
 
-class GetTeacherView(ModelViewSet):
+class GetTeacherView(TrusteeStaffReadOnlyMixin, ModelViewSet):
+    trustee_report_only = True
     queryset = Staff.objects.all()
     serializer_class = GetTeacherSerializer
     permission_classes = [IsAuthenticated, IsClerkOrPrincipal]
@@ -332,7 +336,8 @@ class GetTeacherView(ModelViewSet):
 
 
 
-class StaffListView(ModelViewSet):
+class StaffListView(TrusteeStaffReadOnlyMixin, ModelViewSet):
+    trustee_report_only = True
     queryset = Staff.objects.all()
 
     serializer_class = StaffListSirializer
@@ -344,7 +349,7 @@ class StaffListView(ModelViewSet):
 
 
 
-class StaffFaceEnrollView(APIView):
+class StaffFaceEnrollView(TrusteeStaffReadOnlyMixin, APIView):
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser]
 
@@ -395,7 +400,7 @@ from rest_framework import status
 # -------------------------
 
 
-class StaffFaceVerifyView(APIView):
+class StaffFaceVerifyView(TrusteeStaffReadOnlyMixin, APIView):
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser]
 
@@ -696,7 +701,7 @@ from rest_framework.decorators import action
 from django.db.models import Q
 
 
-class TeacherWorkloadViewSet(ModelViewSet):
+class TeacherWorkloadViewSet(TrusteeStaffReadOnlyMixin, ModelViewSet):
     queryset = Staff.objects.all()
     serializer_class = TeacherWorkloadSerializer
     permission_classes = [IsAuthenticated]

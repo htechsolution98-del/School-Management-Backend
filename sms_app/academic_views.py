@@ -905,7 +905,9 @@ class DeleteUpdateLocationView(APIView):
 
 
 
-class AttendanceView(ModelViewSet):
+from .trustee_staff_access import TrusteeStaffReadOnlyMixin
+
+class AttendanceView(TrusteeStaffReadOnlyMixin, ModelViewSet):
     serializer_class = AttendanceSerializer
     permission_classes = [IsAuthenticated]
     http_method_names = ["get", "post", "head", "options"]
@@ -3502,6 +3504,9 @@ class BoardMeetingViewSet(ModelViewSet):
         serializer.save(school=self.request.user.school)
 
 
+from .trustee_staff_access import can_view_salary
+from .trustee_inventory_report import IsTrustee
+
 class TrusteeAnalyticsView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -3519,7 +3524,7 @@ class TrusteeAnalyticsView(APIView):
 
         # 2. Staff Payroll expense
         salary_payments = StaffSalaryPayment.objects.filter(school=school)
-        total_payroll = sum(float(sp.paid_amount or Decimal('0.00')) for sp in salary_payments)
+        total_payroll = sum(float(sp.paid_amount or Decimal('0.00')) for sp in salary_payments) if not IsTrustee().has_permission(request, self) or can_view_salary(user) else None
 
         # 3. Assets and Valuation
         assets = Asset.objects.filter(school=school)

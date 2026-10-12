@@ -107,7 +107,9 @@ def is_user_hr_management(user):
     )
 
 
-class AttendanceSettingViewSet(viewsets.ModelViewSet):
+from .trustee_staff_access import TrusteeStaffReadOnlyMixin
+
+class AttendanceSettingViewSet(TrusteeStaffReadOnlyMixin, viewsets.ModelViewSet):
     serializer_class = AttendanceSettingSerializer
     permission_classes = [IsAuthenticated, IsHRAttendanceAdmin]
 
@@ -124,7 +126,7 @@ class AttendanceSettingViewSet(viewsets.ModelViewSet):
         serializer.save(school=school)
 
 
-class AttendanceRegularizationViewSet(viewsets.ModelViewSet):
+class AttendanceRegularizationViewSet(TrusteeStaffReadOnlyMixin, viewsets.ModelViewSet):
     serializer_class = AttendanceRegularizationSerializer
 
     def get_permissions(self):
@@ -445,7 +447,7 @@ class AttendanceRegularizationViewSet(viewsets.ModelViewSet):
         return Response(self.get_serializer(regularization).data)
 
 
-class LeaveCycleViewSet(viewsets.ModelViewSet):
+class LeaveCycleViewSet(TrusteeStaffReadOnlyMixin, viewsets.ModelViewSet):
     serializer_class = LeaveCycleSerializer
     permission_classes = [IsAuthenticated, IsClerkOrAdmin]
 
@@ -572,7 +574,7 @@ class LeaveTransactionViewSet(viewsets.ReadOnlyModelViewSet):
         return qs.order_by("-created_at")
 
 
-class LeaveReportViewSet(viewsets.ViewSet):
+class LeaveReportViewSet(TrusteeStaffReadOnlyMixin, viewsets.ViewSet):
     permission_classes = [IsAuthenticated, IsClerkOrAdmin]
 
     @action(detail=False, methods=["get"], url_path="summary")
@@ -645,7 +647,7 @@ class LeaveReportViewSet(viewsets.ViewSet):
         })
 
 
-class LeaveTemplateViewSet(viewsets.ModelViewSet):
+class LeaveTemplateViewSet(TrusteeStaffReadOnlyMixin, viewsets.ModelViewSet):
     serializer_class = DynamicLeaveTemplateSerializer
     permission_classes = [IsAuthenticated, IsClerkOrAdmin]
 
@@ -681,7 +683,7 @@ class LeaveTemplateViewSet(viewsets.ModelViewSet):
         )
 
 
-class LeaveTypeViewSet(viewsets.ModelViewSet):
+class LeaveTypeViewSet(TrusteeStaffReadOnlyMixin, viewsets.ModelViewSet):
     serializer_class = DynamicLeaveTypeSerializer
     permission_classes = [IsAuthenticated, IsClerkOrAdmin]
 
@@ -705,7 +707,7 @@ class LeaveTypeViewSet(viewsets.ModelViewSet):
         serializer.save()
 
 
-class DynamicSalaryComponentViewSet(viewsets.ModelViewSet):
+class DynamicSalaryComponentViewSet(TrusteeStaffReadOnlyMixin, viewsets.ModelViewSet):
     serializer_class = DynamicSalaryComponentSerializer
     permission_classes = [IsAuthenticated, IsClerkOrAdmin]
 
@@ -722,7 +724,8 @@ class DynamicSalaryComponentViewSet(viewsets.ModelViewSet):
         serializer.save(school=school)
 
 
-class SalaryStructureViewSet(viewsets.ModelViewSet):
+class SalaryStructureViewSet(TrusteeStaffReadOnlyMixin, viewsets.ModelViewSet):
+    trustee_salary_resource = True
     serializer_class = SalaryStructureSerializer
     permission_classes = [IsAuthenticated, IsClerkOrAdmin]
 
@@ -742,7 +745,8 @@ class SalaryStructureViewSet(viewsets.ModelViewSet):
 from sms_app.services.payroll_service import generate_payroll_run, generate_payslip, MissingPunchError
 
 
-class PayrollRunViewSet(viewsets.ModelViewSet):
+class PayrollRunViewSet(TrusteeStaffReadOnlyMixin, viewsets.ModelViewSet):
+    trustee_salary_resource = True
     serializer_class = PayrollRunSerializer
     permission_classes = [IsAuthenticated, IsClerkOrAdmin]
 
@@ -813,7 +817,8 @@ class PayrollRunViewSet(viewsets.ModelViewSet):
         })
 
 
-class PayrollPayslipViewSet(viewsets.ModelViewSet):
+class PayrollPayslipViewSet(TrusteeStaffReadOnlyMixin, viewsets.ModelViewSet):
+    trustee_salary_resource = True
     serializer_class = PayrollPayslipSerializer
 
     def get_permissions(self):

@@ -1548,9 +1548,21 @@ class LateBookFeesSerializer(serializers.ModelSerializer):
 class BookIssuedSerializer(serializers.ModelSerializer):
     copy_accession_no = serializers.CharField(source="book_copy.accession_no", read_only=True, default=None)
 
+    def validate(self, attrs):
+        student = attrs.get('student', getattr(self.instance, 'student', None))
+        staff = attrs.get('staff', getattr(self.instance, 'staff', None))
+        if bool(student) == bool(staff):
+            raise serializers.ValidationError('Select exactly one student or staff borrower.')
+        if self.instance:
+            for field in ['student', 'staff', 'book', 'book_copy']:
+                if field in attrs and attrs[field] != getattr(self.instance, field):
+                    raise serializers.ValidationError('An existing loan cannot be reassigned. Return it and create a new issue.')
+        return attrs
+
     class Meta:
         model = BookIssued
         fields = "__all__"
+        extra_kwargs = {'due_date': {'required': False}, 'book_copy': {'read_only': True}}
         read_only_fields = [
             "school",
             "book_issued_date",
@@ -1582,6 +1594,9 @@ class BookIssuedSerializer(serializers.ModelSerializer):
             ret["student_roll_no"] = instance.student.roll_no or ""
             ret["student_class"] = str(instance.student.school_class) if instance.student.school_class else ""
             ret["student_division"] = instance.student.division or ""
+        ret['borrower_type'] = 'student' if instance.student_id else 'staff'
+        ret['staff_name'] = instance.staff.name if instance.staff_id else None
+        ret['staff_role'] = instance.staff.category if instance.staff_id else None
         return ret
 
 
@@ -1603,6 +1618,7 @@ class BookIssuedForSelfSerializer(serializers.ModelSerializer):
             "renewal_count",
             "status",
             "student",
+            "staff",
             "due_date"
         ]
 

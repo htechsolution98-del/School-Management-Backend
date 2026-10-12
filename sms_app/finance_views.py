@@ -463,7 +463,9 @@ class FeeWiseClassViewSet(ModelViewSet):
 
 
 
-class SalaryComponentViewSet(ModelViewSet):
+from .trustee_staff_access import TrusteeStaffReadOnlyMixin
+
+class SalaryComponentViewSet(TrusteeStaffReadOnlyMixin, ModelViewSet):
     queryset = SalaryComponent.objects.all()
     serializer_class = SalaryComponentSerializer
     permission_classes = [IsAuthenticated, IsFeeManager]
@@ -497,7 +499,10 @@ class SalaryComponentViewSet(ModelViewSet):
 
 
 
-class StaffSalaryComponentViewSet(ModelViewSet):
+from .trustee_staff_access import TrusteeStaffReadOnlyMixin
+
+class StaffSalaryComponentViewSet(TrusteeStaffReadOnlyMixin, ModelViewSet):
+    trustee_salary_resource = True
     queryset = StaffSalaryComponent.objects.all()
     serializer_class = StaffSalaryComponentSerializer
     permission_classes = [IsAuthenticated, IsFeeManager]
@@ -535,7 +540,8 @@ class StaffSalaryComponentViewSet(ModelViewSet):
 
 
 
-class StaffSalaryPaymentViewSet(ModelViewSet):
+class StaffSalaryPaymentViewSet(TrusteeStaffReadOnlyMixin, ModelViewSet):
+    trustee_salary_resource = True
     queryset = StaffSalaryPayment.objects.all()
     serializer_class = StaffSalaryPaymentSerializer
     permission_classes = [IsAuthenticated, IsFeeManager]
