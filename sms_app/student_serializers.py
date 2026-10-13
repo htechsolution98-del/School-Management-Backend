@@ -1546,30 +1546,21 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
 
             # =========================
             # 7. CREATE PARENT USER
-
             # =========================
             school = self.context["request"].user.school
-            existing_parent = None
-
-            if instance.temp_user_id:
-                existing_parent = (
-                    Perents.objects.filter(
-                        school=school,
-                        perents_of__admission__temp_user=instance.temp_user,
-                    )
-                    .select_related("user")
-                    .first()
+            existing_parent = (
+                Perents.objects.filter(
+                    school=school,
+                    perents_of=student,
                 )
+                .select_related("user")
+                .first()
+            )
 
-            parent_user = existing_parent.user if existing_parent else None
+            parent_user = existing_parent.user if (existing_parent and existing_parent.user) else None
 
             if not parent_user:
-                if instance.temp_user_id:
-                    base_username = f"parent_{school.id}_{instance.temp_user_id}"
-                else:
-                    mobile = student.mobile or ""
-                    base_username = f"parent_{school.id}_{student.id}"
-
+                base_username = f"parent_{school.id}_{student.id}"
                 username = base_username
                 counter = 1 
                 while User.objects.filter(username=username).exists():
@@ -1584,11 +1575,16 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
             group, _ = Group.objects.get_or_create(name="parents")
             parent_user.groups.add(group)
 
-            Perents.objects.get_or_create(
-                school=school,
-                user=parent_user,
-                perents_of=student,
-            )
+            if existing_parent:
+                if existing_parent.user != parent_user:
+                    existing_parent.user = parent_user
+                    existing_parent.save()
+            else:
+                Perents.objects.create(
+                    school=school,
+                    user=parent_user,
+                    perents_of=student,
+                )
 
             # =========================
             # 8. MARK ADMISSION COMPLETE

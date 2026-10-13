@@ -88,23 +88,38 @@ def _field_map(model):
 
 
 def backfill_created_at(apps, schema_editor):
+    try:
+        existing_tables = set(schema_editor.connection.introspection.table_names())
+    except Exception:
+        existing_tables = None
+
     for model_name in MODELS_ADDED_IN_0022:
-        model = apps.get_model("sms_app", model_name)
-        fields = _field_map(model)
-        if "created_at" not in fields:
+        try:
+            model = apps.get_model("sms_app", model_name)
+            if existing_tables is not None and model._meta.db_table not in existing_tables:
+                continue
+            fields = _field_map(model)
+            if "created_at" not in fields:
+                continue
+            model._default_manager.all().update(created_at=None)
+        except Exception:
             continue
-        model._default_manager.all().update(created_at=None)
 
     for model_name, source_field in BACKFILL_SOURCES.items():
-        model = apps.get_model("sms_app", model_name)
-        fields = _field_map(model)
-        if "created_at" not in fields:
+        try:
+            model = apps.get_model("sms_app", model_name)
+            if existing_tables is not None and model._meta.db_table not in existing_tables:
+                continue
+            fields = _field_map(model)
+            if "created_at" not in fields:
+                continue
+            if not isinstance(fields.get(source_field), DateTimeField):
+                continue
+            model._default_manager.filter(
+                **{f"{source_field}__isnull": False}
+            ).update(created_at=F(source_field))
+        except Exception:
             continue
-        if not isinstance(fields.get(source_field), DateTimeField):
-            continue
-        model._default_manager.filter(
-            **{f"{source_field}__isnull": False}
-        ).update(created_at=F(source_field))
 
 
 def noop_reverse(apps, schema_editor):

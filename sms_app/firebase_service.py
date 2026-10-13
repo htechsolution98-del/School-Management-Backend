@@ -115,6 +115,9 @@ def send_student_absence_notification(student, attendance_date, reason=""):
         "student_name": student_name,
         "attendance_date": date_str,
         "status": "ABSENT",
+        "title": title,
+        "message": body,
+        "body": body,
     }
 
     # Fetch parent users
@@ -156,6 +159,25 @@ def send_student_absence_notification(student, attendance_date, reason=""):
             "errors": [],
         }
 
+        frontend_url = os.getenv("FRONTEND_URL", "")
+        fcm_options = None
+        if frontend_url.startswith("https://"):
+            fcm_options = messaging.WebpushFCMOptions(link=f"{frontend_url.rstrip('/')}/parent")
+
+        webpush_kwargs = {
+            "notification": messaging.WebpushNotification(
+                title=title,
+                body=body,
+                icon="/logo.png",
+                badge="/logo.png",
+                require_interaction=True,
+            )
+        }
+        if fcm_options:
+            webpush_kwargs["fcm_options"] = fcm_options
+
+        webpush_config = messaging.WebpushConfig(**webpush_kwargs)
+
         # 1. Send via Multicast to registered parent tokens
         if tokens:
             notification = messaging.Notification(
@@ -166,6 +188,7 @@ def send_student_absence_notification(student, attendance_date, reason=""):
                 tokens=tokens,
                 notification=notification,
                 data=data_payload,
+                webpush=webpush_config,
             )
             response = messaging.send_each_for_multicast(multicast_message)
             results["token_messages_sent"] = response.success_count
@@ -185,6 +208,7 @@ def send_student_absence_notification(student, attendance_date, reason=""):
                 body=body,
             ),
             data=data_payload,
+            webpush=webpush_config,
         )
         try:
             messaging.send(topic_message)

@@ -17,7 +17,15 @@ from django.db.models.functions import Lower
 def normalize_text(apps, schema_editor):
     from sms_app.text_normalization import EXCLUDED_FIELD_NAMES, NORMALIZED_FIELD_NAMES
 
+    try:
+        existing_tables = set(schema_editor.connection.introspection.table_names())
+    except Exception:
+        existing_tables = None
+
     for model in apps.get_models():
+        if existing_tables is not None and model._meta.db_table not in existing_tables:
+            continue
+
         fields = [
             field
             for field in model._meta.get_fields()
