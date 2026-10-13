@@ -447,6 +447,7 @@ class CurrentUserProfileSerializer(serializers.ModelSerializer):
     modules = serializers.SerializerMethodField()
     staff_profile = serializers.SerializerMethodField()
     student_profile = serializers.SerializerMethodField()
+    parent_profile = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -468,6 +469,7 @@ class CurrentUserProfileSerializer(serializers.ModelSerializer):
             "modules",
             "staff_profile",
             "student_profile",
+            "parent_profile",
         ]
         read_only_fields = fields
 
@@ -564,6 +566,38 @@ class CurrentUserProfileSerializer(serializers.ModelSerializer):
             "division": student.division,
             "date_of_birth": student.date_of_birth,
             "school_class": school_class.school_class if school_class else None,
+        }
+
+    def get_parent_profile(self, user):
+        from .models import Perents, StudentNotification, StudentAttendance
+        parent = Perents.objects.filter(user=user).select_related("perents_of", "perents_of__school_class").first()
+        if not parent or not parent.perents_of:
+            return None
+        student = parent.perents_of
+        latest_absent = (
+            StudentNotification.objects.filter(student=student)
+            .order_by("-created_at")
+            .first()
+        )
+        latest_att = (
+            StudentAttendance.objects.filter(student=student)
+            .order_by("-attendance_date")
+            .first()
+        )
+        return {
+            "id": parent.id,
+            "student_id": student.id,
+            "student_name": f"{student.name or ''} {student.surname or ''}".strip(),
+            "gr_no": student.gr_no,
+            "class_name": student.school_class.school_class if student.school_class else "",
+            "division": student.division,
+            "latest_absence_notice": {
+                "title": latest_absent.title if latest_absent else None,
+                "message": latest_absent.message if latest_absent else None,
+                "created_at": latest_absent.created_at.isoformat() if latest_absent and latest_absent.created_at else None,
+                "is_absent": "absent" in (latest_absent.message or "").lower() if latest_absent else False,
+            } if latest_absent else None,
+            "is_today_absent": bool(latest_att and latest_att.is_absent),
         }
 
 
@@ -2008,29 +2042,20 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
 
             # =========================
             # 7. CREATE PARENT USER
-
             # =========================
-            existing_parent = None
-
-            if instance.temp_user_id:
-                existing_parent = (
-                    Perents.objects.filter(
-                        school=school,
-                        perents_of__admission__temp_user=instance.temp_user,
-                    )
-                    .select_related("user")
-                    .first()
+            existing_parent = (
+                Perents.objects.filter(
+                    school=school,
+                    perents_of=student,
                 )
+                .select_related("user")
+                .first()
+            )
 
-            parent_user = existing_parent.user if existing_parent else None
+            parent_user = existing_parent.user if (existing_parent and existing_parent.user) else None
 
             if not parent_user:
-                if instance.temp_user_id:
-                    base_username = f"parent_{school.id}_{instance.temp_user_id}"
-                else:
-                    mobile = student.mobile or ""
-                    base_username = f"parent_{school.id}_{student.id}"
-
+                base_username = f"parent_{school.id}_{student.id}"
                 username = base_username
                 counter = 1 
                 while User.objects.filter(username=username).exists():
@@ -2045,11 +2070,16 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
             group, _ = Group.objects.get_or_create(name="parents")
             parent_user.groups.add(group)
 
-            Perents.objects.get_or_create(
-                school=school,
-                user=parent_user,
-                perents_of=student,
-            )
+            if existing_parent:
+                if existing_parent.user != parent_user:
+                    existing_parent.user = parent_user
+                    existing_parent.save()
+            else:
+                Perents.objects.create(
+                    school=school,
+                    user=parent_user,
+                    perents_of=student,
+                )
 
             # =========================
             # 8. MARK ADMISSION COMPLETE

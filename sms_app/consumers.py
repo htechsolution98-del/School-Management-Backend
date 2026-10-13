@@ -109,8 +109,11 @@ class AttendanceNotificationConsumer(AsyncWebsocketConsumer):
 
         await self.send(
             text_data=json.dumps({
-                "title": event["title"],
-                "message": event["message"],
+                "type": "attendance_alert",
+                "notification_id": event.get("notification_id"),
+                "title": event.get("title"),
+                "message": event.get("message"),
+                "is_absent": "absent" in (event.get("message") or "").lower(),
             })
         )
 
@@ -120,16 +123,18 @@ class AttendanceNotificationConsumer(AsyncWebsocketConsumer):
         parent_records = (
             Perents.objects.filter(
                 user=self.user
-            )
+            ).select_related("perents_of")
         )
 
         groups = []
 
         for parent in parent_records:
-
-            groups.append(
-                f"school_{parent.school_id}_student_{parent.perents_of_id}_attendance"
-            )
+            school_id = parent.school_id or (parent.perents_of.school_id if parent.perents_of else None)
+            student_id = parent.perents_of_id
+            if school_id and student_id:
+                groups.append(
+                    f"school_{school_id}_student_{student_id}_attendance"
+                )
 
         return groups
     

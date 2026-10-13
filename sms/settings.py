@@ -247,9 +247,21 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # }
 
 import dj_database_url
-DATABASE_URL = os.environ.get("DATABASE_URL")
+import socket
+import urllib.parse
 
+DATABASE_URL = os.environ.get("DATABASE_URL")
+use_postgres = False
 if DATABASE_URL:
+    try:
+        parsed_db = urllib.parse.urlparse(DATABASE_URL)
+        if parsed_db.hostname:
+            socket.getaddrinfo(parsed_db.hostname, parsed_db.port or 5432, socket.AF_UNSPEC, socket.SOCK_STREAM)
+            use_postgres = True
+    except Exception:
+        use_postgres = False
+
+if use_postgres and DATABASE_URL:
     DATABASES = {
         "default": dj_database_url.parse(DATABASE_URL, conn_max_age=600)
     }

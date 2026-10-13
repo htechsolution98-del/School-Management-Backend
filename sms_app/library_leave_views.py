@@ -48,19 +48,22 @@ class IsClassTeacher(BasePermission):
 class IsLibrarian(BasePermission):     
     def has_permission(self, request, view):
         user = getattr(request, "user", None)
-        if not (user and user.is_authenticated):
+        if not user or not user.is_authenticated:
             return False
-        if getattr(user, "is_superuser", False) or getattr(user, "is_staff", False):
+        if getattr(user, "is_superuser", False):
             return True
-        role = str(getattr(user, "role", "") or "").strip().lower()
-        if role in ["librarian", "principal", "admin", "superadmin", "super_admin"]:
+        role = str(getattr(user, "role", "") or "").strip().upper()
+        if role in ["LIBRARIAN", "PRINCIPAL", "ADMIN", "SUPERADMIN", "SUPER_ADMIN"]:
             return True
-        if user.groups.filter(name__iregex=r'^(librarian|principal|superadmin|admin)$').exists():
+        group_names = [g.name.strip().upper() for g in user.groups.all()]
+        if any(g in ["LIBRARIAN", "PRINCIPAL", "SUPERADMIN", "SUPER_ADMIN"] for g in group_names):
             return True
-        staff = Staff.objects.filter(user=user).first() or getattr(user, "staff", None)
+        staff = Staff.objects.filter(user=user).first()
         if staff:
-            cat = str(getattr(staff, "category", "") or "").strip().lower()
-            if cat in ["librarian", "principal", "admin"]:
+            cat = str(getattr(staff, "category", "") or "").strip().upper()
+            if cat in ["LIBRARIAN", "PRINCIPAL", "ADMIN"]:
+                return True
+            if role == "LIBRARIAN":
                 return True
         return False
 
@@ -2173,6 +2176,10 @@ class BookCategoryViewSet(ModelViewSet):
             raise PermissionDenied("You are not registered as staff.")
         serializer.save(school=staff.school)
 
+    def perform_destroy(self, instance):
+        instance.is_active = False
+        instance.save()
+
 
 class AuthorViewSet(ModelViewSet):
     serializer_class = AuthorSerializer
@@ -2189,6 +2196,10 @@ class AuthorViewSet(ModelViewSet):
         if not staff:
             raise PermissionDenied("You are not registered as staff.")
         serializer.save(school=staff.school)
+
+    def perform_destroy(self, instance):
+        instance.is_active = False
+        instance.save()
 
 
 class PublisherViewSet(ModelViewSet):
@@ -2207,6 +2218,10 @@ class PublisherViewSet(ModelViewSet):
             raise PermissionDenied("You are not registered as staff.")
         serializer.save(school=staff.school)
 
+    def perform_destroy(self, instance):
+        instance.is_active = False
+        instance.save()
+
 
 class RackViewSet(ModelViewSet):
     serializer_class = RackSerializer
@@ -2224,6 +2239,12 @@ class RackViewSet(ModelViewSet):
             raise PermissionDenied("You are not registered as staff.")
         serializer.save(school=staff.school)
 
+    def perform_destroy(self, instance):
+        instance.is_active = False
+        instance.save()
+        # Also deactivate child shelves
+        instance.shelves.all().update(is_active=False)
+
 
 class ShelfViewSet(ModelViewSet):
     serializer_class = ShelfSerializer
@@ -2240,6 +2261,10 @@ class ShelfViewSet(ModelViewSet):
         if not staff:
             raise PermissionDenied("You are not registered as staff.")
         serializer.save(school=staff.school)
+
+    def perform_destroy(self, instance):
+        instance.is_active = False
+        instance.save()
 
 
 class BookCopyViewSet(ModelViewSet):
@@ -2265,6 +2290,66 @@ class BookCopyViewSet(ModelViewSet):
         book.total_copies = book.copies.filter(is_active=True).count()
         book.available_copies = book.copies.filter(is_active=True, status="AVAILABLE").count()
         book.save()
+
+    def perform_destroy(self, instance):
+        if instance.status == "ISSUED":
+            raise ValidationError("Cannot delete or dispose a copy that is currently checked out.")
+        instance.is_active = False
+        instance.status = "DISPOSED"
+        instance.save()
+        book = instance.book
+        book.total_copies = book.copies.filter(is_active=True).count()
+        book.available_copies = book.copies.filter(is_active=True, status="AVAILABLE").count()
+        book.save()
+
+    @action(detail=True, methods=["post"], url_path="transfer")
+    def transfer_copy(self, request, pk=None):
+        staff = Staff.objects.filter(user=request.user).first()
+        if not staff:
+            raise PermissionDenied("You are not registered as staff.")
+        copy = self.get_queryset().filter(pk=pk).first()
+        if not copy:
+            raise NotFound("Book copy not found.")
+
+        rack_id = request.data.get("rack_id")
+        shelf_id = request.data.get("shelf_id")
+
+        rack = Rack.objects.filter(id=rack_id, school=staff.school).first() if rack_id else None
+        shelf = Shelf.objects.filter(id=shelf_id, school=staff.school).first() if shelf_id else None
+
+        copy.rack = rack
+        copy.shelf = shelf
+        copy.save()
+        return Response(self.get_serializer(copy).data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"], url_path="change-status")
+    def change_status(self, request, pk=None):
+        staff = Staff.objects.filter(user=request.user).first()
+        if not staff:
+            raise PermissionDenied("You are not registered as staff.")
+        copy = self.get_queryset().filter(pk=pk).first()
+        if not copy:
+            raise NotFound("Book copy not found.")
+
+        new_status = request.data.get("status")
+        new_condition = request.data.get("condition")
+
+        if new_status in ["AVAILABLE", "DAMAGED", "UNDER_REPAIR", "LOST", "DISPOSED"]:
+            if copy.status == "ISSUED" and new_status not in ["LOST", "DAMAGED"]:
+                raise ValidationError("Cannot change status while copy is checked out.")
+            copy.status = new_status
+            if new_status == "DISPOSED":
+                copy.is_active = False
+
+        if new_condition in ["GOOD", "MINOR_DAMAGE", "MAJOR_DAMAGE"]:
+            copy.condition = new_condition
+
+        copy.save()
+        book = copy.book
+        book.total_copies = book.copies.filter(is_active=True).count()
+        book.available_copies = book.copies.filter(is_active=True, status="AVAILABLE").count()
+        book.save()
+        return Response(self.get_serializer(copy).data, status=status.HTTP_200_OK)
 
     @action(detail=False, methods=["post"], url_path="generate-copies")
     def generate_copies(self, request):
@@ -2432,6 +2517,7 @@ class BookIssuedView(ModelViewSet):
         student = serializer.validated_data.get("student")
         borrower_staff = serializer.validated_data.get("staff")
         due_date = serializer.validated_data.get("due_date")
+        book_copy_id = self.request.data.get("book_copy") or self.request.data.get("book_copy_id")
 
         if book.school_id != staff.school_id:
             raise ValidationError("That book does not belong to your school.")
@@ -2441,7 +2527,7 @@ class BookIssuedView(ModelViewSet):
         if borrower_staff and not borrower_staff.is_active:
             raise ValidationError('That staff account is inactive.')
 
-        _issue_book(book=book, student=student, borrower_staff=borrower_staff, school=staff.school, serializer=serializer, due_date=due_date)
+        _issue_book(book=book, student=student, borrower_staff=borrower_staff, school=staff.school, serializer=serializer, due_date=due_date, requested_copy_id=book_copy_id)
 
     @action(detail=True, methods=["post"], url_path="return")
     def return_book(self, request, pk=None):
@@ -2456,8 +2542,10 @@ class BookIssuedView(ModelViewSet):
         remarks = request.data.get("remarks", "")
         damage_fee = request.data.get("damage_fee")
         lost_fee = request.data.get("lost_fee")
+        pay_now = request.data.get("pay_now", False)
+        payment_method = request.data.get("payment_method", "Cash")
 
-        _finalize_return(issued, condition=condition, remarks=remarks, custom_damage_fee=damage_fee, custom_lost_fee=lost_fee)
+        _finalize_return(issued, condition=condition, remarks=remarks, custom_damage_fee=damage_fee, custom_lost_fee=lost_fee, pay_now=pay_now, payment_method=payment_method)
 
         serializer = self.get_serializer(issued)
         return Response(serializer.data, status=status.HTTP_200_OK)
@@ -2485,13 +2573,61 @@ class BookIssuedView(ModelViewSet):
             raise NotFound("Issued record not found.")
 
         remarks = request.data.get("remarks", "Reported lost by student")
-        _finalize_return(issued, condition="LOST", remarks=remarks)
+        pay_now = request.data.get("pay_now", False)
+        payment_method = request.data.get("payment_method", "Cash")
+
+        _finalize_return(issued, condition="LOST", remarks=remarks, pay_now=pay_now, payment_method=payment_method)
 
         serializer = self.get_serializer(issued)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
+    @action(detail=True, methods=["post"], url_path="pay-fine")
+    def pay_fine(self, request, pk=None):
+        staff = Staff.objects.filter(user=request.user).first()
+        if staff is None:
+            raise PermissionDenied("You are not registered as staff for any school.")
+        issued = self.get_queryset().filter(pk=pk).first()
+        if issued is None:
+            raise NotFound("Issued record not found.")
 
-def _issue_book(*, book, student, school, serializer, due_date=None, borrower_staff=None):
+        if issued.total_fine <= Decimal("0.00"):
+            raise ValidationError("This loan transaction has no fine to pay.")
+        if issued.is_fine_paid:
+            raise ValidationError("This fine has already been fully settled.")
+
+        remaining = max(Decimal("0.00"), issued.total_fine - issued.fine_paid_amount)
+        amount_raw = request.data.get("amount")
+        amount = Decimal(str(amount_raw)) if amount_raw is not None else remaining
+
+        if amount <= 0:
+            raise ValidationError("Payment amount must be greater than zero.")
+        if amount > remaining:
+            raise ValidationError(f"Amount ₹{amount} exceeds remaining fine due of ₹{remaining}.")
+
+        method = request.data.get("payment_method", "Cash").strip()
+        now = timezone.now()
+        receipt_no = f"LIB-RCP-{now.strftime('%Y%m%d')}-{issued.id:04d}"
+
+        issued.fine_paid_amount += amount
+        if issued.fine_paid_amount >= issued.total_fine:
+            issued.is_fine_paid = True
+        issued.payment_method = method
+        issued.payment_date = now
+        issued.payment_receipt_no = receipt_no
+        issued.save()
+
+        serializer = self.get_serializer(issued)
+        return Response({
+            "detail": "Fine payment recorded successfully.",
+            "receipt_no": receipt_no,
+            "amount_paid": str(amount),
+            "remaining_due": str(max(Decimal("0.00"), issued.total_fine - issued.fine_paid_amount)),
+            "is_fine_paid": issued.is_fine_paid,
+            "record": serializer.data
+        }, status=status.HTTP_200_OK)
+
+
+def _issue_book(*, book, student, school, serializer, due_date=None, borrower_staff=None, requested_copy_id=None):
     from django.db import transaction
     with transaction.atomic():
         book = Book.objects.select_for_update().get(pk=book.pk, school=school)
@@ -2500,35 +2636,55 @@ def _issue_book(*, book, student, school, serializer, due_date=None, borrower_st
             raise ValidationError('Select one borrower from your school.')
         # Serialize checkouts for a borrower across different titles too.
         type(borrower).objects.select_for_update().get(pk=borrower.pk)
-        return _issue_book_locked(book=book, student=student, borrower_staff=borrower_staff, school=school, serializer=serializer, due_date=due_date)
+        return _issue_book_locked(book=book, student=student, borrower_staff=borrower_staff, school=school, serializer=serializer, due_date=due_date, requested_copy_id=requested_copy_id)
 
 
-def _issue_book_locked(*, book, student, school, serializer, due_date=None, borrower_staff=None):
+def _issue_book_locked(*, book, student, school, serializer, due_date=None, borrower_staff=None, requested_copy_id=None):
     setting = _get_or_create_library_setting(school)
     borrower_filter = {'student': student} if student else {'staff': borrower_staff}
 
-    # 1. Rule Check: Active Loan Limit per student
+    # 1. Rule Check: Active Loan Limit per borrower
     active_loans_count = BookIssued.objects.filter(
         school=school, status="ISSUED", **borrower_filter
     ).count()
     if active_loans_count >= setting.max_books_per_student:
-        raise ValidationError(f"Borrower has reached the maximum allowed limit of {setting.max_books_per_student} books.")
+        raise ValidationError(f"Issue Limit Exceeded: Borrower has reached the maximum allowed limit of {setting.max_books_per_student} books.")
 
     # 2. Rule Check: Book Availability
     if book.available_copies <= 0:
-        raise ValidationError("No copies of this book are currently available. You can reserve this book.")
+        raise ValidationError("Book Unavailable: No copies of this book are currently available. You can place a hold in the reservation queue.")
 
-    # 3. Rule Check: Student duplicate checkout
+    # 3. Rule Check: Duplicate checkout
     already_issued = BookIssued.objects.filter(
         school=school, book=book, status="ISSUED", **borrower_filter
     ).exists()
     if already_issued:
-        raise ValidationError("This borrower already has a copy of this book checked out.")
+        raise ValidationError("Duplicate Loan: This borrower already has a copy of this book checked out.")
 
-    # 4. Find available physical BookCopy
-    available_copy = BookCopy.objects.filter(
-        school=school, book=book, status="AVAILABLE", is_active=True
-    ).first()
+    # 4. Rule Check: Pending Fines (Section 5 Scenario 4 & Section 27)
+    if not setting.allow_issue_with_fine:
+        unpaid_fines = BookIssued.objects.filter(
+            school=school,
+            is_fine_paid=False,
+            total_fine__gt=0,
+            **borrower_filter
+        )
+        total_unpaid = sum(max(Decimal("0.00"), f.total_fine - f.fine_paid_amount) for f in unpaid_fines)
+        if total_unpaid > 0:
+            raise ValidationError(f"Issue Blocked: Borrower has an unpaid pending library fine of ₹{total_unpaid}. Please clear pending library fines before checking out books.")
+
+    # 5. Find physical BookCopy (either specifically requested or first available)
+    if requested_copy_id:
+        c_id = requested_copy_id.id if hasattr(requested_copy_id, 'id') else requested_copy_id
+        available_copy = BookCopy.objects.filter(
+            id=c_id, school=school, book=book, status="AVAILABLE", is_active=True
+        ).first()
+        if not available_copy:
+            raise ValidationError("The requested book copy barcode/accession number is not currently available for lending.")
+    else:
+        available_copy = BookCopy.objects.filter(
+            school=school, book=book, status="AVAILABLE", is_active=True
+        ).first()
 
     now = timezone.now()
 
@@ -2538,13 +2694,25 @@ def _issue_book_locked(*, book, student, school, serializer, due_date=None, borr
     elif due_date <= now:
         raise ValidationError("Due date must be in the future.")
 
-    # Update physical copy status if exists
+    # Update physical copy status
     if available_copy:
         available_copy.status = "ISSUED"
         available_copy.save()
 
     book.available_copies = max(0, book.available_copies - 1)
     book.save()
+
+    # If student had an active reservation for this book, mark it as ISSUED
+    if student:
+        active_res = BookReservation.objects.filter(
+            school=school,
+            book=book,
+            student=student,
+            status__in=["WAITING", "AVAILABLE"]
+        ).first()
+        if active_res:
+            active_res.status = "ISSUED"
+            active_res.save()
 
     serializer.save(
         school=school,
@@ -2556,6 +2724,8 @@ def _issue_book_locked(*, book, student, school, serializer, due_date=None, borr
         due_date=due_date,
         renewal_count=0,
         status="ISSUED",
+        is_fine_paid=False,
+        fine_paid_amount=Decimal("0.00"),
     )
 
 
@@ -2567,6 +2737,25 @@ def _renew_book_loan(issued: BookIssued):
 
     if issued.renewal_count >= setting.max_renewal_count:
         raise ValidationError(f"Maximum renewal limit of {setting.max_renewal_count} times reached for this book.")
+
+    # Check rule: Renewal with fine
+    if not setting.allow_renewal_with_fine:
+        now = timezone.now()
+        grace_days = setting.grace_period_days or 0
+        grace_deadline = issued.due_date + timezone.timedelta(days=grace_days)
+        if now > grace_deadline:
+            raise ValidationError("Cannot renew: This loan is already overdue. Please return the book and clear any overdue fees.")
+
+        borrower_filter = {'student': issued.student} if issued.student else {'staff': issued.staff}
+        unpaid_fines = BookIssued.objects.filter(
+            school=issued.school,
+            is_fine_paid=False,
+            total_fine__gt=0,
+            **borrower_filter
+        )
+        total_unpaid = sum(max(Decimal("0.00"), f.total_fine - f.fine_paid_amount) for f in unpaid_fines)
+        if total_unpaid > 0:
+            raise ValidationError(f"Cannot renew: Borrower has an unpaid pending library fine of ₹{total_unpaid}. Please settle fines before renewal.")
 
     # Check if someone is in the reservation queue for this book
     reservation_exists = BookReservation.objects.filter(
@@ -2581,7 +2770,7 @@ def _renew_book_loan(issued: BookIssued):
     issued.save()
 
 
-def _finalize_return(issued: BookIssued, condition="GOOD", remarks="", custom_damage_fee=None, custom_lost_fee=None):
+def _finalize_return(issued: BookIssued, condition="GOOD", remarks="", custom_damage_fee=None, custom_lost_fee=None, pay_now=False, payment_method="Cash"):
     if issued.status != "ISSUED" or issued.actual_return_date is not None:
         raise ValidationError("This book transaction has already been closed.")
     if condition not in ['GOOD', 'MINOR_DAMAGE', 'MAJOR_DAMAGE', 'DAMAGED', 'LOST']:
@@ -2637,6 +2826,21 @@ def _finalize_return(issued: BookIssued, condition="GOOD", remarks="", custom_da
             issued.book_copy.save()
 
     issued.total_fine = late_fee + damage_fee + lost_fee
+
+    if issued.total_fine <= Decimal("0.00"):
+        issued.is_fine_paid = True
+        issued.fine_paid_amount = Decimal("0.00")
+    else:
+        if pay_now:
+            issued.is_fine_paid = True
+            issued.fine_paid_amount = issued.total_fine
+            issued.payment_method = payment_method or "Cash"
+            issued.payment_date = now
+            issued.payment_receipt_no = f"LIB-RCP-{now.strftime('%Y%m%d')}-{issued.id:04d}"
+        else:
+            issued.is_fine_paid = False
+            issued.fine_paid_amount = Decimal("0.00")
+
     issued.save()
 
     # If good or minor damage, restore available count
@@ -2715,6 +2919,34 @@ class BookReservationViewSet(ModelViewSet):
         reservation.status = "CANCELLED"
         reservation.save()
         return Response({"detail": "Reservation cancelled successfully."}, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=["post"], url_path="check-expiries")
+    def check_expiries(self, request):
+        staff = Staff.objects.filter(user=request.user).first()
+        if not staff:
+            raise PermissionDenied("You are not registered as staff.")
+        now = timezone.now()
+        expired_list = BookReservation.objects.filter(
+            school=staff.school,
+            status="AVAILABLE",
+            expiry_date__lt=now
+        )
+        expired_count = 0
+        for res in expired_list:
+            res.status = "EXPIRED"
+            res.save()
+            expired_count += 1
+            # Promote next waiting student
+            next_res = BookReservation.objects.filter(
+                school=staff.school, book=res.book, status="WAITING"
+            ).order_by("queue_number", "reservation_date").first()
+            if next_res:
+                next_res.status = "AVAILABLE"
+                next_res.available_date = now
+                next_res.expiry_date = now + timezone.timedelta(days=2)
+                next_res.save()
+
+        return Response({"detail": f"Checked expiries. {expired_count} hold(s) expired."}, status=status.HTTP_200_OK)
 
 
 class BookViewStudent(ModelViewSet):
@@ -2977,3 +3209,170 @@ class ReportsView(ViewSet):
             for row in qs
         ]
         return Response({"results": data})
+
+    @action(detail=False, methods=["get"], url_path="inventory-audit")
+    def inventory_audit(self, request):
+        """Comprehensive library inventory verification for Academic Year Closing (Section 23)."""
+        staff = Staff.objects.filter(user=request.user).first()
+        if staff is None:
+            raise PermissionDenied("You are not registered as staff for any school.")
+
+        total_titles = Book.objects.filter(school=staff.school).count()
+        copies = BookCopy.objects.filter(school=staff.school)
+        active_copies = copies.filter(is_active=True)
+        copies_by_status = active_copies.values("status").annotate(count=Count("id"))
+        status_map = {row["status"]: row["count"] for row in copies_by_status}
+
+        now = timezone.now()
+        issued_loans = BookIssued.objects.filter(school=staff.school, status="ISSUED")
+        fee_policy = LateBookFees.objects.filter(school=staff.school).first()
+        grace_days = fee_policy.grace_period_days if fee_policy else 0
+
+        overdue_count = 0
+        for loan in issued_loans:
+            grace_deadline = loan.due_date + timezone.timedelta(days=grace_days)
+            if now > grace_deadline:
+                overdue_count += 1
+
+        pending_fines = BookIssued.objects.filter(school=staff.school, is_fine_paid=False, total_fine__gt=0)
+        total_pending_fine = sum(max(Decimal("0.00"), f.total_fine - f.fine_paid_amount) for f in pending_fines)
+        collected_fines = BookIssued.objects.filter(school=staff.school).aggregate(total=Sum("fine_paid_amount"))["total"] or Decimal("0.00")
+
+        return Response({
+            "total_titles": total_titles,
+            "total_physical_copies": active_copies.count(),
+            "available_copies": status_map.get("AVAILABLE", 0),
+            "issued_copies": status_map.get("ISSUED", 0),
+            "reserved_copies": status_map.get("RESERVED", 0),
+            "damaged_copies": status_map.get("DAMAGED", 0),
+            "lost_copies": status_map.get("LOST", 0),
+            "under_repair_copies": status_map.get("UNDER_REPAIR", 0),
+            "disposed_copies": copies.filter(status="DISPOSED").count(),
+            "total_overdue_loans": overdue_count,
+            "total_pending_fines": str(total_pending_fine),
+            "total_collected_fines": str(collected_fines),
+            "borrowers_with_pending_fines_count": pending_fines.values("student_id", "staff_id").distinct().count(),
+        })
+
+
+class LibraryClearanceView(ViewSet):
+    """
+    Student Library Clearance (Section 22 of Library Flow).
+    Verifies outstanding loans, overdue books, and pending fines for TC / clearance.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def list(self, request):
+        staff = Staff.objects.filter(user=request.user).first()
+        student_user = Student.objects.filter(user=request.user).first()
+        student_id = request.query_params.get("student_id")
+
+        if student_user:
+            student = student_user
+        elif staff and student_id:
+            student = Student.objects.filter(id=student_id, school=staff.school).first()
+            if not student:
+                raise NotFound("Student not found.")
+        elif staff and not student_id:
+            # Overview of all students who currently have pending library dues or unreturned books
+            active_issues = BookIssued.objects.filter(school=staff.school, status="ISSUED", student__isnull=False).select_related("student", "book")
+            unpaid_fines = BookIssued.objects.filter(school=staff.school, is_fine_paid=False, total_fine__gt=0, student__isnull=False).select_related("student", "book")
+
+            students_map = {}
+            for issue in active_issues:
+                s = issue.student
+                if s.id not in students_map:
+                    students_map[s.id] = {
+                        "student_id": s.id,
+                        "student_name": f"{s.name} {s.surname or ''}".strip(),
+                        "gr_no": s.gr_no or "",
+                        "roll_no": s.roll_no or "",
+                        "class_name": str(s.school_class) if s.school_class else "",
+                        "active_books_count": 0,
+                        "pending_fine_total": Decimal("0.00"),
+                        "status": "PENDING"
+                    }
+                students_map[s.id]["active_books_count"] += 1
+
+            for fine in unpaid_fines:
+                s = fine.student
+                due = max(Decimal("0.00"), fine.total_fine - fine.fine_paid_amount)
+                if due <= 0:
+                    continue
+                if s.id not in students_map:
+                    students_map[s.id] = {
+                        "student_id": s.id,
+                        "student_name": f"{s.name} {s.surname or ''}".strip(),
+                        "gr_no": s.gr_no or "",
+                        "roll_no": s.roll_no or "",
+                        "class_name": str(s.school_class) if s.school_class else "",
+                        "active_books_count": 0,
+                        "pending_fine_total": Decimal("0.00"),
+                        "status": "PENDING"
+                    }
+                students_map[s.id]["pending_fine_total"] += due
+
+            data = list(students_map.values())
+            for item in data:
+                item["pending_fine_total"] = str(item["pending_fine_total"])
+
+            return Response({
+                "pending_clearance_students_count": len(data),
+                "results": data
+            })
+        else:
+            raise ValidationError("student_id query parameter is required.")
+
+        # Detailed breakdown for a single student
+        school = student.school
+        issued_books = BookIssued.objects.filter(school=school, student=student, status="ISSUED").select_related("book", "book_copy")
+        unpaid_fines = BookIssued.objects.filter(school=school, student=student, is_fine_paid=False, total_fine__gt=0).select_related("book")
+        lost_books = BookIssued.objects.filter(school=school, student=student, status="LOST", is_fine_paid=False).select_related("book")
+        damaged_books = BookIssued.objects.filter(school=school, student=student, status="DAMAGED", is_fine_paid=False).select_related("book")
+
+        total_pending_fine = sum(max(Decimal("0.00"), f.total_fine - f.fine_paid_amount) for f in unpaid_fines)
+
+        pending_reasons = []
+        if issued_books.exists():
+            pending_reasons.append(f"{issued_books.count()} book(s) currently checked out and not yet returned.")
+        if total_pending_fine > Decimal("0.00"):
+            pending_reasons.append(f"Unpaid library fine of ₹{total_pending_fine}.")
+        if lost_books.exists():
+            pending_reasons.append(f"{lost_books.count()} lost book penalty settlement pending.")
+        if damaged_books.exists():
+            pending_reasons.append(f"{damaged_books.count()} damaged book fee settlement pending.")
+
+        is_cleared = len(pending_reasons) == 0
+
+        return Response({
+            "student_id": student.id,
+            "student_name": f"{student.name} {student.surname or ''}".strip(),
+            "gr_no": student.gr_no or "",
+            "roll_no": student.roll_no or "",
+            "class_name": str(student.school_class) if student.school_class else "",
+            "status": "APPROVED" if is_cleared else "PENDING",
+            "is_cleared": is_cleared,
+            "pending_reasons": pending_reasons,
+            "active_issued_count": issued_books.count(),
+            "pending_fine_amount": str(total_pending_fine),
+            "issued_books": [
+                {
+                    "id": b.id,
+                    "title": b.book.title,
+                    "accession_no": b.book_copy.accession_no if b.book_copy else "",
+                    "due_date": b.due_date,
+                }
+                for b in issued_books
+            ],
+            "unpaid_fine_records": [
+                {
+                    "id": f.id,
+                    "title": f.book.title,
+                    "total_fine": str(f.total_fine),
+                    "paid_amount": str(f.fine_paid_amount),
+                    "due_amount": str(max(Decimal("0.00"), f.total_fine - f.fine_paid_amount)),
+                    "reason": f.condition_on_return or ("Overdue" if f.is_late else "Fine"),
+                }
+                for f in unpaid_fines if (f.total_fine - f.fine_paid_amount) > Decimal("0.00")
+            ],
+        })

@@ -1950,43 +1950,199 @@ class StudentAttendanceView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-
+        school = getattr(request.user, "school", None)
+        today_date = timezone.now().date()
         queryset = (
             StudentAttendance.objects
-            .filter(school=request.user.school)
+            .filter(attendance_date__lte=today_date)
             .select_related(
                 "student",
+                "student__school_class",
                 "attendance_by",
             )
+            .order_by("-attendance_date", "-id")
         )
+        if school:
+            queryset = queryset.filter(school=school)
 
-        serializer = StudentAttendanceSerializer(
-            queryset,
-            many=True
-        )
+        # Filters from query params
+        params = getattr(request, "query_params", getattr(request, "GET", {}))
+        req_date = params.get("date")
+        if req_date:
+            try:
+                from datetime import datetime
+                parsed_date = datetime.strptime(req_date.split("T")[0], "%Y-%m-%d").date()
+                if parsed_date <= today_date:
+                    queryset = queryset.filter(attendance_date=parsed_date)
+                else:
+                    return Response([])
+            except Exception:
+                queryset = queryset.filter(attendance_date=req_date)
 
-        return Response(serializer.data)
+        start_date = params.get("start_date")
+        if start_date:
+            queryset = queryset.filter(attendance_date__gte=start_date)
+
+        end_date = params.get("end_date")
+        if end_date:
+            try:
+                from datetime import datetime
+                parsed_end = datetime.strptime(end_date.split("T")[0], "%Y-%m-%d").date()
+                queryset = queryset.filter(attendance_date__lte=min(parsed_end, today_date))
+            except Exception:
+                queryset = queryset.filter(attendance_date__lte=end_date)
+
+        student_id = params.get("student_id")
+        if student_id:
+            queryset = queryset.filter(student_id=student_id)
+
+        division_id = params.get("division_id")
+        if division_id:
+            from .models import Division
+            div_obj = Division.objects.filter(id=division_id, school=school).first()
+            if div_obj:
+                queryset = queryset.filter(
+                    Q(student__division=div_obj.division) |
+                    Q(student__division=str(div_obj.id)) |
+                    (Q(student__school_class=div_obj.SchoolClass) & Q(student__division__iexact=div_obj.division))
+                )
+
+        status_filter = params.get("status")
+        if status_filter == "present":
+            queryset = queryset.filter(is_present=True)
+        elif status_filter == "absent":
+            queryset = queryset.filter(is_absent=True)
+
+        search = params.get("search")
+        if search:
+            queryset = queryset.filter(
+                Q(student__name__icontains=search) |
+                Q(student__surname__icontains=search) |
+                Q(student__gr_no__icontains=search) |
+                Q(student__roll_no__icontains=search)
+            )
+
+        # Batch lookup genders from StudentFieldValue
+        student_ids = list(queryset.values_list("student_id", flat=True).distinct())
+        gender_map = {}
+        if student_ids:
+            try:
+                from .models import StudentFieldValue
+                sfv = StudentFieldValue.objects.filter(
+                    student_id__in=student_ids
+                ).filter(
+                    Q(field__label__icontains="gender") | Q(field__map_to_student_field__icontains="gender")
+                ).values("student_id", "value")
+                for row in sfv:
+                    val = (row["value"] or "").strip().lower()
+                    if val in ["male", "boy", "m", "boys"]:
+                        gender_map[row["student_id"]] = "Male"
+                    elif val in ["female", "girl", "f", "girls"]:
+                        gender_map[row["student_id"]] = "Female"
+                    elif row["value"]:
+                        gender_map[row["student_id"]] = row["value"].capitalize()
+            except Exception as ge:
+                print("Error loading genders for student attendance:", ge)
+
+        FEMALE_NAMES = {"nobara", "maki", "mai", "kasumi", "momo", "riko", "shoko", "priya", "anjali", "pooja", "neha", "kavita", "sneha", "divya", "riya", "aarti"}
+        results = []
+        for att in queryset:
+            s = att.student
+            if not s:
+                continue
+
+            gender = gender_map.get(s.id)
+            if not gender:
+                gender = "Female" if (s.name or "").strip().lower() in FEMALE_NAMES else "Male"
+
+            div_name = ""
+            if hasattr(s, "division") and s.division:
+                div_name = str(s.division).upper()
+            class_name = s.school_class.school_class if s.school_class else ""
+            full_div = f"{class_name} ({div_name})".strip() if class_name and div_name else (class_name or div_name)
+
+            marked_by = ""
+            if att.attendance_by:
+                staff_user = getattr(att.attendance_by, "user", None)
+                staff_name = getattr(att.attendance_by, "name", "") or (staff_user.username if staff_user else "")
+                marked_by = staff_name.strip()
+
+            results.append({
+                "id": att.id,
+                "student": s.id,
+                "student_id": s.id,
+                "student_name": f"{s.name or ''} {s.surname or ''}".strip(),
+                "name": s.name or "",
+                "surname": s.surname or "",
+                "roll_no": s.roll_no or "",
+                "gr_no": s.gr_no or "",
+                "gender": gender,
+                "division": div_name,
+                "division_name": full_div,
+                "class_name": class_name,
+                "is_present": att.is_present,
+                "is_absent": att.is_absent,
+                "attendance_date": str(att.attendance_date),
+                "created_at": att.created_at.isoformat() if att.created_at else None,
+                "marked_by": marked_by or "Class Teacher",
+            })
+
+        # Filter by gender if param passed
+        gender_param = params.get("gender")
+        if gender_param:
+            gp = gender_param.strip().lower()
+            if gp in ["male", "m"]:
+                results = [r for r in results if r["gender"].lower() == "male"]
+            elif gp in ["female", "f"]:
+                results = [r for r in results if r["gender"].lower() == "female"]
+
+        return Response(results)
 
     def post(self, request):
         student_id = request.data.get("student")
+        req_date = request.data.get("attendance_date")
         today_date = timezone.now().date()
+        if req_date:
+            try:
+                from datetime import datetime
+                if isinstance(req_date, str):
+                    target_date = datetime.strptime(req_date.split("T")[0], "%Y-%m-%d").date()
+                else:
+                    target_date = req_date
+            except Exception:
+                target_date = today_date
+        else:
+            target_date = today_date
+
+        if target_date > today_date:
+            return Response(
+                {"detail": "Cannot mark or edit attendance for future dates."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Ensure mutually exclusive flags
+        data = request.data.copy() if hasattr(request.data, "copy") else dict(request.data)
+        if data.get("is_present"):
+            data["is_absent"] = False
+        elif data.get("is_absent"):
+            data["is_present"] = False
 
         existing_attendance = StudentAttendance.objects.filter(
             school=request.user.school,
             student_id=student_id,
-            attendance_date=today_date
+            attendance_date=target_date
         ).first()
 
         if existing_attendance:
             serializer = StudentAttendanceSerializer(
                 existing_attendance,
-                data=request.data,
+                data=data,
                 context={"request": request},
                 partial=True
             )
         else:
             serializer = StudentAttendanceSerializer(
-                data=request.data,
+                data=data,
                 context={"request": request}
             )
 
@@ -2000,15 +2156,17 @@ class StudentAttendanceView(APIView):
         else:
             status_text = "Not Marked"
 
+        reason_text = request.data.get("reason", "")
+        reason_suffix = f" (Reason: {reason_text})" if reason_text and attendance.is_absent else ""
         notification = StudentNotification.objects.create(
             school=attendance.school,
             student=attendance.student,
-            created_by=request.user.staff,
+            created_by=getattr(request.user, "staff", None),
             notification_type="ATTENDANCE",
             title="Attendance Marked" if not existing_attendance else "Attendance Updated",
             message=(
                 f"Your child's attendance has been marked as "
-                f"{status_text} on {attendance.attendance_date}"
+                f"{status_text} on {attendance.attendance_date}{reason_suffix}"
             )
         )
 
@@ -2040,7 +2198,7 @@ class StudentAttendanceView(APIView):
                 send_student_absence_notification(
                     student=attendance.student,
                     attendance_date=attendance.attendance_date,
-                    reason=getattr(attendance, "reason", "") or "",
+                    reason=reason_text or getattr(attendance, "reason", "") or "",
                 )
             except Exception as fe:
                 print("Firebase absence push notification dispatch note:", fe)
@@ -2077,7 +2235,7 @@ class StudentAttendanceView(APIView):
         notification = StudentNotification.objects.create(
             school=attendance.school,
             student=attendance.student,
-            created_by=request.user.staff,
+            created_by=getattr(request.user, "staff", None),
             notification_type="ATTENDANCE",
             title="Attendance Updated",
             message=(
@@ -3450,11 +3608,43 @@ class ParentChildrenView(APIView):
             paid_fee_amt = sum(float(f.paid_amount or Decimal('0.00')) for f in fees)
             due_fee_amt = max(total_fee_amt - paid_fee_amt, 0.0)
 
-            notices = Announcement.objects.filter(
-                school=s.school
-            ).filter(
-                Q(is_everyone=True) | Q(announcement_for__in=["PARENT", "STUDENT"])
-            ).order_by("-created_at")[:5].values("id", "title", "description", "created_at")
+            # Fetch recent student notifications (including attendance marked/absent alerts)
+            student_notifications = StudentNotification.objects.filter(
+                student=s
+            ).order_by("-created_at")[:10]
+
+            att_notices = [
+                {
+                    "id": f"sn_{sn.id}",
+                    "title": sn.title.title() if sn.title else "Attendance Alert",
+                    "description": sn.message or "",
+                    "notification_type": sn.notification_type or "ATTENDANCE",
+                    "created_at": sn.created_at.isoformat() if sn.created_at else "",
+                    "is_attendance": True,
+                    "is_absent": "absent" in (sn.message or "").lower(),
+                }
+                for sn in student_notifications
+            ]
+
+            school_announcements = list(
+                Announcement.objects.filter(
+                    school=s.school
+                ).filter(
+                    Q(is_everyone=True) | Q(announcement_for__in=["PARENT", "STUDENT"])
+                ).order_by("-created_at")[:5].values("id", "title", "description", "created_at")
+            )
+            for sa in school_announcements:
+                sa["is_attendance"] = False
+                sa["is_absent"] = False
+                sa["notification_type"] = "ANNOUNCEMENT"
+                if hasattr(sa.get("created_at"), "isoformat"):
+                    sa["created_at"] = sa["created_at"].isoformat()
+
+            combined_notices = sorted(
+                att_notices + school_announcements,
+                key=lambda x: str(x.get("created_at") or ""),
+                reverse=True
+            )[:10]
 
             results.append({
                 "id": s.id,
@@ -3475,7 +3665,8 @@ class ParentChildrenView(APIView):
                 "paid_fees": paid_fee_amt,
                 "pending_fees": due_fee_amt,
                 "fee_status": "Paid" if due_fee_amt == 0 and total_fee_amt > 0 else ("Pending" if due_fee_amt > 0 else "No Dues"),
-                "notices": list(notices),
+                "notices": combined_notices,
+                "attendance_notifications": att_notices,
             })
 
         return Response(results)

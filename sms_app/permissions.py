@@ -392,15 +392,18 @@ class IsLibrarian(BasePermission):
             return False
         if getattr(user, 'is_superuser', False) or getattr(user, 'is_staff', False):
             return True
-        role = str(getattr(user, 'role', '') or "").strip().lower()
-        if role in ['librarian', 'principal', 'admin', 'superadmin', 'super_admin']:
+        role = str(getattr(user, 'role', '') or "").strip().upper()
+        if role in ['LIBRARIAN', 'PRINCIPAL', 'ADMIN', 'SUPERADMIN', 'SUPER_ADMIN']:
             return True
-        if user.groups.filter(name__iregex=r'^(librarian|principal|superadmin|admin)$').exists():
+        group_names = [g.name.strip().upper() for g in user.groups.all()]
+        if any(g in ['LIBRARIAN', 'PRINCIPAL', 'SUPERADMIN', 'SUPER_ADMIN'] for g in group_names):
             return True
         staff = getattr(user, 'staff', None) or Staff.objects.filter(user=user).first()
         if staff:
-            cat = str(getattr(staff, 'category', '') or "").strip().lower()
-            if cat in ['librarian', 'principal', 'admin']:
+            cat = str(getattr(staff, 'category', '') or "").strip().upper()
+            if cat in ['LIBRARIAN', 'PRINCIPAL', 'ADMIN']:
+                return True
+            if role == 'LIBRARIAN':
                 return True
         return False
 

@@ -315,6 +315,8 @@ router.register(r"late-fees", LateBookFeesViews, basename="late-fees")
 
 # Staff-side issuing + returning (counter operations).
 router.register(r"book-issued", BookIssuedView, basename="book-issued")
+router.register(r"library-reports", ReportsView, basename="library-reports")
+router.register(r"library-clearance", LibraryClearanceView, basename="library-clearance")
 
 # Student-side read-only catalogue browsing.
 router.register(r"books", BookViewStudent, basename="book-student") 

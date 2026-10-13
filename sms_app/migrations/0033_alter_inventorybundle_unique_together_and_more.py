@@ -19,33 +19,33 @@ class Migration(migrations.Migration):
             database_operations=[
                 migrations.RunSQL(
                     sql="""
-                    DROP TABLE IF EXISTS inventory_purchase_item CASCADE;
-                    DROP TABLE IF EXISTS inventory_purchase CASCADE;
-                    DROP TABLE IF EXISTS inventory_supplier CASCADE;
-                    DROP TABLE IF EXISTS inventory_stock_adjustment_item CASCADE;
-                    DROP TABLE IF EXISTS inventory_stock_adjustment CASCADE;
-                    DROP TABLE IF EXISTS inventory_stock_transaction CASCADE;
-                    DROP TABLE IF EXISTS inventory_student_item_issue_item CASCADE;
-                    DROP TABLE IF EXISTS inventory_student_item_issue CASCADE;
-                    DROP TABLE IF EXISTS inventory_student_item_entitlement CASCADE;
-                    DROP TABLE IF EXISTS inventory_item_pricing CASCADE;
-                    DROP TABLE IF EXISTS inventory_item_size CASCADE;
-                    DROP TABLE IF EXISTS inventory_item_color CASCADE;
-                    DROP TABLE IF EXISTS inventory_item CASCADE;
-                    DROP TABLE IF EXISTS inventory_item_category CASCADE;
-                    DROP TABLE IF EXISTS inventory_audit_log CASCADE;
-                    DROP TABLE IF EXISTS inventory_bundle_item CASCADE;
-                    DROP TABLE IF EXISTS inventory_bundle CASCADE;
-                    DROP TABLE IF EXISTS inventory_return_item CASCADE;
-                    DROP TABLE IF EXISTS inventory_return CASCADE;
-                    DROP TABLE IF EXISTS inventory_stock_balance CASCADE;
-                    DROP TABLE IF EXISTS inventory_opening_stock CASCADE;
-                    DROP TABLE IF EXISTS inventory_warehouse CASCADE;
-                    DROP TABLE IF EXISTS inventory_unit CASCADE;
-                    DROP TABLE IF EXISTS inventory_subcategory CASCADE;
-                    DROP TABLE IF EXISTS inventory_category CASCADE;
-                    DROP TABLE IF EXISTS inventory_budget CASCADE;
-                    DROP TABLE IF EXISTS student_id_card CASCADE;
+                    DROP TABLE IF EXISTS inventory_purchase_item;
+                    DROP TABLE IF EXISTS inventory_purchase;
+                    DROP TABLE IF EXISTS inventory_supplier;
+                    DROP TABLE IF EXISTS inventory_stock_adjustment_item;
+                    DROP TABLE IF EXISTS inventory_stock_adjustment;
+                    DROP TABLE IF EXISTS inventory_stock_transaction;
+                    DROP TABLE IF EXISTS inventory_student_item_issue_item;
+                    DROP TABLE IF EXISTS inventory_student_item_issue;
+                    DROP TABLE IF EXISTS inventory_student_item_entitlement;
+                    DROP TABLE IF EXISTS inventory_item_pricing;
+                    DROP TABLE IF EXISTS inventory_item_size;
+                    DROP TABLE IF EXISTS inventory_item_color;
+                    DROP TABLE IF EXISTS inventory_item;
+                    DROP TABLE IF EXISTS inventory_item_category;
+                    DROP TABLE IF EXISTS inventory_audit_log;
+                    DROP TABLE IF EXISTS inventory_bundle_item;
+                    DROP TABLE IF EXISTS inventory_bundle;
+                    DROP TABLE IF EXISTS inventory_return_item;
+                    DROP TABLE IF EXISTS inventory_return;
+                    DROP TABLE IF EXISTS inventory_stock_balance;
+                    DROP TABLE IF EXISTS inventory_opening_stock;
+                    DROP TABLE IF EXISTS inventory_warehouse;
+                    DROP TABLE IF EXISTS inventory_unit;
+                    DROP TABLE IF EXISTS inventory_subcategory;
+                    DROP TABLE IF EXISTS inventory_category;
+                    DROP TABLE IF EXISTS inventory_budget;
+                    DROP TABLE IF EXISTS student_id_card;
                     """,
                     reverse_sql=""
                 ),
