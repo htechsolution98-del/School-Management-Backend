@@ -48,7 +48,7 @@ from sms_app.inventory_views import (
     PurchaseViewSet, StockTransactionViewSet, StockAdjustmentViewSet,
     StudentItemEntitlementViewSet, StudentItemIssueViewSet,
     ReplacementRequestViewSet, StudentItemReturnViewSet,
-    InventoryReportViewSet
+    InventoryAuditLogViewSet, InventoryReportViewSet
 )
 from sms_app.dynamic_hr_views import (
     AttendanceSettingViewSet,
@@ -599,6 +599,7 @@ inventory_router.register(r'entitlements', StudentItemEntitlementViewSet, basena
 inventory_router.register(r'issues', StudentItemIssueViewSet, basename='inventory-issue')
 inventory_router.register(r'replacements', ReplacementRequestViewSet, basename='inventory-replacement')
 inventory_router.register(r'returns', StudentItemReturnViewSet, basename='inventory-return')
+inventory_router.register(r'audit-logs', InventoryAuditLogViewSet, basename='inventory-audit-log')
 inventory_router.register(r'reports', InventoryReportViewSet, basename='inventory-report')
 
 urlpatterns += [

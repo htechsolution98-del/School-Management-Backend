@@ -47,13 +47,21 @@ class IsClassTeacher(BasePermission):
    
 class IsLibrarian(BasePermission):     
     def has_permission(self, request, view):
-        if not (request.user and request.user.is_authenticated):
+        user = getattr(request, "user", None)
+        if not (user and user.is_authenticated):
             return False
-        if request.user.is_superuser or request.user.groups.filter(name__in=["LIBRARIAN", "PRINCIPAL", "SUPERADMIN"]).exists():
+        if getattr(user, "is_superuser", False) or getattr(user, "is_staff", False):
             return True
-        staff = Staff.objects.filter(user=request.user).first()
-        if staff and staff.category in ["LIBRARIAN", "PRINCIPAL"]:
+        role = str(getattr(user, "role", "") or "").strip().lower()
+        if role in ["librarian", "principal", "admin", "superadmin", "super_admin"]:
             return True
+        if user.groups.filter(name__iregex=r'^(librarian|principal|superadmin|admin)$').exists():
+            return True
+        staff = Staff.objects.filter(user=user).first() or getattr(user, "staff", None)
+        if staff:
+            cat = str(getattr(staff, "category", "") or "").strip().lower()
+            if cat in ["librarian", "principal", "admin"]:
+                return True
         return False
 
 
@@ -1372,22 +1380,28 @@ class GetStaffLeaveRequest(APIView): # particular staff leave request to staff s
         
         
         
-class GetLeaveRequestView(TrusteeStaffReadOnlyMixin, ModelViewSet): #for all the leaves — clerk/principal/trustee can view
+class GetLeaveRequestView(ModelViewSet): #for all the leaves — clerk/principal/trustee can view
     queryset = LeaveRequest.objects.all()
     serializer_class = GetLeaveRequestSerializer
     permission_classes = [IsAuthenticated, IsClerkOrPrincipal]
     http_method_names = ["get"]
 
     def get_queryset(self):
-
-        queryset = LeaveRequest.objects.filter(school=self.request.user.school)
-
-        return queryset
+        user = self.request.user
+        school = getattr(user, 'school', None)
+        if not school:
+            member = Staff.objects.filter(user=user).first()
+            school = member.school if member else None
+        if not school:
+            school = School.objects.filter(login_id=user).first()
+        if not school:
+            return LeaveRequest.objects.none()
+        return LeaveRequest.objects.filter(school=school)
     
     
     
     
-class ChangeLeaveView(TrusteeStaffReadOnlyMixin, ModelViewSet): # for approving day wise APPROVAL — principal/clerk/trustee
+class ChangeLeaveView(ModelViewSet): # for approving day wise APPROVAL — principal/clerk/trustee
     queryset = LeavePerDay.objects.all()
     serializer_class = ChangeLeavePerDaySerializer
     permission_classes = [IsAuthenticated, IsClerkOrPrincipal]
@@ -1396,7 +1410,8 @@ class ChangeLeaveView(TrusteeStaffReadOnlyMixin, ModelViewSet): # for approving 
     def update(self, request, *args, **kwargs):
         instance = self.get_object()
 
-        if request.user.school and instance.leave.school and instance.leave.school != request.user.school:
+        user_school = request.user.school or School.objects.filter(login_id=request.user).first()
+        if user_school and instance.leave.school and instance.leave.school != user_school:
             return Response(
                 {"error": "You are not allowed to modify this record"}, status=403
             )
@@ -1407,12 +1422,25 @@ class ChangeLeaveView(TrusteeStaffReadOnlyMixin, ModelViewSet): # for approving 
                 status=403,
             )
 
+        is_trustee = (
+            str(getattr(request.user, "role", "") or "").strip().upper() in ["TRUSTEE", "ADMIN(TRUSTEE)"]
+            or request.user.groups.filter(name__in=["TRUSTEE", "trustee", "admin(trustee)"]).exists()
+        ) and not request.user.is_superuser
+        if is_trustee:
+            applicant_cat = str(getattr(instance.leave.staff, "category", "") or "").strip().upper()
+            applicant_role = str(getattr(getattr(instance.leave.staff, "user", None), "role", "") or "").strip().upper()
+            if applicant_cat != "PRINCIPAL" and applicant_role != "PRINCIPAL":
+                return Response(
+                    {"error": "Trustee can only approve/reject Principal's leave requests. Other staff leaves must be approved by the Principal."},
+                    status=403,
+                )
+
         return super().update(request, *args, **kwargs)
     
     
 
 
-class ChangeAllLeaveView(TrusteeStaffReadOnlyMixin, APIView): # for APPROVE all day leave — principal/trustee
+class ChangeAllLeaveView(APIView): # for APPROVE all day leave — principal/trustee
     permission_classes = [IsAuthenticated, IsPrincipalOrTrustee]
 
     def patch(self, request, pk):

@@ -1,4 +1,4 @@
-from rest_framework.permissions import BasePermission
+from rest_framework.permissions import BasePermission, SAFE_METHODS
 from .models import Student
 
 class Is_super_admin(BasePermission):
@@ -176,12 +176,13 @@ class Isinventory(BasePermission):
             return False
         if getattr(user, 'is_superuser', False):
             return True
-        if getattr(user, 'role', '') in ['INVENTORY', 'PRINCIPAL', 'ADMIN', 'SUPERADMIN']:
+        role = str(getattr(user, 'role', '') or '').strip().upper()
+        if role in ['INVENTORY', 'PRINCIPAL', 'ADMIN', 'SUPERADMIN']:
             return True
-        if user.groups.filter(name__in=['INVENTORY', 'PRINCIPAL', 'super_admin']).exists():
+        if user.groups.filter(name__iexact='INVENTORY').exists() or user.groups.filter(name__iexact='PRINCIPAL').exists() or user.groups.filter(name__iexact='super_admin').exists():
             return True
         staff = getattr(user, 'staff', None)
-        if staff and staff.category in ['INVENTORY', 'PRINCIPAL']:
+        if staff and str(getattr(staff, 'category', '') or '').strip().upper() in ['INVENTORY', 'PRINCIPAL']:
             return True
         return False
 
@@ -389,13 +390,40 @@ class IsLibrarian(BasePermission):
         user = getattr(request, 'user', None)
         if not user or not user.is_authenticated:
             return False
-        if getattr(user, 'is_superuser', False):
+        if getattr(user, 'is_superuser', False) or getattr(user, 'is_staff', False):
             return True
-        if getattr(user, 'role', '') in ['LIBRARIAN', 'PRINCIPAL', 'ADMIN', 'SUPERADMIN']:
+        role = str(getattr(user, 'role', '') or "").strip().lower()
+        if role in ['librarian', 'principal', 'admin', 'superadmin', 'super_admin']:
             return True
-        if user.groups.filter(name__in=['LIBRARIAN', 'PRINCIPAL', 'super_admin']).exists():
+        if user.groups.filter(name__iregex=r'^(librarian|principal|superadmin|admin)$').exists():
             return True
-        staff = getattr(user, 'staff', None)
-        if staff and staff.category in ['LIBRARIAN', 'PRINCIPAL']:
-            return True
+        staff = getattr(user, 'staff', None) or Staff.objects.filter(user=user).first()
+        if staff:
+            cat = str(getattr(staff, 'category', '') or "").strip().lower()
+            if cat in ['librarian', 'principal', 'admin']:
+                return True
         return False
+
+
+class IsClerkOrReadOnly(BasePermission):
+    """
+    Allows read (GET, HEAD, OPTIONS) to any authenticated user.
+    Restricts write/create/update/delete strictly to Clerk roles and Administrators.
+    Principal, Trustee, Teacher, etc. cannot create or modify.
+    """
+    def has_permission(self, request, view):
+        user = getattr(request, 'user', None)
+        if not user or not user.is_authenticated:
+            return False
+        if request.method in SAFE_METHODS:
+            return True
+        if getattr(user, 'is_superuser', False) or getattr(user, 'is_staff', False):
+            return True
+        role = str(getattr(user, "role", "") or "").strip().upper()
+        if role in CLERK_ROLES or role in ["ADMIN", "SUPERADMIN", "SUPER_ADMIN"]:
+            return True
+        staff = getattr(user, "staff", None)
+        if staff and str(getattr(staff, "category", "") or "").strip().upper() in CLERK_ROLES:
+            return True
+        return user.groups.filter(name__in=CLERK_GROUPS + ["ADMIN", "admin"]).exists()
+

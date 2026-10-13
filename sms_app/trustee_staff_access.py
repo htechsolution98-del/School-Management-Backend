@@ -6,12 +6,22 @@ from .trustee_inventory_report import IsTrustee
 
 
 def can_view_salary(user):
+    if not user or not user.is_authenticated:
+        return False
+    role = str(getattr(user, 'role', '') or '').strip().lower()
+    if role in ['trustee', 'admin(trustee)', 'admin', 'superadmin', 'super_admin'] or user.groups.filter(name__in=['TRUSTEE', 'admin(trustee)', 'admin']).exists():
+        return True
     return user.has_perm('sms_app.view_staffsalarypayment') or UserModuleAccess.objects.filter(
         user=user, module__is_active=True, module__code__in=['PAYROLL', 'STAFF_SALARY', 'SALARY']
     ).exists()
 
 
 def can_view_contacts(user):
+    if not user or not user.is_authenticated:
+        return False
+    role = str(getattr(user, 'role', '') or '').strip().lower()
+    if role in ['trustee', 'admin(trustee)', 'admin', 'superadmin', 'super_admin'] or user.groups.filter(name__in=['TRUSTEE', 'admin(trustee)', 'admin']).exists():
+        return True
     return user.has_perm('sms_app.view_staff')
 
 

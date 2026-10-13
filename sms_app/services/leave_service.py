@@ -519,18 +519,25 @@ class LeaveWorkflowService:
         # Hierarchy check: Principal's leave request can ONLY be approved by Trustee / SuperAdmin
         applicant_cat = str(getattr(leave_req.staff, "category", "") or "").strip().upper()
         applicant_role = str(getattr(getattr(leave_req.staff, "user", None), "role", "") or "").strip().upper()
+        approver_role = str(getattr(approver_user, "role", "") or "").strip().upper()
+        approver_staff = getattr(approver_user, "staff", None)
+        approver_cat = str(getattr(approver_staff, "category", "") or "").strip().upper() if approver_staff else ""
+        is_trustee = (
+            approver_role in ["TRUSTEE", "ADMIN(TRUSTEE)"]
+            or approver_cat in ["TRUSTEE"]
+            or approver_user.groups.filter(name__in=["TRUSTEE", "trustee", "admin(trustee)"]).exists()
+        ) and not approver_user.is_superuser
+
         if applicant_cat == "PRINCIPAL" or applicant_role == "PRINCIPAL":
-            approver_role = str(getattr(approver_user, "role", "") or "").strip().upper()
-            approver_staff = getattr(approver_user, "staff", None)
-            approver_cat = str(getattr(approver_staff, "category", "") or "").strip().upper() if approver_staff else ""
             is_trustee_or_admin = (
                 approver_user.is_superuser
-                or approver_role in ["TRUSTEE", "ADMIN", "SUPERADMIN", "SUPER_ADMIN", "ADMIN(TRUSTEE)"]
-                or approver_cat in ["TRUSTEE"]
-                or approver_user.groups.filter(name__in=["TRUSTEE", "trustee", "admin(trustee)", "ADMIN"]).exists()
+                or is_trustee
+                or approver_role in ["ADMIN", "SUPERADMIN", "SUPER_ADMIN"]
             )
             if not is_trustee_or_admin:
                 raise PermissionDenied("Principal's leave requests can only be approved by a Trustee or School Administrator.")
+        elif is_trustee:
+            raise PermissionDenied("Trustee can only approve/reject Principal's leave requests. Other staff leaves are approved by the Principal.")
 
         if leave_req.pk:
             leave_req = LeaveRequest.objects.select_for_update().get(pk=leave_req.pk)
@@ -613,18 +620,25 @@ class LeaveWorkflowService:
         # Hierarchy check: Principal's leave request can ONLY be rejected by Trustee / SuperAdmin
         applicant_cat = str(getattr(leave_req.staff, "category", "") or "").strip().upper()
         applicant_role = str(getattr(getattr(leave_req.staff, "user", None), "role", "") or "").strip().upper()
+        approver_role = str(getattr(approver_user, "role", "") or "").strip().upper()
+        approver_staff = getattr(approver_user, "staff", None)
+        approver_cat = str(getattr(approver_staff, "category", "") or "").strip().upper() if approver_staff else ""
+        is_trustee = (
+            approver_role in ["TRUSTEE", "ADMIN(TRUSTEE)"]
+            or approver_cat in ["TRUSTEE"]
+            or approver_user.groups.filter(name__in=["TRUSTEE", "trustee", "admin(trustee)"]).exists()
+        ) and not approver_user.is_superuser
+
         if applicant_cat == "PRINCIPAL" or applicant_role == "PRINCIPAL":
-            approver_role = str(getattr(approver_user, "role", "") or "").strip().upper()
-            approver_staff = getattr(approver_user, "staff", None)
-            approver_cat = str(getattr(approver_staff, "category", "") or "").strip().upper() if approver_staff else ""
             is_trustee_or_admin = (
                 approver_user.is_superuser
-                or approver_role in ["TRUSTEE", "ADMIN", "SUPERADMIN", "SUPER_ADMIN", "ADMIN(TRUSTEE)"]
-                or approver_cat in ["TRUSTEE"]
-                or approver_user.groups.filter(name__in=["TRUSTEE", "trustee", "admin(trustee)", "ADMIN"]).exists()
+                or is_trustee
+                or approver_role in ["ADMIN", "SUPERADMIN", "SUPER_ADMIN"]
             )
             if not is_trustee_or_admin:
                 raise PermissionDenied("Principal's leave requests can only be rejected by a Trustee or School Administrator.")
+        elif is_trustee:
+            raise PermissionDenied("Trustee can only approve/reject Principal's leave requests. Other staff leaves are approved by the Principal.")
 
         if leave_req.pk:
             leave_req = LeaveRequest.objects.select_for_update().get(pk=leave_req.pk)

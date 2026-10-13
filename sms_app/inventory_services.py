@@ -1,8 +1,8 @@
 from decimal import Decimal
 from django.db import transaction
+from django.db.models import Sum, Q
 from django.utils import timezone
 from django.core.exceptions import ValidationError
-from django.db.models import Sum
 
 from .inventory_models import (
     Item, ItemPricing, Purchase, StockTransaction,
@@ -13,12 +13,30 @@ from .inventory_models import (
 class InventoryService:
 
     @staticmethod
+    def log_stock_transaction(transaction_record, user=None):
+        InventoryAuditLog.objects.create(
+            school=transaction_record.school,
+            user=user,
+            action='POSTED',
+            entity_type='StockTransaction',
+            entity_id=str(transaction_record.id),
+            new_values={
+                'item_id': transaction_record.item_id,
+                'transaction_type': transaction_record.transaction_type,
+                'quantity': transaction_record.quantity,
+                'reference_type': transaction_record.reference_type,
+                'reference_id': transaction_record.reference_id,
+                'transaction_date': str(transaction_record.transaction_date),
+            },
+        )
+
+    @staticmethod
     def get_item_stock(item_id, size_id=None, color_id=None):
         """Calculate live available stock for an item or specific variant"""
         qs = StockTransaction.objects.filter(item_id=item_id)
-        if size_id:
+        if size_id is not None:
             qs = qs.filter(size_id=size_id)
-        if color_id:
+        if color_id is not None:
             qs = qs.filter(color_id=color_id)
         total = qs.aggregate(total=Sum('quantity'))['total'] or 0
         return max(0, total)
@@ -27,11 +45,36 @@ class InventoryService:
     @transaction.atomic
     def process_purchase_confirmation(cls, purchase: Purchase, user=None):
         """Confirm a purchase order and create inward stock transactions"""
-        if purchase.status == 'CONFIRMED':
+        if purchase.status == 'CANCELLED':
+            raise ValidationError("A cancelled purchase cannot be confirmed.")
+
+        # Existing confirmed invoices may have been created before the stock-posting
+        # fix. Check the ledger reference, not just the status, to avoid duplicate stock.
+        if StockTransaction.objects.filter(
+            school=purchase.school,
+            reference_type='Purchase',
+            reference_id=str(purchase.id),
+        ).exists():
+            if purchase.status != 'CONFIRMED':
+                purchase.status = 'CONFIRMED'
+                purchase.save(update_fields=['status', 'updated_at'])
             return purchase
 
-        for p_item in purchase.items.all():
-            StockTransaction.objects.create(
+        purchase = Purchase.objects.select_for_update().get(pk=purchase.pk)
+        if StockTransaction.objects.filter(
+            school=purchase.school,
+            reference_type='Purchase',
+            reference_id=str(purchase.id),
+        ).exists():
+            return purchase
+
+        line_items = list(purchase.items.select_related('item').all())
+        if not line_items:
+            raise ValidationError("A purchase must contain at least one line item.")
+        for p_item in line_items:
+            if p_item.item.school_id != purchase.school_id:
+                raise ValidationError("All purchased items must belong to the purchase school.")
+            transaction_record = StockTransaction.objects.create(
                 school=purchase.school,
                 item=p_item.item,
                 academic_year=purchase.academic_year,
@@ -46,9 +89,10 @@ class InventoryService:
                 remarks=f"Purchase PO #{purchase.invoice_number}",
                 created_by=user
             )
+            cls.log_stock_transaction(transaction_record, user)
 
         purchase.status = 'CONFIRMED'
-        purchase.save()
+        purchase.save(update_fields=['status', 'updated_at'])
         return purchase
 
     @classmethod
@@ -58,6 +102,23 @@ class InventoryService:
                           remarks='', user=None):
         """Atomically issue item to a single student with stock check and price snapshotting"""
         # 1. Lock and verify stock
+        if quantity <= 0:
+            raise ValidationError("Issue quantity must be greater than zero.")
+        if item.school_id != school.id or student.school_id != school.id or academic_year.school_id != school.id:
+            raise ValidationError("Student, item, academic year, and inventory school must match.")
+        if size and size.school_id != school.id:
+            raise ValidationError("Selected size does not belong to this school.")
+        if color and color.school_id != school.id:
+            raise ValidationError("Selected color does not belong to this school.")
+        if item.has_size and not size:
+            raise ValidationError("Select a size for this item.")
+        if item.has_color and not color:
+            raise ValidationError("Select a color for this item.")
+        if charging_type and charging_type not in {'INCLUDED_IN_FEE', 'SEPARATE_CHARGE', 'FREE'}:
+            raise ValidationError("Invalid charging type.")
+        if charged_amount is not None and charged_amount < 0:
+            raise ValidationError("Charged amount cannot be negative.")
+        Item.objects.select_for_update().get(pk=item.pk)
         current_stock = cls.get_item_stock(item.id, size.id if size else None, color.id if color else None)
         if current_stock < quantity:
             raise ValidationError(f"Insufficient stock for '{item.item_name}'. Available: {current_stock}, Requested: {quantity}")
@@ -67,7 +128,14 @@ class InventoryService:
             item=item,
             academic_year=academic_year,
             is_active=True
-        ).first()
+        ).filter(Q(effective_from__isnull=True) | Q(effective_from__lte=timezone.now().date())) \
+         .filter(Q(effective_to__isnull=True) | Q(effective_to__gte=timezone.now().date())) \
+         .order_by('-school_class_id')
+        if student.school_class_id:
+            active_pricing = active_pricing.filter(Q(school_class_id=student.school_class_id) | Q(school_class__isnull=True))
+        else:
+            active_pricing = active_pricing.filter(school_class__isnull=True)
+        active_pricing = active_pricing.first()
 
         unit_purchase_cost = active_pricing.purchase_cost if active_pricing else Decimal('0.00')
         unit_selling_price = active_pricing.selling_price if active_pricing else Decimal('0.00')
@@ -99,7 +167,7 @@ class InventoryService:
         )
 
         # 4. Create Negative Stock Outflow
-        StockTransaction.objects.create(
+        transaction_record = StockTransaction.objects.create(
             school=school,
             item=item,
             academic_year=academic_year,
@@ -115,6 +183,7 @@ class InventoryService:
             remarks=f"Issued to {student.name} {student.surname} (Roll {student.roll_no})",
             created_by=user
         )
+        cls.log_stock_transaction(transaction_record, user)
 
         # 5. Update entitlement if matched
         entitlement = StudentItemEntitlement.objects.filter(
@@ -122,9 +191,13 @@ class InventoryService:
             item=item,
             academic_year=academic_year,
             status__in=['PENDING', 'PARTIALLY_ISSUED']
-        ).first()
+        ).filter(size=size, color=color).first()
 
         if entitlement:
+            if entitlement.remaining_quantity < quantity:
+                raise ValidationError(
+                    f"Issue exceeds the student's remaining entitlement ({entitlement.remaining_quantity})."
+                )
             entitlement.issued_quantity += quantity
             if entitlement.issued_quantity >= entitlement.entitled_quantity:
                 entitlement.status = 'FULLY_ISSUED'
@@ -139,6 +212,11 @@ class InventoryService:
     def issue_item_bulk(cls, school, academic_year, item, student_ids, quantity_per_student=1,
                         size=None, color=None, user=None):
         """Atomically issue items to multiple students with total stock pre-validation"""
+        if quantity_per_student <= 0:
+            raise ValidationError("Quantity per student must be greater than zero.")
+        if not student_ids:
+            raise ValidationError("Select at least one student.")
+        student_ids = list(dict.fromkeys(student_ids))
         total_required = len(student_ids) * quantity_per_student
         current_stock = cls.get_item_stock(item.id, size.id if size else None, color.id if color else None)
 
@@ -148,7 +226,9 @@ class InventoryService:
             )
 
         from .models import Student
-        students = Student.objects.filter(id__in=student_ids, school=school)
+        students = list(Student.objects.filter(id__in=student_ids, school=school, is_active=True))
+        if len(students) != len(student_ids):
+            raise ValidationError("One or more selected students are inactive or belong to another school.")
         issued_records = []
 
         for student in students:
@@ -173,6 +253,9 @@ class InventoryService:
     def process_replacement_issue(cls, replacement: ReplacementRequest, charging_type='FREE',
                                   charged_amount=Decimal('0.00'), user=None):
         """Process approved replacement by dispensing item and updating stock"""
+        replacement = ReplacementRequest.objects.select_for_update().get(pk=replacement.pk)
+        if replacement.status != 'APPROVED':
+            raise ValidationError("Only an approved replacement can be issued.")
         item = replacement.item
         size = replacement.requested_size or replacement.current_size
         color = replacement.requested_color or replacement.current_color
@@ -208,8 +291,29 @@ class InventoryService:
     @transaction.atomic
     def process_return(cls, return_obj: StudentItemReturn, user=None):
         """Process returned item and adjust stock if good condition"""
+        if return_obj.quantity <= 0:
+            raise ValidationError("Return quantity must be greater than zero.")
+        if return_obj.student.school_id != return_obj.school_id or return_obj.item.school_id != return_obj.school_id:
+            raise ValidationError("Student and item must belong to the return school.")
+        if not return_obj.item.is_returnable:
+            raise ValidationError("This item is not configured for returns.")
+        if return_obj.size and return_obj.size.school_id != return_obj.school_id:
+            raise ValidationError("Selected size does not belong to this school.")
+        if return_obj.color and return_obj.color.school_id != return_obj.school_id:
+            raise ValidationError("Selected color does not belong to this school.")
+        Item.objects.select_for_update().get(pk=return_obj.item_id)
+        already_returned = StudentItemReturn.objects.filter(
+            school=return_obj.school, student=return_obj.student, item=return_obj.item,
+            size=return_obj.size, color=return_obj.color,
+        ).exclude(pk=return_obj.pk).aggregate(total=Sum('quantity'))['total'] or 0
+        issued = StudentItemIssue.objects.filter(
+            school=return_obj.school, student=return_obj.student, item=return_obj.item,
+            size=return_obj.size, color=return_obj.color,
+        ).aggregate(total=Sum('quantity'))['total'] or 0
+        if already_returned + return_obj.quantity > issued:
+            raise ValidationError("Return quantity exceeds the student's recorded issued quantity.")
         if return_obj.condition == 'GOOD':
-            StockTransaction.objects.create(
+            transaction_record = StockTransaction.objects.create(
                 school=return_obj.school,
                 item=return_obj.item,
                 size=return_obj.size,
@@ -222,8 +326,9 @@ class InventoryService:
                 remarks=f"Returned in Good Condition by {return_obj.student.name} {return_obj.student.surname}",
                 created_by=user
             )
+            cls.log_stock_transaction(transaction_record, user)
         elif return_obj.condition in ['DAMAGED', 'UNUSABLE']:
-            StockTransaction.objects.create(
+            transaction_record = StockTransaction.objects.create(
                 school=return_obj.school,
                 item=return_obj.item,
                 size=return_obj.size,
@@ -236,19 +341,42 @@ class InventoryService:
                 remarks=f"Returned in Damaged/Unusable condition by {return_obj.student.name}",
                 created_by=user
             )
+            cls.log_stock_transaction(transaction_record, user)
         return return_obj
 
     @classmethod
     @transaction.atomic
     def process_adjustment(cls, adjustment: StockAdjustment, user=None):
         """Record manual adjustment and create ledger transaction"""
+        if adjustment.quantity <= 0:
+            raise ValidationError("Adjustment quantity must be greater than zero.")
+        if adjustment.item.school_id != adjustment.school_id:
+            raise ValidationError("Item must belong to the adjustment school.")
+        if adjustment.size and adjustment.size.school_id != adjustment.school_id:
+            raise ValidationError("Selected size does not belong to this school.")
+        if adjustment.color and adjustment.color.school_id != adjustment.school_id:
+            raise ValidationError("Selected color does not belong to this school.")
+        if adjustment.item.has_size and not adjustment.size:
+            raise ValidationError("Select a size for this item.")
+        if adjustment.item.has_color and not adjustment.color:
+            raise ValidationError("Select a color for this item.")
+        Item.objects.select_for_update().get(pk=adjustment.item_id)
         qty = adjustment.quantity
         if adjustment.adjustment_type in ['ADJUSTMENT_OUT', 'DAMAGE', 'LOST']:
             signed_qty = -abs(qty)
         else:
             signed_qty = abs(qty)
 
-        StockTransaction.objects.create(
+        if signed_qty < 0:
+            current_stock = cls.get_item_stock(
+                adjustment.item_id,
+                adjustment.size_id,
+                adjustment.color_id,
+            )
+            if current_stock < abs(signed_qty):
+                raise ValidationError(f"Adjustment would make stock negative. Available: {current_stock}.")
+
+        transaction_record = StockTransaction.objects.create(
             school=adjustment.school,
             item=adjustment.item,
             size=adjustment.size,
@@ -261,4 +389,5 @@ class InventoryService:
             remarks=f"{adjustment.reason}: {adjustment.remarks or ''}".strip(),
             created_by=user
         )
+        cls.log_stock_transaction(transaction_record, user)
         return adjustment
