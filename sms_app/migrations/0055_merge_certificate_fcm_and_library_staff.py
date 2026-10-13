@@ -1,0 +1,10 @@
+from django.db import migrations
+
+
+class Migration(migrations.Migration):
+    dependencies = [
+        ('sms_app', '0054_alter_certificatetype_unique_together_fcmdevicetoken'),
+        ('sms_app', '0054_library_staff_borrower'),
+    ]
+
+    operations = []
