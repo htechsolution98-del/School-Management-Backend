@@ -1,3 +1,4 @@
+import re
 from decimal import Decimal
 from datetime import date, timedelta
 from django.db import transaction
@@ -1506,6 +1507,22 @@ class ShelfSerializer(serializers.ModelSerializer):
         read_only_fields = ['school']
 
 
+def to_title_case_py(text: str) -> str:
+    if not text:
+        return ""
+    words = str(text).strip().split()
+    res = []
+    for word in words:
+        if "." in word:
+            parts = [p.capitalize() if p else "" for p in word.split(".")]
+            res.append(".".join(parts))
+        elif len(word) > 1 and word.isupper():
+            res.append(word)
+        else:
+            res.append(word.capitalize())
+    return " ".join(res)
+
+
 class BookCopySerializer(serializers.ModelSerializer):
     book_title = serializers.CharField(source="book.title", read_only=True)
     rack_code = serializers.CharField(source="rack.rack_code", read_only=True, default=None)
@@ -1515,6 +1532,12 @@ class BookCopySerializer(serializers.ModelSerializer):
         model = BookCopy
         fields = '__all__'
         read_only_fields = ['school']
+
+    def to_representation(self, instance):
+        ret = super().to_representation(instance)
+        if ret.get("book_title"):
+            ret["book_title"] = to_title_case_py(ret["book_title"])
+        return ret
 
 
 class BookManageSerializer(serializers.ModelSerializer):
@@ -1529,12 +1552,93 @@ class BookManageSerializer(serializers.ModelSerializer):
         fields = '__all__'
         read_only_fields = ['school', 'available_copies', 'status', 'created_at']
 
+    def validate_title(self, value):
+        if value is None or not str(value).strip():
+            raise serializers.ValidationError("Book Title is required and cannot be blank.")
+        cleaned = str(value).strip()
+        if len(cleaned) < 2:
+            raise serializers.ValidationError("Book Title must be at least 2 characters long.")
+        if not re.search(r'[a-zA-Z]', cleaned):
+            raise serializers.ValidationError("Book Title must contain letters, cannot be numbers only.")
+        return to_title_case_py(cleaned)
+
+    def validate_author(self, value):
+        if value is None or not str(value).strip():
+            raise serializers.ValidationError("Author is required and cannot be blank.")
+        cleaned = str(value).strip()
+        if len(cleaned) < 2:
+            raise serializers.ValidationError("Author name must be at least 2 characters long.")
+        if not re.search(r'[a-zA-Z]', cleaned):
+            raise serializers.ValidationError("Author name must contain valid letters, cannot be numbers only.")
+        return to_title_case_py(cleaned)
+
+    def validate_category(self, value):
+        if value is None or not str(value).strip():
+            raise serializers.ValidationError("Category / Subject is required and cannot be blank.")
+        cleaned = str(value).strip()
+        if len(cleaned) < 2:
+            raise serializers.ValidationError("Category / Subject must be at least 2 characters long.")
+        if not re.search(r'[a-zA-Z]', cleaned):
+            raise serializers.ValidationError("Category / Subject must contain letters, cannot be numbers only.")
+        return to_title_case_py(cleaned)
+
+    def validate_total_copies(self, value):
+        if value is None or value < 1:
+            raise serializers.ValidationError("Total physical copies must be at least 1.")
+        if value > 500:
+            raise serializers.ValidationError("Cannot create more than 500 physical copies at once.")
+        return value
+
+    def validate_price(self, value):
+        if value is not None and value < 0:
+            raise serializers.ValidationError("Book price cannot be negative.")
+        return value
+
+    def validate_edition(self, value):
+        if value:
+            return to_title_case_py(value)
+        return value
+
+    def validate(self, attrs):
+        title = attrs.get('title')
+        author = attrs.get('author')
+        category = attrs.get('category')
+        rack = attrs.get('rack')
+        shelf = attrs.get('shelf')
+
+        if not self.partial:
+            if not title or not str(title).strip():
+                raise serializers.ValidationError({"title": ["Book Title is required and cannot be blank."]})
+            if not author or not str(author).strip():
+                raise serializers.ValidationError({"author": ["Author is required and cannot be blank."]})
+            if not category or not str(category).strip():
+                raise serializers.ValidationError({"category": ["Category / Subject is required and cannot be blank."]})
+            if not rack:
+                raise serializers.ValidationError({"rack": ["Please select a valid Rack Location."]})
+            if not shelf:
+                raise serializers.ValidationError({"shelf": ["Please select a valid Shelf Location."]})
+
+        if rack and shelf and shelf.rack_id != rack.id:
+            raise serializers.ValidationError({"shelf": ["The selected shelf does not belong to the selected rack."]})
+
+        return attrs
+
     def to_representation(self, instance):
         ret = super().to_representation(instance)
         if not ret.get("category") and instance.category_ref:
             ret["category"] = instance.category_ref.name
         if not ret.get("author") and instance.author_ref:
             ret["author"] = instance.author_ref.name
+
+        # Always represent title, author, category, and edition in Title Case
+        if ret.get("title"):
+            ret["title"] = to_title_case_py(ret["title"])
+        if ret.get("author"):
+            ret["author"] = to_title_case_py(ret["author"])
+        if ret.get("category"):
+            ret["category"] = to_title_case_py(ret["category"])
+        if ret.get("edition"):
+            ret["edition"] = to_title_case_py(ret["edition"])
         return ret
 
 
@@ -1571,6 +1675,11 @@ class BookIssuedSerializer(serializers.ModelSerializer):
             "damage_fees",
             "lost_fees",
             "total_fine",
+            "is_fine_paid",
+            "fine_paid_amount",
+            "payment_method",
+            "payment_date",
+            "payment_receipt_no",
             "is_late",
             "renewal_count",
             "status",
@@ -1578,10 +1687,12 @@ class BookIssuedSerializer(serializers.ModelSerializer):
 
     def to_representation(self, instance):
         ret = super().to_representation(instance)
+        fine_remaining = max(Decimal("0.00"), instance.total_fine - instance.fine_paid_amount) if (instance.total_fine and instance.fine_paid_amount is not None) else (instance.total_fine or Decimal("0.00"))
+        ret["fine_remaining"] = str(fine_remaining)
         if instance.book:
-            ret["book_title"] = instance.book.title
-            ret["book_author"] = instance.book.author or (instance.book.author_ref.name if instance.book.author_ref else "")
-            ret["book_category"] = instance.book.category or (instance.book.category_ref.name if instance.book.category_ref else "")
+            ret["book_title"] = to_title_case_py(instance.book.title)
+            ret["book_author"] = to_title_case_py(instance.book.author or (instance.book.author_ref.name if instance.book.author_ref else ""))
+            ret["book_category"] = to_title_case_py(instance.book.category or (instance.book.category_ref.name if instance.book.category_ref else ""))
             ret["rack_code"] = instance.book.rack.rack_code if instance.book.rack else ""
             ret["shelf_code"] = instance.book.shelf.shelf_code if instance.book.shelf else ""
         if instance.book_copy:
@@ -1625,9 +1736,9 @@ class BookIssuedForSelfSerializer(serializers.ModelSerializer):
     def to_representation(self, instance):
         ret = super().to_representation(instance)
         if instance.book:
-            ret["book_title"] = instance.book.title
-            ret["book_author"] = instance.book.author or (instance.book.author_ref.name if instance.book.author_ref else "")
-            ret["book_category"] = instance.book.category or (instance.book.category_ref.name if instance.book.category_ref else "")
+            ret["book_title"] = to_title_case_py(instance.book.title)
+            ret["book_author"] = to_title_case_py(instance.book.author or (instance.book.author_ref.name if instance.book.author_ref else ""))
+            ret["book_category"] = to_title_case_py(instance.book.category or (instance.book.category_ref.name if instance.book.category_ref else ""))
         return ret
 
 
@@ -1645,3 +1756,9 @@ class BookReservationSerializer(serializers.ModelSerializer):
         if obj.student:
             return f"{obj.student.name or ''} {obj.student.surname or ''}".strip() or str(obj.student)
         return "Student"
+
+    def to_representation(self, instance):
+        ret = super().to_representation(instance)
+        if ret.get("book_title"):
+            ret["book_title"] = to_title_case_py(ret["book_title"])
+        return ret
