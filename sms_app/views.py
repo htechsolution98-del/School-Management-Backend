@@ -13,7 +13,7 @@ from rest_framework.viewsets import ModelViewSet
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework import status
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from django.utils import timezone
 from django.db.models import Q
 from .models import *
@@ -124,14 +124,13 @@ class RazarDataView(ModelViewSet):
 
 
 @api_view(["GET"])
-@permission_classes([IsAuthenticated])
+@permission_classes([AllowAny])
 def ShareFormLink(request):
     user = getattr(request, "user", None)
-    school = getattr(user, "school", None) if user else None
+    school = getattr(user, "school", None) if user and user.is_authenticated else None
     if not school:
         return Response(
-            {"detail": "User is not associated with any school.", "form_link": ""},
-            status=status.HTTP_400_BAD_REQUEST,
+            {"form_link": "", "unique_link": None},
         )
 
     form = AdmissionForm.objects.filter(
@@ -140,8 +139,7 @@ def ShareFormLink(request):
 
     if not form:
         return Response(
-            {"detail": "No active admission form found for this school.", "form_link": ""},
-            status=status.HTTP_404_NOT_FOUND,
+            {"form_link": "", "unique_link": None},
         )
 
     form_link = f"/api/admission/{form.unique_link}/"

@@ -11,6 +11,7 @@ from django.db.models import Sum
 from django.utils import timezone
 from datetime import timedelta
 from decimal import Decimal
+from typing import TYPE_CHECKING, Any
 from sms_app.storage import get_raw_document_storage
 
 class OTP(models.Model):
@@ -1395,6 +1396,11 @@ class LeaveType(models.Model):
 
 
 class LeaveRequest(models.Model):
+    if TYPE_CHECKING:
+        # Django adds the primary key and reverse relation dynamically.
+        id: int
+        leave_days: Any
+
     HALF_DAY_SESSION_CHOICES = [
         ("FULL_DAY", "Full Day"),
         ("FIRST_HALF", "First Half"),
@@ -1550,6 +1556,10 @@ class StaffRemainingLeave(models.Model):
 
 
 class LeaveBalance(models.Model):
+    if TYPE_CHECKING:
+        # Django adds the primary key dynamically when no explicit PK is declared.
+        id: int
+
     staff = models.ForeignKey(
         Staff, on_delete=models.CASCADE, related_name="leave_balances", db_index=True
     )

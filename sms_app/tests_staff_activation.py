@@ -36,10 +36,8 @@ class StaffActivationTests(TestCase):
             self.assertEqual([row['id'] for row in response.data], [self.member.pk])
             self.assertIn('created_at', response.data[0])
 
-    def test_principal_deactivates_and_reactivates_login(self):
-        self.client.force_authenticate(self.trustee)
-        self.assertEqual(self.client.patch(self.status_url(), {'is_active': False}, format='json').status_code, 403)
-        for user in [self.principal]:
+    def test_principal_and_trustee_deactivate_and_reactivate_login(self):
+        for user in [self.principal, self.trustee]:
             self.client.force_authenticate(user)
             for desired in [False, True]:
                 response = self.client.patch(self.status_url(), {'is_active': desired}, format='json')
@@ -105,7 +103,7 @@ class StaffActivationTests(TestCase):
         self.trustee.groups.add(group)
         self.client.force_authenticate(self.trustee)
         self.assertEqual(self.client.get(reverse('trustee-staff-report')).status_code, 200)
-        self.assertEqual(self.client.get(reverse('staff-activation-list')).status_code, 403)
+        self.assertEqual(self.client.get(reverse('staff-activation-list')).status_code, 200)
 
     def test_role_without_school_cannot_see_or_change_staff(self):
         user = get_user_model().objects.create_user(username='unassigned-principal', role='principal')

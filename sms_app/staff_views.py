@@ -38,10 +38,10 @@ User = get_user_model()
 
 from .trustee_staff_access import TrusteeStaffReadOnlyMixin
 
-class DepartmentViewSet(TrusteeStaffReadOnlyMixin, ModelViewSet):
+class DepartmentViewSet(ModelViewSet):
     queryset = Department.objects.all()
     serializer_class = DepartmentSerializer
-    permission_classes = [IsAuthenticated, IsClerkOrTrustee | IsClerkOrPrincipal]
+    permission_classes = [IsAuthenticated, IsClerkOrReadOnly]
 
     def get_queryset(self):
         user = self.request.user
@@ -72,8 +72,7 @@ class DepartmentViewSet(TrusteeStaffReadOnlyMixin, ModelViewSet):
             raise serializers.ValidationError({"name": "A department with this name already exists in your school."})
         serializer.save(school=school)
 
-class StaffView(TrusteeStaffReadOnlyMixin, ModelViewSet):
-    trustee_report_only = True
+class StaffView(ModelViewSet):
     queryset = Staff.objects.all()
     serializer_class = StaffSerializer
     permission_classes = [IsAuthenticated, IsClerkOrTrustee | IsClerkOrPrincipal]
@@ -231,8 +230,7 @@ class StaffView(TrusteeStaffReadOnlyMixin, ModelViewSet):
 
 
 
-class GetTeacherView(TrusteeStaffReadOnlyMixin, ModelViewSet):
-    trustee_report_only = True
+class GetTeacherView(ModelViewSet):
     queryset = Staff.objects.all()
     serializer_class = GetTeacherSerializer
     permission_classes = [IsAuthenticated, IsClerkOrPrincipal]
@@ -336,15 +334,24 @@ class GetTeacherView(TrusteeStaffReadOnlyMixin, ModelViewSet):
 
 
 
-class StaffListView(TrusteeStaffReadOnlyMixin, ModelViewSet):
-    trustee_report_only = True
+class StaffListView(ModelViewSet):
     queryset = Staff.objects.all()
 
     serializer_class = StaffListSirializer
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return Staff.objects.filter(school=self.request.user.school)
+        user = self.request.user
+        school = getattr(user, 'school', None)
+        if not school:
+            staff = getattr(user, 'staff', None)
+            if staff and staff.school:
+                school = staff.school
+        if not school:
+            school = School.objects.filter(login_id=user).first()
+        if school:
+            return Staff.objects.filter(school=school)
+        return Staff.objects.filter(school__login_id=user)
 
 
 

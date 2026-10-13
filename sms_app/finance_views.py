@@ -465,7 +465,7 @@ class FeeWiseClassViewSet(ModelViewSet):
 
 from .trustee_staff_access import TrusteeStaffReadOnlyMixin
 
-class SalaryComponentViewSet(TrusteeStaffReadOnlyMixin, ModelViewSet):
+class SalaryComponentViewSet(ModelViewSet):
     queryset = SalaryComponent.objects.all()
     serializer_class = SalaryComponentSerializer
     permission_classes = [IsAuthenticated, IsFeeManager]
@@ -499,10 +499,7 @@ class SalaryComponentViewSet(TrusteeStaffReadOnlyMixin, ModelViewSet):
 
 
 
-from .trustee_staff_access import TrusteeStaffReadOnlyMixin
-
-class StaffSalaryComponentViewSet(TrusteeStaffReadOnlyMixin, ModelViewSet):
-    trustee_salary_resource = True
+class StaffSalaryComponentViewSet(ModelViewSet):
     queryset = StaffSalaryComponent.objects.all()
     serializer_class = StaffSalaryComponentSerializer
     permission_classes = [IsAuthenticated, IsFeeManager]
@@ -540,11 +537,13 @@ class StaffSalaryComponentViewSet(TrusteeStaffReadOnlyMixin, ModelViewSet):
 
 
 
-class StaffSalaryPaymentViewSet(TrusteeStaffReadOnlyMixin, ModelViewSet):
-    trustee_salary_resource = True
+class StaffSalaryPaymentViewSet(ModelViewSet):
     queryset = StaffSalaryPayment.objects.all()
     serializer_class = StaffSalaryPaymentSerializer
-    permission_classes = [IsAuthenticated, IsFeeManager]
+    def get_permissions(self):
+        if self.action in ["list", "retrieve"]:
+            return [IsAuthenticated()]
+        return [IsAuthenticated(), IsFeeManager()]
 
     def get_serializer_class(self):
         if self.action == "create":
@@ -578,9 +577,31 @@ class StaffSalaryPaymentViewSet(TrusteeStaffReadOnlyMixin, ModelViewSet):
         )
 
     def get_queryset(self):
+        user = self.request.user
+        school = getattr(user, "school", None)
+        if not school:
+            staff_user = getattr(user, "staff", None)
+            if staff_user and staff_user.school:
+                school = staff_user.school
+
         queryset = StaffSalaryPayment.objects.filter(
-            school=self.request.user.school
+            school=school
         ).select_related("staff", "paid_by")
+
+        # Check if user has manager permissions (Trustee/FeeManager)
+        from .permissions import IsFeeManager
+        is_fee_manager = IsFeeManager().has_permission(self.request, self)
+
+        if not is_fee_manager:
+            from .models import Staff
+            staff = getattr(user, "staff", None) or Staff.objects.filter(user=user).first()
+            if not staff and getattr(user, "email", None):
+                staff = Staff.objects.filter(email=user.email).first()
+            if not staff and getattr(user, "mobile", None):
+                staff = Staff.objects.filter(mobile=user.mobile).first()
+            if not staff:
+                return StaffSalaryPayment.objects.none()
+            return queryset.filter(staff=staff).order_by("-salary_month")
 
         staff = self.request.query_params.get("staff")
         salary_month = self.request.query_params.get("salary_month")

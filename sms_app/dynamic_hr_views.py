@@ -23,6 +23,7 @@ from .models import (
     SalaryStructure,
     PayrollRun,
     PayrollPayslip,
+    StaffSalaryPayment,
 )
 from .dynamic_hr_serializers import (
     AttendanceSettingSerializer,
@@ -707,7 +708,7 @@ class LeaveTypeViewSet(TrusteeStaffReadOnlyMixin, viewsets.ModelViewSet):
         serializer.save()
 
 
-class DynamicSalaryComponentViewSet(TrusteeStaffReadOnlyMixin, viewsets.ModelViewSet):
+class DynamicSalaryComponentViewSet(viewsets.ModelViewSet):
     serializer_class = DynamicSalaryComponentSerializer
     permission_classes = [IsAuthenticated, IsClerkOrAdmin]
 
@@ -724,8 +725,7 @@ class DynamicSalaryComponentViewSet(TrusteeStaffReadOnlyMixin, viewsets.ModelVie
         serializer.save(school=school)
 
 
-class SalaryStructureViewSet(TrusteeStaffReadOnlyMixin, viewsets.ModelViewSet):
-    trustee_salary_resource = True
+class SalaryStructureViewSet(viewsets.ModelViewSet):
     serializer_class = SalaryStructureSerializer
     permission_classes = [IsAuthenticated, IsClerkOrAdmin]
 
@@ -745,8 +745,7 @@ class SalaryStructureViewSet(TrusteeStaffReadOnlyMixin, viewsets.ModelViewSet):
 from sms_app.services.payroll_service import generate_payroll_run, generate_payslip, MissingPunchError
 
 
-class PayrollRunViewSet(TrusteeStaffReadOnlyMixin, viewsets.ModelViewSet):
-    trustee_salary_resource = True
+class PayrollRunViewSet(viewsets.ModelViewSet):
     serializer_class = PayrollRunSerializer
     permission_classes = [IsAuthenticated, IsClerkOrAdmin]
 
@@ -817,12 +816,83 @@ class PayrollRunViewSet(TrusteeStaffReadOnlyMixin, viewsets.ModelViewSet):
         })
 
 
-class PayrollPayslipViewSet(TrusteeStaffReadOnlyMixin, viewsets.ModelViewSet):
-    trustee_salary_resource = True
+def _get_staff_for_user(user):
+    if not user or not user.is_authenticated:
+        return None
+    staff = getattr(user, "staff", None)
+    if not staff:
+        staff = Staff.objects.filter(user=user).first()
+    if not staff and getattr(user, "email", None):
+        staff = Staff.objects.filter(email=user.email).first()
+    if not staff and getattr(user, "mobile", None):
+        staff = Staff.objects.filter(mobile=user.mobile).first()
+    return staff
+
+
+def _sync_staff_payslips_from_payments(staff):
+    if not staff or not staff.school:
+        return
+    from datetime import date
+    payments = StaffSalaryPayment.objects.filter(staff=staff)
+    for p in payments:
+        if not p.salary_month:
+            continue
+        try:
+            parts = str(p.salary_month).split("-")
+            m_date = date(int(parts[0]), int(parts[1]), 1)
+        except Exception:
+            continue
+        pr, _ = PayrollRun.objects.get_or_create(
+            school=staff.school,
+            salary_month=m_date,
+            defaults={"status": "Completed"},
+        )
+        if not PayrollPayslip.objects.filter(staff=staff, payroll_run=pr).exists():
+            earnings = [
+                {"name": c.get("name", "Earning"), "amount": str(c.get("amount", 0)), "type": "Earning"}
+                for c in (p.component_snapshot or []) if str(c.get("component_type", "")).lower() == "earning"
+            ] or [{"name": "Basic Salary", "amount": str(p.basic_salary or p.net_salary), "type": "Earning"}]
+            deductions = [
+                {"name": c.get("name", "Deduction"), "amount": str(c.get("amount", 0)), "type": "Deduction"}
+                for c in (p.component_snapshot or []) if str(c.get("component_type", "")).lower() == "deduction"
+            ]
+            PayrollPayslip.objects.create(
+                staff=staff,
+                payroll_run=pr,
+                present_days=p.present_days or 0,
+                paid_leaves=0,
+                unpaid_leaves=p.absent_days or 0,
+                gross_earnings=p.total_earnings or p.basic_salary or 0,
+                total_deductions=p.total_deductions or 0,
+                net_salary=p.net_salary or 0,
+                component_breakdown={
+                    "working_days": p.working_days or 30,
+                    "present_days": float(p.present_days or 0),
+                    "earnings": earnings,
+                    "deductions": deductions,
+                    "gross_earnings": str(p.total_earnings or p.net_salary),
+                    "total_deductions": str(p.total_deductions or 0),
+                    "net_salary": str(p.net_salary),
+                },
+            )
+
+
+def _is_trustee_or_superadmin(user):
+    if not user or not user.is_authenticated:
+        return False
+    if getattr(user, "is_superuser", False) or getattr(user, "is_staff", False):
+        return True
+    role = str(getattr(user, "role", "") or "").strip().upper()
+    if role in ["TRUSTEE", "ADMIN", "SUPERADMIN", "SUPER_ADMIN"]:
+        return True
+    return user.groups.filter(name__in=["admin(trustee)", "trustee", "ADMIN", "super_admin", "superadmin"]).exists()
+
+
+class PayrollPayslipViewSet(viewsets.ModelViewSet):
     serializer_class = PayrollPayslipSerializer
 
     def get_permissions(self):
-        if self.action in ["list", "retrieve"]:
+        if self.action in ["list", "retrieve", "my_payslips"]:
             return [IsAuthenticated()]
         return [IsAuthenticated(), IsClerkOrAdmin()]
 
@@ -831,44 +901,65 @@ class PayrollPayslipViewSet(TrusteeStaffReadOnlyMixin, viewsets.ModelViewSet):
         if not school:
             return PayrollPayslip.objects.none()
         qs = PayrollPayslip.objects.filter(payroll_run__school=school).select_related(
-            "staff", "payroll_run"
+            "staff", "staff__department", "payroll_run"
         )
         user = getattr(self.request, "user", None)
         if not user or not user.is_authenticated:
             return PayrollPayslip.objects.none()
 
-        role = str(getattr(user, "role", "") or "").strip().upper()
-        is_management = (
-            getattr(user, "is_superuser", False)
-            or getattr(user, "is_staff", False)
-            or role in [
-                "CLERK", "ASSISTANT CLERK", "ADMIN", "SUPERADMIN",
-                "SUPER_ADMIN", "PRINCIPAL", "VICE PRINCIPAL", "TRUSTEE", "HR", "HR_ADMIN"
-            ]
-            or user.groups.filter(name__in=[
-                "CLERK", "clerk", "Clerk", "ASSISTANT CLERK", "assistant clerk",
-                "Assistant Clerk", "admin(trustee)", "trustee", "ADMIN",
-                "PRINCIPAL", "principal", "VICE PRINCIPAL", "vice principal", "HR", "hr"
-            ]).exclude(name__in=["FEES MANAGEMENT", "Fee Management", "fees management"]).exists()
-        )
+        is_trustee = _is_trustee_or_superadmin(user)
+        is_mine = self.request.query_params.get("mine") in ["true", "1", "True"]
 
-        if not is_management:
-            staff = Staff.objects.filter(user=user).first()
-            if not staff and getattr(user, "email", None):
-                staff = Staff.objects.filter(email=user.email).first()
-            if not staff and getattr(user, "mobile", None):
-                staff = Staff.objects.filter(mobile=user.mobile).first()
+        # If user is not trustee/superadmin, or explicitly requested their own slips:
+        if not is_trustee or is_mine:
+            staff = _get_staff_for_user(user)
             if not staff:
                 return PayrollPayslip.objects.none()
+            _sync_staff_payslips_from_payments(staff)
             qs = qs.filter(staff=staff)
         else:
+            # Trustee school-wide view
             payroll_run_id = self.request.query_params.get("payroll_run_id")
             if payroll_run_id:
                 qs = qs.filter(payroll_run_id=payroll_run_id)
             staff_id = self.request.query_params.get("staff_id")
             if staff_id:
                 qs = qs.filter(staff_id=staff_id)
+
+        salary_month = self.request.query_params.get("salary_month")
+        if salary_month:
+            qs = qs.filter(payroll_run__salary_month__startswith=salary_month[:7])
+
         return qs.order_by("-payroll_run__salary_month", "-id")
+
+    def retrieve(self, request, *args, **kwargs):
+        instance = self.get_object()
+        user = request.user
+        if not _is_trustee_or_superadmin(user):
+            staff = _get_staff_for_user(user)
+            if not staff or instance.staff_id != staff.id:
+                raise PermissionDenied("You do not have permission to view another employee's payslip.")
+        serializer = self.get_serializer(instance)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=["get"], url_path="my-payslips", permission_classes=[IsAuthenticated])
+    def my_payslips(self, request):
+        user = request.user
+        staff = _get_staff_for_user(user)
+        if not staff:
+            return Response([], status=status.HTTP_200_OK)
+        _sync_staff_payslips_from_payments(staff)
+        payslips = PayrollPayslip.objects.filter(
+            staff=staff
+        ).select_related("staff", "staff__department", "payroll_run").order_by("-payroll_run__salary_month", "-id")
+
+        salary_month = request.query_params.get("salary_month")
+        if salary_month:
+            payslips = payslips.filter(payroll_run__salary_month__startswith=salary_month[:7])
+
+        serializer = self.get_serializer(payslips, many=True)
+        return Response(serializer.data)
+
 
     def perform_update(self, serializer):
         instance = serializer.instance

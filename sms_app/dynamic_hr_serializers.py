@@ -13,6 +13,7 @@ from .models import (
     SalaryStructure,
     PayrollRun,
     PayrollPayslip,
+    StaffSalaryPayment,
 )
 
 
@@ -336,6 +337,17 @@ class PayrollRunSerializer(serializers.ModelSerializer):
 class PayrollPayslipSerializer(serializers.ModelSerializer):
     staff_name = serializers.CharField(source="staff.name", read_only=True, default=None)
     salary_month = serializers.DateField(source="payroll_run.salary_month", read_only=True, default=None)
+    designation = serializers.SerializerMethodField()
+    department = serializers.SerializerMethodField()
+    staff_category = serializers.CharField(source="staff.category", read_only=True, default=None)
+    staff_email = serializers.CharField(source="staff.email", read_only=True, default=None)
+    staff_mobile = serializers.CharField(source="staff.mobile", read_only=True, default=None)
+    basic_salary = serializers.SerializerMethodField()
+    payment_status = serializers.SerializerMethodField()
+    payment_mode = serializers.SerializerMethodField()
+    payment_date = serializers.SerializerMethodField()
+    receipt_number = serializers.SerializerMethodField()
+    school_name = serializers.SerializerMethodField()
 
     class Meta:
         model = PayrollPayslip
@@ -343,16 +355,87 @@ class PayrollPayslipSerializer(serializers.ModelSerializer):
             "id",
             "staff",
             "staff_name",
+            "designation",
+            "department",
+            "staff_category",
+            "staff_email",
+            "staff_mobile",
             "payroll_run",
             "salary_month",
+            "basic_salary",
             "present_days",
             "paid_leaves",
             "unpaid_leaves",
             "gross_earnings",
             "total_deductions",
             "net_salary",
+            "payment_status",
+            "payment_mode",
+            "payment_date",
+            "receipt_number",
+            "school_name",
             "component_breakdown",
             "created_at",
             "updated_at",
         ]
         read_only_fields = ["id", "salary_month", "created_at", "updated_at"]
+
+    def get_designation(self, obj):
+        if not obj.staff:
+            return ""
+        return getattr(obj.staff, "designation", None) or getattr(obj.staff, "category", "")
+
+    def get_department(self, obj):
+        if not obj.staff:
+            return ""
+        dept = getattr(obj.staff, "department", None)
+        return dept.name if dept else getattr(obj.staff, "category", "")
+
+    def get_basic_salary(self, obj):
+        if not obj.staff:
+            return "0.00"
+        return str(getattr(obj.staff, "salary", 0) or "0.00")
+
+    def get_school_name(self, obj):
+        if obj.payroll_run and obj.payroll_run.school:
+            return obj.payroll_run.school.name
+        if obj.staff and obj.staff.school:
+            return obj.staff.school.name
+        return "School Management System"
+
+    def _get_payment(self, obj):
+        if not hasattr(obj, "_cached_payment"):
+            month_str = ""
+            if obj.payroll_run and obj.payroll_run.salary_month:
+                month_str = obj.payroll_run.salary_month.strftime("%Y-%m")
+            payment = None
+            if month_str and obj.staff_id:
+                payment = StaffSalaryPayment.objects.filter(
+                    staff_id=obj.staff_id, salary_month=month_str
+                ).first()
+            obj._cached_payment = payment
+        return obj._cached_payment
+
+    def get_payment_status(self, obj):
+        payment = self._get_payment(obj)
+        if payment and payment.payment_status:
+            return payment.payment_status
+        return "paid" if obj.payroll_run and obj.payroll_run.status in ["Locked", "Completed", "Paid"] else "issued"
+
+    def get_payment_mode(self, obj):
+        payment = self._get_payment(obj)
+        return payment.payment_mode if payment else "offline"
+
+    def get_payment_date(self, obj):
+        payment = self._get_payment(obj)
+        if payment and payment.payment_date:
+            return payment.payment_date
+        return obj.created_at
+
+    def get_receipt_number(self, obj):
+        payment = self._get_payment(obj)
+        if payment and payment.receipt_number:
+            return payment.receipt_number
+        month_str = obj.payroll_run.salary_month.strftime("%Y-%m") if obj.payroll_run and obj.payroll_run.salary_month else "REC"
+        return f"SAL-{month_str}-{obj.staff_id}"
+

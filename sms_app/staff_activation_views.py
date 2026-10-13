@@ -34,10 +34,7 @@ class StatusInputSerializer(serializers.Serializer):
     is_active = serializers.BooleanField(required=True)
 
 
-from .trustee_staff_access import TrusteeStaffReadOnlyMixin
-
-class StaffActivationViewSet(TrusteeStaffReadOnlyMixin, ReadOnlyModelViewSet):
-    trustee_report_only = True
+class StaffActivationViewSet(ReadOnlyModelViewSet):
     permission_classes = [IsAuthenticated, CanManageStaffStatus]
     serializer_class = StaffStatusSerializer
     pagination_class = None

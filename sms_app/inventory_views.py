@@ -1,8 +1,11 @@
-from rest_framework import viewsets, status, permissions
+from rest_framework import viewsets, status
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from django.db import transaction
 from django.db.models import Sum, Count, Q, F, DecimalField, ExpressionWrapper
 from django.utils import timezone
+from django.utils.dateparse import parse_date
 from datetime import datetime, timedelta
 from decimal import Decimal
 
@@ -22,6 +25,7 @@ from .inventory_serializers import (
 )
 from .inventory_services import InventoryService
 from .models import School, AcademicYear, SchoolClass, Student, FeeType
+from .permissions import Isinventory
 
 
 def resolve_school_from_request(request):
@@ -45,7 +49,8 @@ def resolve_school_from_request(request):
         if student and getattr(student, 'school', None):
             return student.school
 
-    # Check custom headers, query params or body
+    # A client supplied school id is only an explicit selector for superusers.
+    # Ordinary users must resolve through their authenticated school/profile.
     school_id = (
         request.headers.get('X-School-ID') or
         request.headers.get('x-school-id') or
@@ -53,29 +58,35 @@ def resolve_school_from_request(request):
         (request.data.get('school') if hasattr(request, 'data') and isinstance(request.data, dict) else None)
     )
     if school_id:
-        s = School.objects.filter(id=school_id).first()
-        if s:
-            return s
-
-    return School.objects.first()
+        if user and user.is_authenticated and user.is_superuser:
+            return School.objects.filter(id=school_id).first()
+    return None
 
 
 class BaseSchoolViewSet(viewsets.ModelViewSet):
     """Base ViewSet ensuring multi-tenant isolation by school"""
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [Isinventory]
 
     def get_school(self):
-        return resolve_school_from_request(self.request)
+        school = resolve_school_from_request(self.request)
+        if not school:
+            raise PermissionDenied("Your account is not linked to a school.")
+        return school
 
     def get_queryset(self):
         school = self.get_school()
-        if school:
-            return self.queryset.filter(school=school)
-        return self.queryset.all()
+        return self.queryset.filter(school=school)
 
     def perform_create(self, serializer):
         school = self.get_school()
+        if not school:
+            raise PermissionDenied("Your account is not linked to a school.")
         serializer.save(school=school)
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context['school'] = self.get_school()
+        return context
 
 
 
@@ -170,6 +181,7 @@ class ItemPricingViewSet(BaseSchoolViewSet):
 class ItemViewSet(BaseSchoolViewSet):
     queryset = Item.objects.all()
     serializer_class = ItemSerializer
+    http_method_names = ['get', 'post', 'put', 'patch', 'head', 'options']
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -212,26 +224,27 @@ class SupplierViewSet(BaseSchoolViewSet):
 class PurchaseViewSet(BaseSchoolViewSet):
     queryset = Purchase.objects.all()
     serializer_class = PurchaseSerializer
+    http_method_names = ['get', 'post', 'head', 'options']
 
+    def get_queryset(self):
+        qs = super().get_queryset().select_related('supplier', 'academic_year').prefetch_related('items')
+        from_date = self.request.query_params.get('from_date')
+        to_date = self.request.query_params.get('to_date')
+        status_filter = self.request.query_params.get('status')
+        if from_date:
+            qs = qs.filter(purchase_date__gte=from_date)
+        if to_date:
+            qs = qs.filter(purchase_date__lte=to_date)
+        if status_filter:
+            qs = qs.filter(status=status_filter)
+        return qs
+
+    @transaction.atomic
     def perform_create(self, serializer):
         school = self.get_school()
+        if not school:
+            raise PermissionDenied("Your account is not linked to a school.")
         purchase = serializer.save(school=school, created_by=self.request.user)
-
-        # Handle items payload if passed
-        items_data = self.request.data.get('items', [])
-        for it in items_data:
-            PurchaseItem.objects.create(
-                purchase=purchase,
-                item_id=it['item'],
-                size_id=it.get('size'),
-                color_id=it.get('color'),
-                quantity=it['quantity'],
-                unit_cost=Decimal(str(it['unit_cost'])),
-                tax=Decimal(str(it.get('tax', '0.00'))),
-                discount=Decimal(str(it.get('discount', '0.00'))),
-                total_amount=Decimal(str(it['total_amount']))
-            )
-
         if purchase.status == 'CONFIRMED':
             InventoryService.process_purchase_confirmation(purchase, self.request.user)
 
@@ -245,6 +258,10 @@ class PurchaseViewSet(BaseSchoolViewSet):
 class StockTransactionViewSet(BaseSchoolViewSet):
     queryset = StockTransaction.objects.all()
     serializer_class = StockTransactionSerializer
+    http_method_names = ['get', 'post', 'head', 'options']
+
+    def create(self, request, *args, **kwargs):
+        return Response({'detail': 'Use the opening-stock action or a purchase, issue, return, or adjustment workflow.'}, status=status.HTTP_405_METHOD_NOT_ALLOWED)
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -264,35 +281,37 @@ class StockTransactionViewSet(BaseSchoolViewSet):
         return qs
 
     @action(detail=False, methods=['post'], url_path='opening-stock')
+    @transaction.atomic
     def create_opening_stock(self, request):
         school = self.get_school()
-        item_id = request.data.get('item')
-        academic_year_id = request.data.get('academic_year')
-        quantity = int(request.data.get('quantity', 0))
-        unit_cost = Decimal(str(request.data.get('unit_cost', '0.00')))
-        size_id = request.data.get('size')
-        color_id = request.data.get('color')
-        entry_date = request.data.get('entry_date') or timezone.now().date()
-        remarks = request.data.get('remarks', 'Opening Stock Entry')
-
-        item = Item.objects.get(id=item_id, school=school)
-        acad_year = AcademicYear.objects.filter(id=academic_year_id).first()
-
-        txn = StockTransaction.objects.create(
-            school=school,
-            item=item,
-            academic_year=acad_year,
-            size_id=size_id,
-            color_id=color_id,
-            transaction_type='OPENING',
-            quantity=quantity,
-            unit_purchase_cost=unit_cost,
-            reference_type='OpeningStock',
-            transaction_date=entry_date,
-            remarks=remarks,
-            created_by=request.user
-        )
-        return Response(StockTransactionSerializer(txn).data, status=status.HTTP_201_CREATED)
+        if not school:
+            raise PermissionDenied("Your account is not linked to a school.")
+        try:
+            quantity = int(request.data.get('quantity', 0))
+            unit_cost = Decimal(str(request.data.get('unit_cost', '0.00')))
+            if quantity <= 0 or unit_cost < 0:
+                raise ValidationError("Quantity must be positive and unit cost cannot be negative.")
+            size_id = request.data.get('size') or None
+            color_id = request.data.get('color') or None
+            item = Item.objects.get(id=request.data.get('item'), school=school)
+            size = ItemSize.objects.get(id=size_id, school=school) if size_id else None
+            color = ItemColor.objects.get(id=color_id, school=school) if color_id else None
+            if item.has_size and not size:
+                raise ValidationError({'size': 'Select a size for this item.'})
+            if item.has_color and not color:
+                raise ValidationError({'color': 'Select a color for this item.'})
+            academic_year_id = request.data.get('academic_year')
+            acad_year = AcademicYear.objects.get(id=academic_year_id, school=school) if academic_year_id else None
+            txn = StockTransaction.objects.create(
+                school=school, item=item, academic_year=acad_year, size=size, color=color,
+                transaction_type='OPENING', quantity=quantity, unit_purchase_cost=unit_cost,
+                reference_type='OpeningStock', transaction_date=request.data.get('entry_date') or timezone.now().date(),
+                remarks=request.data.get('remarks', 'Opening Stock Entry'), created_by=request.user
+            )
+            InventoryService.log_stock_transaction(txn, request.user)
+            return Response(StockTransactionSerializer(txn).data, status=status.HTTP_201_CREATED)
+        except (Item.DoesNotExist, ItemSize.DoesNotExist, ItemColor.DoesNotExist, AcademicYear.DoesNotExist):
+            return Response({'error': 'Item or academic year was not found in this school.'}, status=status.HTTP_400_BAD_REQUEST)
 
 
 class StudentItemEntitlementViewSet(BaseSchoolViewSet):
@@ -320,7 +339,12 @@ class StudentItemEntitlementViewSet(BaseSchoolViewSet):
         class_id = request.data.get('school_class')
         division = request.data.get('division')
         item_id = request.data.get('item')
-        quantity = int(request.data.get('quantity', 1))
+        try:
+            quantity = int(request.data.get('quantity', 1))
+            if quantity <= 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            return Response({'error': 'Quantity must be a positive whole number.'}, status=status.HTTP_400_BAD_REQUEST)
         charging_type = request.data.get('charging_type', 'INCLUDED_IN_FEE')
         fee_type_id = request.data.get('fee_type')
         size_id = request.data.get('size')
@@ -332,9 +356,18 @@ class StudentItemEntitlementViewSet(BaseSchoolViewSet):
         if division:
             students_qs = students_qs.filter(division=division)
 
-        item = Item.objects.get(id=item_id, school=school)
-        acad_year = AcademicYear.objects.get(id=academic_year_id)
-        fee_type = FeeType.objects.filter(id=fee_type_id).first() if fee_type_id else None
+        try:
+            item = Item.objects.get(id=item_id, school=school)
+            acad_year = AcademicYear.objects.get(id=academic_year_id, school=school)
+            size = ItemSize.objects.get(id=size_id, school=school) if size_id else None
+            color = ItemColor.objects.get(id=color_id, school=school) if color_id else None
+            fee_type = FeeType.objects.filter(id=fee_type_id, school=school).first() if fee_type_id else None
+        except (Item.DoesNotExist, AcademicYear.DoesNotExist, ItemSize.DoesNotExist, ItemColor.DoesNotExist):
+            return Response({'error': 'Item, academic year, or variant was not found in this school.'}, status=status.HTTP_400_BAD_REQUEST)
+        if item.has_size and not size or item.has_color and not color:
+            return Response({'error': 'Select all required item variants.'}, status=status.HTTP_400_BAD_REQUEST)
+        if charging_type not in {'INCLUDED_IN_FEE', 'SEPARATE_CHARGE', 'FREE'}:
+            return Response({'error': 'Invalid charging type.'}, status=status.HTTP_400_BAD_REQUEST)
 
         created_count = 0
         for student in students_qs:
@@ -343,8 +376,8 @@ class StudentItemEntitlementViewSet(BaseSchoolViewSet):
                 academic_year=acad_year,
                 student=student,
                 item=item,
-                size_id=size_id,
-                color_id=color_id,
+                size=size,
+                color=color,
                 defaults={
                     'entitled_quantity': quantity,
                     'charging_type': charging_type,
@@ -364,6 +397,7 @@ class StudentItemEntitlementViewSet(BaseSchoolViewSet):
 class StudentItemIssueViewSet(BaseSchoolViewSet):
     queryset = StudentItemIssue.objects.all()
     serializer_class = StudentItemIssueSerializer
+    http_method_names = ['get', 'post', 'head', 'options']
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -387,20 +421,23 @@ class StudentItemIssueViewSet(BaseSchoolViewSet):
         academic_year_id = request.data.get('academic_year')
         student_id = request.data.get('student')
         item_id = request.data.get('item')
-        quantity = int(request.data.get('quantity', 1))
+        try:
+            quantity = int(request.data.get('quantity', 1))
+            charged_amount = Decimal(str(request.data['charged_amount'])) if 'charged_amount' in request.data else None
+        except (TypeError, ValueError, ArithmeticError):
+            return Response({'error': 'Quantity and charged amount must be valid numbers.'}, status=status.HTTP_400_BAD_REQUEST)
         size_id = request.data.get('size')
         color_id = request.data.get('color')
         charging_type = request.data.get('charging_type')
-        charged_amount = Decimal(str(request.data['charged_amount'])) if 'charged_amount' in request.data else None
         issue_reason = request.data.get('issue_reason', 'INITIAL_ISSUE')
         remarks = request.data.get('remarks', '')
 
         try:
             student = Student.objects.get(id=student_id, school=school)
             item = Item.objects.get(id=item_id, school=school)
-            acad_year = AcademicYear.objects.get(id=academic_year_id)
-            size = ItemSize.objects.filter(id=size_id).first() if size_id else None
-            color = ItemColor.objects.filter(id=color_id).first() if color_id else None
+            acad_year = AcademicYear.objects.get(id=academic_year_id, school=school)
+            size = ItemSize.objects.get(id=size_id, school=school) if size_id else None
+            color = ItemColor.objects.get(id=color_id, school=school) if color_id else None
 
             record = InventoryService.issue_item_single(
                 school=school,
@@ -426,15 +463,18 @@ class StudentItemIssueViewSet(BaseSchoolViewSet):
         academic_year_id = request.data.get('academic_year')
         item_id = request.data.get('item')
         student_ids = request.data.get('student_ids', [])
-        quantity_per_student = int(request.data.get('quantity_per_student', 1))
+        try:
+            quantity_per_student = int(request.data.get('quantity_per_student', 1))
+        except (TypeError, ValueError):
+            return Response({'error': 'Quantity per student must be a positive whole number.'}, status=status.HTTP_400_BAD_REQUEST)
         size_id = request.data.get('size')
         color_id = request.data.get('color')
 
         try:
             item = Item.objects.get(id=item_id, school=school)
-            acad_year = AcademicYear.objects.get(id=academic_year_id)
-            size = ItemSize.objects.filter(id=size_id).first() if size_id else None
-            color = ItemColor.objects.filter(id=color_id).first() if color_id else None
+            acad_year = AcademicYear.objects.get(id=academic_year_id, school=school)
+            size = ItemSize.objects.get(id=size_id, school=school) if size_id else None
+            color = ItemColor.objects.get(id=color_id, school=school) if color_id else None
 
             issued_records = InventoryService.issue_item_bulk(
                 school=school,
@@ -457,10 +497,13 @@ class StudentItemIssueViewSet(BaseSchoolViewSet):
 class ReplacementRequestViewSet(BaseSchoolViewSet):
     queryset = ReplacementRequest.objects.all()
     serializer_class = ReplacementRequestSerializer
+    http_method_names = ['get', 'post', 'head', 'options']
 
     @action(detail=True, methods=['post'], url_path='approve')
     def approve_request(self, request, pk=None):
         replacement = self.get_object()
+        if replacement.status != 'PENDING':
+            return Response({'error': 'Only pending requests can be approved.'}, status=status.HTTP_400_BAD_REQUEST)
         replacement.status = 'APPROVED'
         replacement.reviewed_at = timezone.now()
         replacement.reviewed_by = request.user
@@ -471,6 +514,8 @@ class ReplacementRequestViewSet(BaseSchoolViewSet):
     @action(detail=True, methods=['post'], url_path='reject')
     def reject_request(self, request, pk=None):
         replacement = self.get_object()
+        if replacement.status != 'PENDING':
+            return Response({'error': 'Only pending requests can be rejected.'}, status=status.HTTP_400_BAD_REQUEST)
         replacement.status = 'REJECTED'
         replacement.reviewed_at = timezone.now()
         replacement.reviewed_by = request.user
@@ -498,9 +543,13 @@ class ReplacementRequestViewSet(BaseSchoolViewSet):
 class StudentItemReturnViewSet(BaseSchoolViewSet):
     queryset = StudentItemReturn.objects.all()
     serializer_class = StudentItemReturnSerializer
+    http_method_names = ['get', 'post', 'head', 'options']
 
+    @transaction.atomic
     def perform_create(self, serializer):
         school = self.get_school()
+        if not school:
+            raise PermissionDenied("Your account is not linked to a school.")
         return_obj = serializer.save(school=school, received_by=self.request.user)
         InventoryService.process_return(return_obj, self.request.user)
 
@@ -508,19 +557,44 @@ class StudentItemReturnViewSet(BaseSchoolViewSet):
 class StockAdjustmentViewSet(BaseSchoolViewSet):
     queryset = StockAdjustment.objects.all()
     serializer_class = StockAdjustmentSerializer
+    http_method_names = ['get', 'post', 'head', 'options']
 
+    @transaction.atomic
     def perform_create(self, serializer):
         school = self.get_school()
+        if not school:
+            raise PermissionDenied("Your account is not linked to a school.")
         adj = serializer.save(school=school, created_by=self.request.user)
         InventoryService.process_adjustment(adj, self.request.user)
 
 
+class InventoryAuditLogViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = InventoryAuditLogSerializer
+    permission_classes = [Isinventory]
+
+    def get_queryset(self):
+        school = resolve_school_from_request(self.request)
+        if not school:
+            raise PermissionDenied("Your account is not linked to a school.")
+        qs = InventoryAuditLog.objects.filter(school=school)
+        entity_type = self.request.query_params.get('entity_type')
+        action_name = self.request.query_params.get('action')
+        if entity_type:
+            qs = qs.filter(entity_type=entity_type)
+        if action_name:
+            qs = qs.filter(action=action_name)
+        return qs
+
+
 class InventoryReportViewSet(viewsets.ViewSet):
     """Aggregated reporting endpoints for Purchase, Sales, P&L, Free Items, Replacements & Dashboard"""
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [Isinventory]
 
     def get_school(self):
-        return resolve_school_from_request(self.request)
+        school = resolve_school_from_request(self.request)
+        if not school:
+            raise PermissionDenied("Your account is not linked to a school.")
+        return school
 
     @action(detail=False, methods=['get'], url_path='dashboard-summary')
     def dashboard_summary(self, request):
@@ -529,14 +603,14 @@ class InventoryReportViewSet(viewsets.ViewSet):
         start_of_month = today.replace(day=1)
 
         total_items = Item.objects.filter(school=school, is_active=True).count()
-        total_stock_units = StockTransaction.objects.filter(school=school).aggregate(total=Sum('quantity'))['total'] or 0
-
         # Low stock and out of stock counts
         all_items = Item.objects.filter(school=school, is_active=True)
         low_stock_count = 0
         out_of_stock_count = 0
+        total_stock_units = 0
         for it in all_items:
             stock = it.stock_transactions.aggregate(total=Sum('quantity'))['total'] or 0
+            total_stock_units += max(0, stock)
             if stock <= 0:
                 out_of_stock_count += 1
             elif stock <= it.minimum_stock_level:
@@ -557,7 +631,7 @@ class InventoryReportViewSet(viewsets.ViewSet):
 
         return Response({
             'total_items': total_items,
-            'total_stock_units': max(0, total_stock_units),
+            'total_stock_units': total_stock_units,
             'low_stock_count': low_stock_count,
             'out_of_stock_count': out_of_stock_count,
             'today_purchases_amount': today_purchases,
@@ -633,13 +707,13 @@ class InventoryReportViewSet(viewsets.ViewSet):
             rows.append({
                 'id': iss.id,
                 'issue_date': iss.issue_date,
-                'student_name': f"{iss.student.first_name} {iss.student.last_name}" if iss.student else "N/A",
-                'admission_number': iss.student.admission_number if iss.student else "N/A",
+                'student_name': f"{iss.student.name or ''} {iss.student.surname or ''}".strip() if iss.student else "N/A",
+                'admission_number': iss.student.gr_no if iss.student else "N/A",
                 'class_name': str(iss.student.school_class) if iss.student and iss.student.school_class else "N/A",
                 'item_name': iss.item.item_name if iss.item else "N/A",
                 'item_code': iss.item.item_code if iss.item else "N/A",
-                'size': iss.size.size_name if iss.size else None,
-                'color': iss.color.color_name if iss.color else None,
+                'size': iss.size.name if iss.size else None,
+                'color': iss.color.name if iss.color else None,
                 'quantity': iss.quantity,
                 'charging_type': iss.charging_type,
                 'unit_cost': str(unit_cost),
@@ -654,21 +728,32 @@ class InventoryReportViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['get'], url_path='replacements-summary')
     def replacements_summary(self, request):
         school = self.get_school()
-        from_date = request.query_params.get('from_date')
-        to_date = request.query_params.get('to_date')
+        raw_from_date = request.query_params.get('from_date')
+        raw_to_date = request.query_params.get('to_date')
 
-        repl_qs = ReplacementRequest.objects.filter(school=school).select_related('student', 'item', 'size')
+        from_date = parse_date(raw_from_date) if raw_from_date else None
+        to_date = parse_date(raw_to_date) if raw_to_date else None
+        if raw_from_date and from_date is None:
+            raise ValidationError({'from_date': 'Use a valid date in YYYY-MM-DD format.'})
+        if raw_to_date and to_date is None:
+            raise ValidationError({'to_date': 'Use a valid date in YYYY-MM-DD format.'})
+        if from_date and to_date and from_date > to_date:
+            raise ValidationError({'to_date': 'Must be on or after from_date.'})
+
+        repl_qs = ReplacementRequest.objects.filter(school=school).select_related(
+            'student', 'item', 'current_size', 'requested_size', 'current_color', 'requested_color'
+        )
         if from_date:
-            repl_qs = repl_qs.filter(created_at__date__gte=from_date)
+            repl_qs = repl_qs.filter(requested_at__date__gte=from_date)
         if to_date:
-            repl_qs = repl_qs.filter(created_at__date__lte=to_date)
+            repl_qs = repl_qs.filter(requested_at__date__lte=to_date)
 
         rows = []
         for r in repl_qs:
             rows.append({
                 'id': r.id,
-                'date': r.created_at.date(),
-                'student_name': f"{r.student.first_name} {r.student.last_name}" if r.student else "N/A",
+                'date': r.requested_at.date(),
+                'student_name': f"{r.student.name or ''} {r.student.surname or ''}".strip() if r.student else "N/A",
                 'item_name': r.item.item_name if r.item else "N/A",
                 'quantity': r.quantity,
                 'reason': r.reason,
