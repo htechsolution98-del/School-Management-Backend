@@ -1,9 +1,10 @@
 from datetime import datetime
 from decimal import Decimal
+from django.db import transaction
 from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import ValidationError, PermissionDenied
+from rest_framework.exceptions import ValidationError, PermissionDenied, NotFound
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from .permissions import IsClerkOrAdmin, IsHRAttendanceAdmin
@@ -275,8 +276,22 @@ class AttendanceRegularizationViewSet(TrusteeStaffReadOnlyMixin, viewsets.ModelV
         instance.delete()
 
     @action(detail=True, methods=["post"], url_path="approve")
+    @transaction.atomic
     def approve(self, request, pk=None):
         regularization = self.get_object()
+        regularization = (
+            self.get_queryset()
+            .select_for_update()
+            .filter(pk=regularization.pk)
+            .first()
+        )
+        if regularization is None:
+            raise NotFound()
+        if regularization.status != "Pending":
+            return Response(
+                {"error": "Only pending regularization requests can be approved."},
+                status=status.HTTP_409_CONFLICT,
+            )
 
         # Strict rule: Staff cannot approve their own regularization request
         current_staff = get_staff_for_user(request.user)
@@ -304,6 +319,24 @@ class AttendanceRegularizationViewSet(TrusteeStaffReadOnlyMixin, viewsets.ModelV
             return Response(
                 {"error": f"Cannot approve regularization after exit date ({regularization.staff.exit_date})."},
                 status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # A locked payroll is immutable. Leave this request pending until an
+        # authorized administrator unlocks the run; never change attendance alone.
+        payroll_month = regularization.attendance_date.replace(day=1)
+        payroll_run = PayrollRun.objects.select_for_update().filter(
+            school=regularization.staff.school,
+            salary_month=payroll_month,
+        ).first()
+        if payroll_run and payroll_run.status == "Locked":
+            return Response(
+                {
+                    "error": (
+                        "This attendance date belongs to a locked payroll run. "
+                        "Unlock the payroll run before approving the correction."
+                    )
+                },
+                status=status.HTTP_409_CONFLICT,
             )
 
         # 1. Update or create underlying Attendance record
@@ -387,6 +420,21 @@ class AttendanceRegularizationViewSet(TrusteeStaffReadOnlyMixin, viewsets.ModelV
 
         attendance.save()
 
+        # Refresh a payslip that already exists for this month in the same
+        # transaction. Payment settlement fields remain unchanged.
+        if payroll_run:
+            try:
+                generate_payslip(
+                    staff=regularization.staff,
+                    month=regularization.attendance_date.month,
+                    year=regularization.attendance_date.year,
+                    payroll_run=payroll_run,
+                    raise_on_missing_punch=True,
+                    preserve_payment_details=True,
+                )
+            except MissingPunchError as exc:
+                raise ValidationError({"payroll": str(exc)}) from exc
+
         # 2. Append to audit log and update regularization
         current_time = timezone.now().isoformat()
         log_entry = {
@@ -416,8 +464,22 @@ class AttendanceRegularizationViewSet(TrusteeStaffReadOnlyMixin, viewsets.ModelV
         return Response(self.get_serializer(regularization).data)
 
     @action(detail=True, methods=["post"], url_path="reject")
+    @transaction.atomic
     def reject(self, request, pk=None):
         regularization = self.get_object()
+        regularization = (
+            self.get_queryset()
+            .select_for_update()
+            .filter(pk=regularization.pk)
+            .first()
+        )
+        if regularization is None:
+            raise NotFound()
+        if regularization.status != "Pending":
+            return Response(
+                {"error": "Only pending regularization requests can be rejected."},
+                status=status.HTTP_409_CONFLICT,
+            )
 
         # Strict rule: Staff cannot reject their own regularization request
         current_staff = get_staff_for_user(request.user)

@@ -398,6 +398,7 @@ def generate_payslip(
     payroll_run=None,
     payment_data=None,
     raise_on_missing_punch=True,
+    preserve_payment_details=False,
 ):
     """
     Core calculation function: generate_payslip(staff, month, year)
@@ -858,31 +859,62 @@ def generate_payslip(
         ]
 
         absent_days_count = max(0, total_working_days - int(payable_days))
-        StaffSalaryPayment.objects.update_or_create(
-            school=staff.school,
-            staff=staff,
-            salary_month=salary_month_str,
-            defaults={
-                "staff_name": staff.name,
-                "staff_category": staff.category,
-                "basic_salary": base_salary_val,
-                "total_earnings": gross_earnings,
-                "total_deductions": total_deductions,
-                "working_days": total_working_days,
-                "present_days": payable_days,
-                "absent_days": absent_days_count,
-                "half_days": int(half_days),
-                "attendance_deduction": lop_amount,
-                "component_snapshot": legacy_snapshot,
-                "net_salary": net_salary,
-                "paid_amount": net_salary,
-                "payment_mode": payment_mode,
-                "payment_status": "paid",
-                "transaction_id": transaction_id,
-                "note": note,
-                "receipt_number": receipt_num,
-            },
-        )
+        salary_calculation_fields = {
+            "staff_name": staff.name,
+            "staff_category": staff.category,
+            "basic_salary": base_salary_val,
+            "total_earnings": gross_earnings,
+            "total_deductions": total_deductions,
+            "working_days": total_working_days,
+            "present_days": payable_days,
+            "absent_days": absent_days_count,
+            "half_days": int(half_days),
+            "attendance_deduction": lop_amount,
+            "component_snapshot": legacy_snapshot,
+            "net_salary": net_salary,
+        }
+        if preserve_payment_details:
+            payment, created = StaffSalaryPayment.objects.get_or_create(
+                school=staff.school,
+                staff=staff,
+                salary_month=salary_month_str,
+                defaults={
+                    **salary_calculation_fields,
+                    "paid_amount": Decimal("0.00"),
+                    "payment_mode": payment_mode,
+                    "payment_status": "pending",
+                    "transaction_id": transaction_id,
+                    "note": note,
+                    "receipt_number": receipt_num,
+                },
+            )
+            if not created:
+                updated_fields = {
+                    **salary_calculation_fields,
+                    "updated_at": timezone.now(),
+                }
+                if payment.payment_status != "cancelled":
+                    updated_fields["payment_status"] = (
+                        "paid" if payment.paid_amount >= net_salary else "pending"
+                    )
+                StaffSalaryPayment.objects.filter(pk=payment.pk).update(
+                    **updated_fields,
+                )
+        else:
+            StaffSalaryPayment.objects.update_or_create(
+                school=staff.school,
+                staff=staff,
+                salary_month=salary_month_str,
+                defaults={
+                    **salary_calculation_fields,
+                    "paid_amount": net_salary,
+                    "payment_mode": payment_mode,
+                    "payment_status": "paid",
+                    "transaction_id": transaction_id,
+                    "note": note,
+                    "receipt_number": receipt_num,
+                },
+            )
 
     return {
         "status": "success",

@@ -136,7 +136,7 @@ def carry_forward_leave(staff):
         srl.month = current_month
         srl.year = current_year
         srl.save(update_fields=["total_levaes", "remaining_leaves", "month", "year"])
-        print("carried forward", lt.id, carry)
+        print("carried forward", lt.pk, carry)
 
 
         
@@ -150,7 +150,7 @@ class AttendanceLocationViewSet(TrusteeStaffReadOnlyMixin, ModelViewSet):
 
     def get_queryset(self):
         return AttendanceLocation.objects.filter(
-            school=self.request.user.school
+            school=getattr(self.request.user, "school", None)
         )
 
     # ✅ attach request context (important for your create logic)
@@ -1046,7 +1046,7 @@ class LeaveRequestView(TrusteeStaffReadOnlyMixin, ModelViewSet): #for requesting
             LeaveWorkflowService.withdraw_leave_request(instance, request.user)
             return Response(status=status.HTTP_204_NO_CONTENT)
         except (DjangoValidationError, ValidationError) as e:
-            return Response({"error": e.messages if hasattr(e, "messages") else str(e)}, status=400)
+            return Response({"error": getattr(e, "messages", str(e))}, status=400)
 
     @action(detail=True, methods=["post"], url_path="withdraw")
     def withdraw(self, request, pk=None):

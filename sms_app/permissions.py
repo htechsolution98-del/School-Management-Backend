@@ -1,5 +1,5 @@
 from rest_framework.permissions import BasePermission, SAFE_METHODS
-from .models import Student
+from .models import Student, Staff
 
 class Is_super_admin(BasePermission):
     def has_permission(self, request, view):
