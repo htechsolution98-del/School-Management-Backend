@@ -1,6 +1,7 @@
 from decimal import Decimal
 from django.utils import timezone
 from django.core.exceptions import ValidationError as DjangoValidationError, PermissionDenied as DjangoPermissionDenied
+from django.db import IntegrityError
 from .models import StaffRemainingLeave
 from .models import *
 from rest_framework.viewsets import ModelViewSet, ViewSet
@@ -2174,7 +2175,25 @@ class BookCategoryViewSet(ModelViewSet):
         staff = Staff.objects.filter(user=self.request.user).first()
         if not staff:
             raise PermissionDenied("You are not registered as staff.")
-        serializer.save(school=staff.school)
+        name = (serializer.validated_data.get('name') or '').strip()
+        existing = BookCategory.objects.filter(school=staff.school, name__iexact=name).first()
+        if existing:
+            if not existing.is_active:
+                existing.is_active = True
+                if 'description' in serializer.validated_data:
+                    existing.description = serializer.validated_data.get('description')
+                existing.save()
+                serializer.instance = existing
+                return
+            raise ValidationError({
+                "name": [f"Category '{name}' already exists in your library."]
+            })
+        try:
+            serializer.save(school=staff.school)
+        except IntegrityError:
+            raise ValidationError({
+                "name": [f"Category '{name}' already exists in your library."]
+            })
 
     def perform_destroy(self, instance):
         instance.is_active = False
@@ -2195,7 +2214,25 @@ class AuthorViewSet(ModelViewSet):
         staff = Staff.objects.filter(user=self.request.user).first()
         if not staff:
             raise PermissionDenied("You are not registered as staff.")
-        serializer.save(school=staff.school)
+        name = (serializer.validated_data.get('name') or '').strip()
+        existing = Author.objects.filter(school=staff.school, name__iexact=name).first()
+        if existing:
+            if not existing.is_active:
+                existing.is_active = True
+                if 'biography' in serializer.validated_data:
+                    existing.biography = serializer.validated_data.get('biography')
+                existing.save()
+                serializer.instance = existing
+                return
+            raise ValidationError({
+                "name": [f"Author '{name}' already exists in your library."]
+            })
+        try:
+            serializer.save(school=staff.school)
+        except IntegrityError:
+            raise ValidationError({
+                "name": [f"Author '{name}' already exists in your library."]
+            })
 
     def perform_destroy(self, instance):
         instance.is_active = False
@@ -2216,7 +2253,27 @@ class PublisherViewSet(ModelViewSet):
         staff = Staff.objects.filter(user=self.request.user).first()
         if not staff:
             raise PermissionDenied("You are not registered as staff.")
-        serializer.save(school=staff.school)
+        name = (serializer.validated_data.get('name') or '').strip()
+        existing = Publisher.objects.filter(school=staff.school, name__iexact=name).first()
+        if existing:
+            if not existing.is_active:
+                existing.is_active = True
+                if 'contact_no' in serializer.validated_data:
+                    existing.contact_no = serializer.validated_data.get('contact_no')
+                if 'email' in serializer.validated_data:
+                    existing.email = serializer.validated_data.get('email')
+                existing.save()
+                serializer.instance = existing
+                return
+            raise ValidationError({
+                "name": [f"Publisher '{name}' already exists in your library."]
+            })
+        try:
+            serializer.save(school=staff.school)
+        except IntegrityError:
+            raise ValidationError({
+                "name": [f"Publisher '{name}' already exists in your library."]
+            })
 
     def perform_destroy(self, instance):
         instance.is_active = False
@@ -2237,7 +2294,33 @@ class RackViewSet(ModelViewSet):
         staff = Staff.objects.filter(user=self.request.user).first()
         if not staff:
             raise PermissionDenied("You are not registered as staff.")
-        serializer.save(school=staff.school)
+        rack_code = (serializer.validated_data.get('rack_code') or '').strip()
+        rack_name = (serializer.validated_data.get('rack_name') or '').strip()
+
+        existing = Rack.objects.filter(school=staff.school).filter(
+            Q(rack_code__iexact=rack_code) | Q(rack_name__iexact=rack_name)
+        ).first()
+
+        if existing:
+            if not existing.is_active:
+                existing.is_active = True
+                if rack_name:
+                    existing.rack_name = rack_name
+                if 'description' in serializer.validated_data:
+                    existing.description = serializer.validated_data.get('description')
+                existing.save()
+                serializer.instance = existing
+                return
+            raise ValidationError({
+                "rack_code": [f"A rack with code '{existing.rack_code}' ('{existing.rack_name}') already exists in your library."]
+            })
+
+        try:
+            serializer.save(school=staff.school)
+        except IntegrityError:
+            raise ValidationError({
+                "rack_code": [f"A rack with code '{rack_code}' already exists in your library."]
+            })
 
     def perform_destroy(self, instance):
         instance.is_active = False
@@ -2260,7 +2343,34 @@ class ShelfViewSet(ModelViewSet):
         staff = Staff.objects.filter(user=self.request.user).first()
         if not staff:
             raise PermissionDenied("You are not registered as staff.")
-        serializer.save(school=staff.school)
+        rack = serializer.validated_data.get('rack')
+        shelf_code = (serializer.validated_data.get('shelf_code') or '').strip()
+        shelf_name = (serializer.validated_data.get('shelf_name') or '').strip()
+
+        existing = Shelf.objects.filter(rack=rack).filter(
+            Q(shelf_code__iexact=shelf_code) | Q(shelf_name__iexact=shelf_name)
+        ).first()
+
+        if existing:
+            if not existing.is_active:
+                existing.is_active = True
+                if shelf_name:
+                    existing.shelf_name = shelf_name
+                if 'description' in serializer.validated_data:
+                    existing.description = serializer.validated_data.get('description')
+                existing.save()
+                serializer.instance = existing
+                return
+            raise ValidationError({
+                "shelf_code": [f"A shelf with code '{existing.shelf_code}' ('{existing.shelf_name}') already exists in this rack."]
+            })
+
+        try:
+            serializer.save(school=staff.school)
+        except IntegrityError:
+            raise ValidationError({
+                "shelf_code": [f"A shelf with code '{shelf_code}' already exists in this rack."]
+            })
 
     def perform_destroy(self, instance):
         instance.is_active = False
@@ -2401,7 +2511,17 @@ class BookManageView(ModelViewSet):
         staff = Staff.objects.filter(user=self.request.user).first()
         if staff is None:
             raise PermissionDenied("You are not registered as staff for any school.")
-        return Book.objects.filter(school=staff.school).select_related("category_ref", "author_ref", "publisher_ref", "rack", "shelf")
+        qs = Book.objects.filter(school=staff.school).select_related("category_ref", "author_ref", "publisher_ref", "rack", "shelf")
+        cat = self.request.query_params.get("category")
+        if cat and cat.upper() != "ALL":
+            qs = qs.filter(Q(category__iexact=cat) | Q(category_ref__name__iexact=cat))
+        book_id = self.request.query_params.get("book") or self.request.query_params.get("book_id")
+        if book_id and str(book_id).upper() != "ALL":
+            qs = qs.filter(id=book_id)
+        search = self.request.query_params.get("search")
+        if search:
+            qs = qs.filter(Q(title__icontains=search) | Q(author__icontains=search) | Q(isbn__icontains=search))
+        return qs
 
     def perform_create(self, serializer):
         staff = Staff.objects.filter(user=self.request.user).first()
@@ -2499,7 +2619,14 @@ class BookIssuedView(ModelViewSet):
         staff = Staff.objects.filter(user=self.request.user).first()
         if staff is None:
             raise PermissionDenied("You are not registered as staff for any school.")
-        return BookIssued.objects.filter(school=staff.school).select_related("book", "student", "staff", "book_copy")
+        qs = BookIssued.objects.filter(school=staff.school).select_related("book", "student", "staff", "book_copy")
+        book_id = self.request.query_params.get("book") or self.request.query_params.get("book_id")
+        if book_id and str(book_id).upper() != "ALL":
+            qs = qs.filter(book_id=book_id)
+        cat = self.request.query_params.get("category")
+        if cat and cat.upper() != "ALL":
+            qs = qs.filter(Q(book__category__iexact=cat) | Q(book__category_ref__name__iexact=cat))
+        return qs
 
     @action(detail=False, methods=['get'], url_path='staff-borrowers')
     def staff_borrowers(self, request):
@@ -2507,6 +2634,259 @@ class BookIssuedView(ModelViewSet):
         if not librarian:
             raise PermissionDenied('You are not registered as staff.')
         return Response(list(Staff.objects.filter(school=librarian.school, is_active=True).order_by('name').values('id', 'name', 'category')))
+
+    @action(detail=False, methods=['post'], url_path='bulk-issue')
+    def bulk_issue(self, request):
+        from django.db import connection, OperationalError, DatabaseError
+        import logging
+        logger = logging.getLogger(__name__)
+
+        for attempt in range(2):
+            try:
+                return self._do_bulk_issue(request)
+            except (OperationalError, DatabaseError) as db_err:
+                logger.warning(f"BookIssuedView.bulk_issue DB error (attempt {attempt + 1}/2): {db_err}")
+                connection.close()
+                if attempt == 1:
+                    logger.error(f"BookIssuedView.bulk_issue persistent DB error: {db_err}", exc_info=True)
+                    return Response(
+                        {"detail": "The library database is temporarily busy or connection timed out. Please try again."},
+                        status=status.HTTP_503_SERVICE_UNAVAILABLE
+                    )
+
+    def _do_bulk_issue(self, request):
+        staff = Staff.objects.filter(user=request.user).first()
+        if staff is None:
+            raise PermissionDenied("You are not registered as staff for any school.")
+
+        book_id = request.data.get("book") or request.data.get("book_id")
+        student_ids = request.data.get("students") or request.data.get("student_ids") or []
+        staff_ids = request.data.get("staff_ids") or request.data.get("staff") or []
+        due_date_str = request.data.get("due_date")
+
+        if not book_id:
+            raise ValidationError({"book": ["Please specify a book to issue."]})
+
+        clean_student_ids = []
+        if isinstance(student_ids, list):
+            for sid in student_ids:
+                try:
+                    s_val = int(sid)
+                    if s_val not in clean_student_ids:
+                        clean_student_ids.append(s_val)
+                except (ValueError, TypeError):
+                    continue
+        elif student_ids:
+            try:
+                clean_student_ids.append(int(student_ids))
+            except (ValueError, TypeError):
+                pass
+
+        clean_staff_ids = []
+        if isinstance(staff_ids, list):
+            for sid in staff_ids:
+                try:
+                    s_val = int(sid)
+                    if s_val not in clean_staff_ids:
+                        clean_staff_ids.append(s_val)
+                except (ValueError, TypeError):
+                    continue
+        elif staff_ids:
+            try:
+                clean_staff_ids.append(int(staff_ids))
+            except (ValueError, TypeError):
+                pass
+
+        if not clean_student_ids and not clean_staff_ids:
+            raise ValidationError({"borrowers": ["Please select at least one student or staff member."]})
+        if clean_student_ids and clean_staff_ids:
+            raise ValidationError({"borrowers": ["Issue can be to students or staff, not mixed in a single request."]})
+
+        school = staff.school
+        book = Book.objects.filter(pk=book_id, school=school).first()
+        if not book:
+            raise ValidationError({"book": ["Book not found in your school library."]})
+
+        from django.db import transaction
+        with transaction.atomic():
+            book = Book.objects.select_for_update().get(pk=book.pk, school=school)
+            setting = _get_or_create_library_setting(school)
+
+            req_count = len(clean_student_ids) if clean_student_ids else len(clean_staff_ids)
+            if book.available_copies < req_count:
+                raise ValidationError(
+                    f"Insufficient stock: Book only has {book.available_copies} available copy(ies), but {req_count} borrowers were selected."
+                )
+
+            # Determine due date
+            now = timezone.now()
+            if due_date_str:
+                try:
+                    if isinstance(due_date_str, str):
+                        clean_date_str = due_date_str.strip()
+                        if "T" in clean_date_str:
+                            due_date = datetime.fromisoformat(clean_date_str.replace("Z", "+00:00"))
+                        else:
+                            due_date = datetime.strptime(clean_date_str, "%Y-%m-%d")
+                        if timezone.is_naive(due_date):
+                            due_date = timezone.make_aware(due_date)
+                    else:
+                        due_date = due_date_str
+                except Exception:
+                    raise ValidationError({"due_date": ["Invalid due date format."]})
+                if due_date.date() < now.date():
+                    raise ValidationError({"due_date": ["Due date must be in the future, not in the past."]})
+            else:
+                loan_days = setting.issue_duration_days or 14
+                due_date = now + timezone.timedelta(days=loan_days)
+
+            # Process students
+            if clean_student_ids:
+                students_qs = Student.objects.filter(pk__in=clean_student_ids, school=school)
+                student_map = {s.id: s for s in students_qs}
+                if len(student_map) != req_count:
+                    missing = [sid for sid in clean_student_ids if sid not in student_map]
+                    raise ValidationError(f"Some selected students do not belong to your school: {missing}")
+
+                validation_errors = []
+                for s_id in clean_student_ids:
+                    stud = student_map[s_id]
+                    s_name = f"{stud.name} {stud.surname or ''}".strip()
+
+                    active_loans_count = BookIssued.objects.filter(school=school, student=stud, status="ISSUED").count()
+                    if active_loans_count >= setting.max_books_per_student:
+                        validation_errors.append(f"{s_name} has reached max loan limit ({setting.max_books_per_student} books).")
+                        continue
+
+                    already_issued = BookIssued.objects.filter(school=school, book=book, student=stud, status="ISSUED").exists()
+                    if already_issued:
+                        validation_errors.append(f"{s_name} already has a copy of this book checked out.")
+                        continue
+
+                    if not setting.allow_issue_with_fine:
+                        unpaid_fines = BookIssued.objects.filter(school=school, student=stud, is_fine_paid=False, total_fine__gt=0)
+                        total_unpaid = sum(max(Decimal("0.00"), f.total_fine - f.fine_paid_amount) for f in unpaid_fines)
+                        if total_unpaid > 0:
+                            validation_errors.append(f"{s_name} has unpaid library fines (₹{total_unpaid}).")
+
+                if validation_errors:
+                    raise ValidationError({"non_field_errors": validation_errors})
+
+                available_copies = list(BookCopy.objects.select_for_update().filter(
+                    school=school, book=book, status="AVAILABLE", is_active=True
+                ).order_by("accession_no")[:req_count])
+
+                created_records = []
+                for idx, s_id in enumerate(clean_student_ids):
+                    stud = student_map[s_id]
+                    assigned_copy = available_copies[idx] if idx < len(available_copies) else None
+
+                    if assigned_copy:
+                        assigned_copy.status = "ISSUED"
+                        assigned_copy.save(update_fields=["status"])
+
+                    active_res = BookReservation.objects.filter(
+                        school=school, book=book, student=stud, status__in=["WAITING", "AVAILABLE"]
+                    ).first()
+                    if active_res:
+                        active_res.status = "ISSUED"
+                        active_res.save(update_fields=["status"])
+
+                    issued = BookIssued.objects.create(
+                        school=school,
+                        book=book,
+                        book_copy=assigned_copy,
+                        student=stud,
+                        staff=None,
+                        book_issued_date=now,
+                        due_date=due_date,
+                        renewal_count=0,
+                        status="ISSUED",
+                        is_fine_paid=False,
+                        fine_paid_amount=Decimal("0.00"),
+                    )
+                    created_records.append(issued)
+
+                book.available_copies = max(0, book.available_copies - len(created_records))
+                book.status = (book.available_copies > 0)
+                book.save(update_fields=["available_copies", "status", "updated_at"])
+
+            elif clean_staff_ids:
+                staff_qs = Staff.objects.filter(pk__in=clean_staff_ids, school=school, is_active=True)
+                staff_map = {st.id: st for st in staff_qs}
+                if len(staff_map) != req_count:
+                    raise ValidationError("Some selected staff members were not found or are inactive.")
+
+                validation_errors = []
+                for st_id in clean_staff_ids:
+                    st_obj = staff_map[st_id]
+                    active_loans_count = BookIssued.objects.filter(school=school, staff=st_obj, status="ISSUED").count()
+                    if active_loans_count >= setting.max_books_per_student:
+                        validation_errors.append(f"{st_obj.name} has reached max loan limit.")
+                        continue
+                    already_issued = BookIssued.objects.filter(school=school, book=book, staff=st_obj, status="ISSUED").exists()
+                    if already_issued:
+                        validation_errors.append(f"{st_obj.name} already has a copy of this book checked out.")
+
+                if validation_errors:
+                    raise ValidationError({"non_field_errors": validation_errors})
+
+                available_copies = list(BookCopy.objects.select_for_update().filter(
+                    school=school, book=book, status="AVAILABLE", is_active=True
+                ).order_by("accession_no")[:req_count])
+
+                created_records = []
+                for idx, st_id in enumerate(clean_staff_ids):
+                    st_obj = staff_map[st_id]
+                    assigned_copy = available_copies[idx] if idx < len(available_copies) else None
+                    if assigned_copy:
+                        assigned_copy.status = "ISSUED"
+                        assigned_copy.save(update_fields=["status"])
+
+                    issued = BookIssued.objects.create(
+                        school=school,
+                        book=book,
+                        book_copy=assigned_copy,
+                        student=None,
+                        staff=st_obj,
+                        book_issued_date=now,
+                        due_date=due_date,
+                        renewal_count=0,
+                        status="ISSUED",
+                        is_fine_paid=False,
+                        fine_paid_amount=Decimal("0.00"),
+                    )
+                    created_records.append(issued)
+
+                book.available_copies = max(0, book.available_copies - len(created_records))
+                book.status = (book.available_copies > 0)
+                book.save(update_fields=["available_copies", "status", "updated_at"])
+
+        serializer = BookIssuedSerializer(created_records, many=True)
+        return Response({
+            "message": f"Successfully issued {len(created_records)} copy(ies) of '{book.title}'.",
+            "issued_count": len(created_records),
+            "remaining_copies": book.available_copies,
+            "results": serializer.data
+        }, status=status.HTTP_201_CREATED)
+
+    def create(self, request, *args, **kwargs):
+        from django.db import connection, OperationalError, DatabaseError
+        import logging
+        logger = logging.getLogger(__name__)
+
+        for attempt in range(2):
+            try:
+                return super().create(request, *args, **kwargs)
+            except (OperationalError, DatabaseError) as db_err:
+                logger.warning(f"BookIssuedView.create DB error (attempt {attempt + 1}/2): {db_err}")
+                connection.close()
+                if attempt == 1:
+                    logger.error(f"BookIssuedView.create persistent DB error: {db_err}", exc_info=True)
+                    return Response(
+                        {"detail": "The library database is temporarily busy or connection timed out. Please try again."},
+                        status=status.HTTP_503_SERVICE_UNAVAILABLE
+                    )
 
     def perform_create(self, serializer):
         staff = Staff.objects.filter(user=self.request.user).first()
@@ -2628,15 +3008,25 @@ class BookIssuedView(ModelViewSet):
 
 
 def _issue_book(*, book, student, school, serializer, due_date=None, borrower_staff=None, requested_copy_id=None):
-    from django.db import transaction
-    with transaction.atomic():
-        book = Book.objects.select_for_update().get(pk=book.pk, school=school)
-        borrower = student or borrower_staff
-        if not borrower or bool(student) == bool(borrower_staff) or borrower.school_id != school.pk:
-            raise ValidationError('Select one borrower from your school.')
-        # Serialize checkouts for a borrower across different titles too.
-        type(borrower).objects.select_for_update().get(pk=borrower.pk)
-        return _issue_book_locked(book=book, student=student, borrower_staff=borrower_staff, school=school, serializer=serializer, due_date=due_date, requested_copy_id=requested_copy_id)
+    from django.db import transaction, connection, OperationalError, DatabaseError
+    import logging
+    logger = logging.getLogger(__name__)
+
+    borrower = student or borrower_staff
+    if not borrower or bool(student) == bool(borrower_staff) or borrower.school_id != school.pk:
+        raise ValidationError('Select one borrower from your school.')
+
+    for attempt in range(2):
+        try:
+            with transaction.atomic():
+                book = Book.objects.select_for_update().get(pk=book.pk, school=school)
+                return _issue_book_locked(book=book, student=student, borrower_staff=borrower_staff, school=school, serializer=serializer, due_date=due_date, requested_copy_id=requested_copy_id)
+        except (OperationalError, DatabaseError) as db_err:
+            logger.warning(f"_issue_book DB error (attempt {attempt + 1}/2): {db_err}")
+            connection.close()
+            if attempt == 1:
+                logger.error(f"_issue_book persistent DB error: {db_err}", exc_info=True)
+                raise ValidationError({"non_field_errors": ["The library database is temporarily busy. Please try again."]})
 
 
 def _issue_book_locked(*, book, student, school, serializer, due_date=None, borrower_staff=None, requested_copy_id=None):
@@ -2691,8 +3081,12 @@ def _issue_book_locked(*, book, student, school, serializer, due_date=None, borr
     if due_date is None:
         loan_days = setting.issue_duration_days or 14
         due_date = now + timezone.timedelta(days=loan_days)
-    elif due_date <= now:
-        raise ValidationError("Due date must be in the future.")
+    else:
+        due_date_date = due_date.date() if hasattr(due_date, 'date') else due_date
+        if hasattr(due_date_date, 'date'):
+            due_date_date = due_date_date.date()
+        if due_date_date < now.date():
+            raise ValidationError({"due_date": ["Due date must be in the future, not in the past."]})
 
     # Update physical copy status
     if available_copy:
@@ -2700,7 +3094,8 @@ def _issue_book_locked(*, book, student, school, serializer, due_date=None, borr
         available_copy.save()
 
     book.available_copies = max(0, book.available_copies - 1)
-    book.save()
+    book.status = (book.available_copies > 0)
+    book.save(update_fields=["available_copies", "status", "updated_at"])
 
     # If student had an active reservation for this book, mark it as ISSUED
     if student:

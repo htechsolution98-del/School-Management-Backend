@@ -571,16 +571,18 @@ class SchoolView(ModelViewSet):
         try:
             boy_ids = set(
                 StudentFieldValue.objects.filter(
-                    student_id__in=student_ids,
-                    field__label__icontains="gender",
+                    student_id__in=student_ids
+                ).filter(
+                    Q(field__label__icontains="gender") | Q(field__map_to_student_field__icontains="gender")
                 ).filter(
                     Q(value__iexact="Male") | Q(value__iexact="Boy") | Q(value__iexact="Boys") | Q(value__iexact="M")
                 ).values_list("student_id", flat=True)
             )
             girl_ids = set(
                 StudentFieldValue.objects.filter(
-                    student_id__in=student_ids,
-                    field__label__icontains="gender",
+                    student_id__in=student_ids
+                ).filter(
+                    Q(field__label__icontains="gender") | Q(field__map_to_student_field__icontains="gender")
                 ).filter(
                     Q(value__iexact="Female") | Q(value__iexact="Girl") | Q(value__iexact="Girls") | Q(value__iexact="F")
                 ).values_list("student_id", flat=True)
@@ -668,6 +670,29 @@ class SchoolView(ModelViewSet):
                 "is_enabled": sf.is_enabled,
             })
 
+        metrics_data = {
+            "total_students": total_students,
+            "total_boys": total_boys,
+            "total_girls": total_girls,
+            "other_gender": other_gender,
+            "rte_students": rte_students,
+            "total_staff": total_staff,
+            "active_staff": active_staff,
+            "teachers_count": teachers_count,
+            "non_teaching_count": non_teaching_count,
+            "total_classes": classes.count(),
+        }
+
+        fees_data = {
+            "total": float(StudentFee.objects.filter(school=school).aggregate(total=Sum("amount")).get("total") or 0),
+            "collected": float(StudentFee.objects.filter(school=school).aggregate(paid=Sum("paid_amount")).get("paid") or 0),
+            "pending": max(
+                float(StudentFee.objects.filter(school=school).aggregate(total=Sum("amount")).get("total") or 0)
+                - float(StudentFee.objects.filter(school=school).aggregate(paid=Sum("paid_amount")).get("paid") or 0),
+                0,
+            ),
+        }
+
         return Response({
             "school": {
                 "id": school.id,
@@ -685,31 +710,15 @@ class SchoolView(ModelViewSet):
                 "is_active": school.is_active is not False,
                 "created_at": school.created_at,
             },
-            "metrics": {
-                "total_students": total_students,
-                "total_boys": total_boys,
-                "total_girls": total_girls,
-                "other_gender": other_gender,
-                "rte_students": rte_students,
-                "total_staff": total_staff,
-                "active_staff": active_staff,
-                "teachers_count": teachers_count,
-                "non_teaching_count": non_teaching_count,
-                "total_classes": classes.count(),
-            },
+            "metrics": metrics_data,
+            "summary_metrics": metrics_data,
             "classes": class_stats,
             "students": student_list,
             "staff": staff_list,
             "features": features,
-            "fees": {
-                "total": float(StudentFee.objects.filter(school=school).aggregate(total=Sum("amount")).get("total") or 0),
-                "collected": float(StudentFee.objects.filter(school=school).aggregate(paid=Sum("paid_amount")).get("paid") or 0),
-                "pending": max(
-                    float(StudentFee.objects.filter(school=school).aggregate(total=Sum("amount")).get("total") or 0)
-                    - float(StudentFee.objects.filter(school=school).aggregate(paid=Sum("paid_amount")).get("paid") or 0),
-                    0,
-                ),
-            },
+            "modules": features,
+            "fees": fees_data,
+            "fees_summary": fees_data,
         })
 
 
