@@ -29,6 +29,7 @@ class AttendanceSettingSerializer(serializers.ModelSerializer):
             "grace_period_mins",
             "half_day_threshold_mins",
             "geo_required",
+            "biometric_required",
             "geo_radius_meters",
             "is_active",
             "created_at",

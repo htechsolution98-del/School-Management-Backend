@@ -3,7 +3,6 @@ import math
 import datetime
 from datetime import date
 from decimal import Decimal
-from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 from .models import *
@@ -743,6 +742,10 @@ class AttendanceSerializer(serializers.ModelSerializer):
             "working_hours",
             "check_in",
             "check_out",
+            "check_in_latitude",
+            "check_in_longitude",
+            "check_out_latitude",
+            "check_out_longitude",
             "source",
             "correction_log",
             "created_at",
@@ -765,6 +768,10 @@ class AttendanceSerializer(serializers.ModelSerializer):
             "working_hours",
             "check_in",
             "check_out",
+            "check_in_latitude",
+            "check_in_longitude",
+            "check_out_latitude",
+            "check_out_longitude",
             "source",
             "correction_log",
             "created_at",
@@ -856,11 +863,9 @@ class AttendanceSerializer(serializers.ModelSerializer):
             if not is_valid:
                 raise serializers.ValidationError({"verification_token": err_msg})
         elif biometric_required:
-            allow_bypass = settings.DEBUG or getattr(settings, "ALLOW_BIOMETRIC_BYPASS", False)
-            if not allow_bypass:
-                raise serializers.ValidationError(
-                    {"verification_token": "Biometric verification proof is required."}
-                )
+            raise serializers.ValidationError(
+                {"verification_token": "Biometric verification proof is required."}
+            )
 
         # 2. Geofence Location Pre-check
         geo_required = policy.geo_required if policy else True
@@ -979,8 +984,7 @@ class AttendanceSerializer(serializers.ModelSerializer):
                     )
             else:
                 biometric_required = getattr(policy, "biometric_required", False) if policy else False
-                allow_bypass = settings.DEBUG or getattr(settings, "ALLOW_BIOMETRIC_BYPASS", False)
-                if biometric_required and not allow_bypass:
+                if biometric_required:
                     raise serializers.ValidationError(
                         {"verification_token": "Biometric verification proof is required."}
                     )
@@ -1036,6 +1040,8 @@ class AttendanceSerializer(serializers.ModelSerializer):
                     attendance_date=today,
                     date_time=now,
                     check_in=now,
+                    check_in_latitude=latitude,
+                    check_in_longitude=longitude,
                     is_present=True,
                     is_late=is_late,
                     is_half_day=is_half_day,
@@ -1050,7 +1056,9 @@ class AttendanceSerializer(serializers.ModelSerializer):
                     )
 
                 attendance.check_out = now
-                update_fields = ["check_out"]
+                attendance.check_out_latitude = latitude
+                attendance.check_out_longitude = longitude
+                update_fields = ["check_out", "check_out_latitude", "check_out_longitude"]
 
                 # Working hours calculation across midnight or same-day
                 if attendance.check_in:

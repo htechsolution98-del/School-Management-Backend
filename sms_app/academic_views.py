@@ -978,6 +978,45 @@ class AttendanceView(TrusteeStaffReadOnlyMixin, ModelViewSet):
 
         return qs.order_by("-attendance_date", "-id")
 
+    @action(detail=False, methods=["get"], url_path="calendar-status")
+    def calendar_status(self, request):
+        """Read-only school calendar classification for a daily staff roll call."""
+        school = getattr(request.user, "school", None)
+        if not school:
+            staff = Staff.objects.filter(user=request.user).select_related("school").first()
+            school = staff.school if staff else None
+        if not school:
+            return Response({"detail": "User is not linked to a school."}, status=status.HTTP_400_BAD_REQUEST)
+
+        raw_date = request.query_params.get("date")
+        try:
+            selected_date = datetime.date.fromisoformat(raw_date or "")
+        except (TypeError, ValueError):
+            return Response({"detail": "A valid date (YYYY-MM-DD) is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        calendar_entries = Holiday.objects.filter(
+            school=school,
+            start_date__lte=selected_date,
+        ).filter(
+            Q(end_date__gte=selected_date)
+            | Q(end_date__isnull=True, start_date=selected_date)
+        ).filter(
+            Q(is_holiday=True) | Q(event_type__iexact="WEEK_OFF")
+        ).order_by("start_date", "id")
+
+        return Response({
+            "date": selected_date.isoformat(),
+            "is_sunday_week_off": selected_date.weekday() == 6,
+            "entries": [
+                {
+                    "classification": "WEEK_OFF" if item.event_type.upper() == "WEEK_OFF" else "HOLIDAY",
+                    "reason": item.name or item.title,
+                    "target_audience": item.target_audience or "ALL",
+                }
+                for item in calendar_entries
+            ],
+        })
+
     def create(self, request, *args, **kwargs):
         response = super().create(request, *args, **kwargs)
 
@@ -1128,10 +1167,21 @@ class TodayAttendanceStatusView(APIView):
                     "check_out": None,
                     "is_present": False,
                     "is_half_day": False,
+                    "biometric_required": False,
                     "message": "Staff profile not found for current user.",
                 },
                 status=status.HTTP_200_OK,
             )
+
+        school = staff.school or getattr(user, "school", None)
+        attendance_policy = getattr(staff, "attendance_setting", None)
+        if not attendance_policy and school:
+            attendance_policy = AttendanceSetting.objects.filter(
+                school=school, is_active=True
+            ).first()
+        biometric_required = bool(
+            getattr(attendance_policy, "biometric_required", False)
+        )
 
         # Look for open shift in past 24h first (handles overnight shift across midnight)
         attendance = (
@@ -1161,6 +1211,7 @@ class TodayAttendanceStatusView(APIView):
                     "is_late": False,
                     "is_early_exit": False,
                     "working_hours": 0.0,
+                    "biometric_required": biometric_required,
                 },
                 status=status.HTTP_200_OK,
             )
@@ -1177,6 +1228,7 @@ class TodayAttendanceStatusView(APIView):
                 "is_late": getattr(attendance, "is_late", False),
                 "is_early_exit": getattr(attendance, "is_early_exit", False),
                 "working_hours": float(getattr(attendance, "working_hours", 0.0) or 0.0),
+                "biometric_required": biometric_required,
             },
             status=status.HTTP_200_OK,
         )

@@ -187,6 +187,9 @@ class Department(models.Model):
 
 
 class Staff(models.Model):
+    if TYPE_CHECKING:
+        # Django adds the primary key dynamically when no explicit PK is declared.
+        id: int
 
     school = models.ForeignKey(
         School, on_delete=models.CASCADE, null=True, blank=True, db_index=True
@@ -1197,6 +1200,10 @@ class Attendance(models.Model):
     )
     check_in = models.DateTimeField(null=True, blank=True)
     check_out = models.DateTimeField(null=True, blank=True)
+    check_in_latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    check_in_longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    check_out_latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    check_out_longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
     source = models.CharField(max_length=50, default="Punch", null=True, blank=True)
     correction_log = models.JSONField(default=list, blank=True)
     created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
@@ -1313,6 +1320,11 @@ class LeaveTemplate(models.Model):
 
 
 class LeaveType(models.Model):
+    if TYPE_CHECKING:
+        # Django adds the primary key and ForeignKey ID attribute dynamically.
+        id: int
+        leave_template_id: int | None
+
     ALLOCATION_PERIOD_CHOICES = [
         ("Monthly", "Monthly"),
         ("Quarterly", "Quarterly"),

@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from decimal import Decimal
+import re
 from .inventory_models import (
     ItemCategory, ItemSize, ItemColor, Item, ItemPricing,
     Supplier, Purchase, PurchaseItem, StockTransaction,
@@ -123,6 +124,17 @@ class SupplierSerializer(serializers.ModelSerializer):
             'total_purchases_amount', 'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'school', 'created_at', 'updated_at']
+
+    def validate_phone(self, value):
+        phone = value or ""
+        if not phone:
+            return ""
+
+        if not re.fullmatch(r"[6-9][0-9]{9}", phone):
+            raise serializers.ValidationError(
+                "Enter exactly 10 digits for an Indian mobile number, starting with 6–9."
+            )
+        return phone
 
     def get_total_purchases_count(self, obj):
         return obj.purchases.count()
