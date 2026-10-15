@@ -72,7 +72,50 @@ class StaffSerializer(serializers.ModelSerializer):
         joining = attrs.get("joining_date") or (self.instance.joining_date if self.instance else None)
         if dob and joining and joining < dob:
             raise serializers.ValidationError({"joining_date": "Joining date cannot be earlier than date of birth."})
+
+        # Role-based department check: Optional for Clerk, Mandatory for others
+        category_val = attrs.get("category") or (self.instance.category if self.instance else None)
+        role_name = ""
+        if category_val is not None:
+            try:
+                cat_id = int(category_val)
+                feat = Feature.objects.filter(id=cat_id).first()
+                if feat:
+                    role_name = feat.name
+                else:
+                    role_name = str(category_val)
+            except (ValueError, TypeError):
+                role_name = str(category_val)
+
+        is_clerk = "CLERK" in str(role_name).strip().upper()
+        department = attrs.get("department") or (self.instance.department if self.instance else None)
+        if not is_clerk and not department:
+            raise serializers.ValidationError({"department": "Department is required for this role."})
+
         return attrs
+
+    def _sync_leave_allocation(self, staff):
+        if staff.leave_template and staff.school:
+            try:
+                from sms_app.models import LeaveCycle
+                from sms_app.services.leave_service import LeaveAllocationService
+                cycle = LeaveCycle.objects.filter(school=staff.school, is_active=True).first()
+                if cycle:
+                    LeaveAllocationService.allocate_leaves_for_staff(staff, cycle)
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning("Failed to auto-allocate leaves for staff %s: %s", staff.id, e)
+
+    def create(self, validated_data):
+        instance = super().create(validated_data)
+        self._sync_leave_allocation(instance)
+        return instance
+
+    def update(self, instance, validated_data):
+        instance = super().update(instance, validated_data)
+        self._sync_leave_allocation(instance)
+        return instance
+
 
 
 

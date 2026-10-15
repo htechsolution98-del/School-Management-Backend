@@ -215,6 +215,71 @@ class ItemViewSet(BaseSchoolViewSet):
                 low_stock.append(data)
         return Response(low_stock)
 
+    @action(detail=True, methods=['get'], url_path='variant-stock')
+    def variant_stock(self, request, pk=None):
+        """Return the variant-wise available stock matrix for an item"""
+        item = self.get_object()
+        school = self.get_school()
+
+        stock_map = {}
+        txns = (
+            StockTransaction.objects.filter(school=school, item=item)
+            .values('size_id', 'color_id')
+            .annotate(total_qty=Sum('quantity'))
+        )
+        for t in txns:
+            stock_map[(t['size_id'], t['color_id'])] = t['total_qty'] or 0
+
+        # Resolve sizes
+        if item.has_size:
+            sizes = list(ItemSize.objects.filter(school=school, is_active=True))
+            existing_size_ids = {s.id for s in sizes}
+            historical_size_ids = {t['size_id'] for t in txns if t['size_id'] and t['size_id'] not in existing_size_ids}
+            if historical_size_ids:
+                sizes.extend(list(ItemSize.objects.filter(id__in=historical_size_ids)))
+        else:
+            sizes = [None]
+
+        # Resolve colors
+        if item.has_color:
+            colors = list(ItemColor.objects.filter(school=school, is_active=True))
+            existing_color_ids = {c.id for c in colors}
+            historical_color_ids = {t['color_id'] for t in txns if t['color_id'] and t['color_id'] not in existing_color_ids}
+            if historical_color_ids:
+                colors.extend(list(ItemColor.objects.filter(id__in=historical_color_ids)))
+        else:
+            colors = [None]
+
+        matrix = []
+        for s in sizes:
+            for c in colors:
+                s_id = s.id if s else None
+                c_id = c.id if c else None
+                qty = max(0, stock_map.get((s_id, c_id), 0))
+                matrix.append({
+                    'size_id': s_id,
+                    'size_name': s.name if s else None,
+                    'color_id': c_id,
+                    'color_name': c.name if c else None,
+                    'available_stock': qty,
+                })
+
+        total_stock = max(0, item.stock_transactions.aggregate(total=Sum('quantity'))['total'] or 0)
+
+        return Response({
+            'item_id': item.id,
+            'item_name': item.item_name,
+            'has_size': item.has_size,
+            'has_color': item.has_color,
+            'unit': item.unit,
+            'total_stock': total_stock,
+            'variant_stock_matrix': matrix,
+        })
+
+    @action(detail=True, methods=['get'], url_path='variant_stock')
+    def variant_stock_underscore(self, request, pk=None):
+        return self.variant_stock(request, pk)
+
 
 class SupplierViewSet(BaseSchoolViewSet):
     queryset = Supplier.objects.all()

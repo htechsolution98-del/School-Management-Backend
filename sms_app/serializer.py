@@ -389,6 +389,26 @@ class StaffSerializer(serializers.ModelSerializer):
         joining = attrs.get("joining_date") or (self.instance.joining_date if self.instance else None)
         if dob and joining and joining < dob:
             raise serializers.ValidationError({"joining_date": "Joining date cannot be earlier than date of birth."})
+
+        # Role-based department check: Optional for Clerk, Mandatory for others
+        category_val = attrs.get("category") or (self.instance.category if self.instance else None)
+        role_name = ""
+        if category_val is not None:
+            try:
+                cat_id = int(category_val)
+                feat = Feature.objects.filter(id=cat_id).first()
+                if feat:
+                    role_name = feat.name
+                else:
+                    role_name = str(category_val)
+            except (ValueError, TypeError):
+                role_name = str(category_val)
+
+        is_clerk = "CLERK" in str(role_name).strip().upper()
+        department = attrs.get("department") or (self.instance.department if self.instance else None)
+        if not is_clerk and not department:
+            raise serializers.ValidationError({"department": "Department is required for this role."})
+
         return attrs
 
 
