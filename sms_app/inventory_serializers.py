@@ -74,6 +74,8 @@ class ItemSerializer(serializers.ModelSerializer):
     current_stock = serializers.SerializerMethodField()
     active_pricing = serializers.SerializerMethodField()
     stock_status = serializers.SerializerMethodField()
+    variant_stock_matrix = serializers.SerializerMethodField()
+    last_purchase_cost = serializers.SerializerMethodField()
 
     class Meta:
         model = Item
@@ -81,7 +83,8 @@ class ItemSerializer(serializers.ModelSerializer):
             'id', 'school', 'item_code', 'item_name', 'category', 'category_name',
             'description', 'unit', 'has_size', 'has_color', 'is_returnable',
             'minimum_stock_level', 'maximum_stock_level', 'is_active',
-            'current_stock', 'stock_status', 'active_pricing',
+            'current_stock', 'stock_status', 'active_pricing', 'variant_stock_matrix',
+            'last_purchase_cost',
             'created_by', 'updated_by', 'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'school', 'created_by', 'updated_by', 'created_at', 'updated_at']
@@ -110,6 +113,46 @@ class ItemSerializer(serializers.ModelSerializer):
         if pricing:
             return ItemPricingSerializer(pricing).data
         return None
+
+    def get_variant_stock_matrix(self, obj):
+        stock_map = {}
+        txns = (
+            obj.stock_transactions.values('size_id', 'color_id')
+            .annotate(total_qty=Sum('quantity'))
+        )
+        for t in txns:
+            stock_map[(t['size_id'], t['color_id'])] = t['total_qty'] or 0
+
+        sizes = list(ItemSize.objects.filter(school=obj.school, is_active=True)) if obj.has_size else [None]
+        colors = list(ItemColor.objects.filter(school=obj.school, is_active=True)) if obj.has_color else [None]
+
+        matrix = []
+        for s in sizes:
+            for c in colors:
+                s_id = s.id if s else None
+                c_id = c.id if c else None
+                qty = max(0, stock_map.get((s_id, c_id), 0))
+                matrix.append({
+                    'size_id': s_id,
+                    'size_name': s.name if s else None,
+                    'color_id': c_id,
+                    'color_name': c.name if c else None,
+                    'available_stock': qty,
+                })
+        return matrix
+
+    def get_last_purchase_cost(self, obj):
+        last_txn = obj.stock_transactions.filter(
+            transaction_type__in=['PURCHASE', 'OPENING'],
+            unit_purchase_cost__isnull=False
+        ).order_by('-transaction_date', '-id').first()
+        if last_txn and last_txn.unit_purchase_cost is not None:
+            return str(last_txn.unit_purchase_cost)
+
+        pricing = obj.pricings.filter(is_active=True).order_by('-academic_year__id').first()
+        if pricing and pricing.purchase_cost is not None:
+            return str(pricing.purchase_cost)
+        return "0.00"
 
 
 class SupplierSerializer(serializers.ModelSerializer):

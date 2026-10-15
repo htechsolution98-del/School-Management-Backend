@@ -968,6 +968,150 @@ class LeaveTypeViewSet(TrusteeStaffReadOnlyMixin, ModelViewSet):
             raise PermissionDenied("That leave template does not belong to your school.")
         
         serializer.save()
+
+    @action(detail=False, methods=["post"], url_path="bulk-manage")
+    def bulk_manage(self, request):
+        """
+        Atomically manages LeaveType records across multiple staff categories.
+        Guarantees that all selected categories are saved in a single database transaction.
+        If any category validation fails, all changes roll back to eliminate partial-save corruption.
+        """
+        school = get_clerk_school(request)
+        data = request.data
+
+        template_id = data.get("leave_template")
+        if not template_id:
+            return Response({"error": "leave_template is required."}, status=400)
+
+        template = LeaveTemplate.objects.filter(id=template_id, school=school).first()
+        if not template:
+            return Response({"error": "Leave template not found or does not belong to your school."}, status=404)
+
+        category_ids = data.get("category_ids") or []
+        if not category_ids:
+            return Response({"error": "Please select at least one staff category."}, status=400)
+
+        name = str(data.get("name") or "").strip()
+        if not name:
+            return Response({"error": "Name is required."}, status=400)
+
+        leave_type_val = str(data.get("leave_type") or name).strip().upper()
+        code = str(data.get("code") or "").strip().upper() or None
+        leave_num = int(data.get("leave_num") or 0)
+        allocation_count = Decimal(str(data.get("allocation_count") or leave_num or 0.0))
+        allocation_period = str(data.get("allocation_period") or "Yearly")
+        is_paid = bool(data.get("is_paid", True))
+        allow_encashment = bool(data.get("allow_encashment", False))
+        is_carry_forward = bool(data.get("is_carry_forward", False) or data.get("carry_forward", False))
+        max_carry_forward = int(data.get("max_carry_forward") or 0) if is_carry_forward else 0
+
+        existing_type_ids = data.get("existing_type_ids") or []
+
+        from django.db import transaction
+        try:
+            with transaction.atomic():
+                saved_records = []
+
+                if existing_type_ids:
+                    # Edit mode
+                    group = list(LeaveType.objects.filter(
+                        id__in=existing_type_ids,
+                        leave_template=template,
+                    ).select_for_update())
+
+                    existing_by_cat = {r.category_id: r for r in group}
+
+                    # 1. Delete removed categories
+                    for r in group:
+                        if r.category_id not in [int(c) for c in category_ids]:
+                            r.delete()
+
+                    # 2. Update retained or create new
+                    for cat_id in category_ids:
+                        cat_id_int = int(cat_id)
+                        cat_obj = SchoolFeature.objects.filter(id=cat_id_int).first()
+
+                        if cat_id_int in existing_by_cat and existing_by_cat[cat_id_int].pk:
+                            lt_rec = existing_by_cat[cat_id_int]
+                            lt_rec.name = name
+                            lt_rec.leave_type = leave_type_val
+                            lt_rec.code = code
+                            lt_rec.leave_num = leave_num
+                            lt_rec.allocation_count = allocation_count
+                            lt_rec.allocation_period = allocation_period
+                            lt_rec.is_paid = is_paid
+                            lt_rec.allow_encashment = allow_encashment
+                            lt_rec.is_carry_forward = is_carry_forward
+                            lt_rec.carry_forward = is_carry_forward
+                            lt_rec.max_carry_forward = max_carry_forward
+                            lt_rec.save()
+                            saved_records.append(lt_rec)
+                        else:
+                            lt_rec = LeaveType.objects.create(
+                                leave_template=template,
+                                category=cat_obj,
+                                name=name,
+                                leave_type=leave_type_val,
+                                code=code,
+                                leave_num=leave_num,
+                                allocation_count=allocation_count,
+                                allocation_period=allocation_period,
+                                is_paid=is_paid,
+                                allow_encashment=allow_encashment,
+                                is_carry_forward=is_carry_forward,
+                                carry_forward=is_carry_forward,
+                                max_carry_forward=max_carry_forward,
+                                is_active=True,
+                            )
+                            saved_records.append(lt_rec)
+                else:
+                    # Create mode
+                    for cat_id in category_ids:
+                        cat_id_int = int(cat_id)
+                        cat_obj = SchoolFeature.objects.filter(id=cat_id_int).first()
+
+                        existing = LeaveType.objects.filter(
+                            leave_template=template,
+                            category_id=cat_id_int,
+                            leave_type=leave_type_val,
+                        ).first()
+                        if existing:
+                            existing.name = name
+                            existing.code = code
+                            existing.leave_num = leave_num
+                            existing.allocation_count = allocation_count
+                            existing.allocation_period = allocation_period
+                            existing.is_paid = is_paid
+                            existing.allow_encashment = allow_encashment
+                            existing.is_carry_forward = is_carry_forward
+                            existing.carry_forward = is_carry_forward
+                            existing.max_carry_forward = max_carry_forward
+                            existing.save()
+                            saved_records.append(existing)
+                        else:
+                            lt_rec = LeaveType.objects.create(
+                                leave_template=template,
+                                category=cat_obj,
+                                name=name,
+                                leave_type=leave_type_val,
+                                code=code,
+                                leave_num=leave_num,
+                                allocation_count=allocation_count,
+                                allocation_period=allocation_period,
+                                is_paid=is_paid,
+                                allow_encashment=allow_encashment,
+                                is_carry_forward=is_carry_forward,
+                                carry_forward=is_carry_forward,
+                                max_carry_forward=max_carry_forward,
+                                is_active=True,
+                            )
+                            saved_records.append(lt_rec)
+
+                serialized = NewLeaveTypeSerializer(saved_records, many=True).data
+                return Response(serialized, status=200 if existing_type_ids else 201)
+
+        except Exception as e:
+            return Response({"error": str(e)}, status=400)
         
         
         
@@ -1405,10 +1549,10 @@ class GetLeaveRequestView(ModelViewSet): #for all the leaves — clerk/principal
     
     
     
-class ChangeLeaveView(ModelViewSet): # for approving day wise APPROVAL — principal/clerk/trustee
+class ChangeLeaveView(ModelViewSet): # for approving day wise APPROVAL — principal/trustee
     queryset = LeavePerDay.objects.all()
     serializer_class = ChangeLeavePerDaySerializer
-    permission_classes = [IsAuthenticated, IsClerkOrPrincipal]
+    permission_classes = [IsAuthenticated, IsPrincipalOrTrustee]
     http_method_names = ["patch"]
 
     def update(self, request, *args, **kwargs):

@@ -321,18 +321,26 @@ class LeaveWorkflowService:
 
     @staticmethod
     def get_or_create_balance(staff, leave_type, leave_cycle):
-        balance, _ = LeaveBalance.objects.get_or_create(
+        balance, created = LeaveBalance.objects.get_or_create(
             staff=staff,
             leave_type=leave_type,
             leave_cycle=leave_cycle,
             defaults={
                 "opening_balance": Decimal("0.0"),
-                "allocated": Decimal(str(leave_type.allocation_count or 0.0)),
+                "allocated": Decimal("0.0"),
                 "carry_forward": Decimal("0.0"),
                 "used": Decimal("0.0"),
                 "pending": Decimal("0.0"),
             },
         )
+        if created or balance.allocated == Decimal("0.0"):
+            LeaveAllocationService.allocate_leaves_for_staff(staff, leave_cycle)
+            balance.refresh_from_db()
+        else:
+            period = str(getattr(leave_type, "allocation_period", "") or "").strip().upper()
+            if period in ["MONTHLY", "MONTH", "QUARTERLY", "QUARTER"]:
+                LeaveAllocationService.allocate_leaves_for_staff(staff, leave_cycle)
+                balance.refresh_from_db()
         return balance
 
     @classmethod
@@ -965,27 +973,132 @@ class LeaveAllocationService:
     """
     Handles pro-rata allocations based on employee joining date,
     configurable cycles, and ensures idempotency.
+    Strictly respects LeaveType.allocation_period ('MONTHLY', 'QUARTERLY', 'YEARLY').
     """
 
     @classmethod
-    @transaction.atomic
-    def allocate_leaves_for_staff(cls, staff, leave_cycle, user=None):
+    def calculate_accrued_allocation(cls, leave_type, staff, leave_cycle, as_of_date=None):
         """
-        Allocates leaves for a single staff member for a specific cycle.
-        Applies joining-date pro-rata rules.
+        Calculates accrued leave allocation for a staff member and leave type
+        respecting allocation_period ('MONTHLY', 'QUARTERLY', 'YEARLY').
+        Ensures future unearned leaves are not pre-allocated upfront while allowing dynamic accrual.
         """
-        school = staff.school
-        template = staff.leave_template
-        if not template or not template.is_active:
-            return []
+        if as_of_date is None:
+            as_of_date = timezone.localdate()
 
-        cycle_total_days = (leave_cycle.end_date - leave_cycle.start_date).days + 1
+        cycle_start = leave_cycle.start_date
+        cycle_end = leave_cycle.end_date
+
+        if staff.joining_date and staff.joining_date > cycle_end:
+            return Decimal("0.0")
+
+        eff_start = max(cycle_start, staff.joining_date) if staff.joining_date else cycle_start
+        eff_target = min(as_of_date, cycle_end)
+
+        if eff_target < eff_start:
+            return Decimal("0.0")
+
+        base_count = Decimal(str(leave_type.allocation_count or 0.0))
+        if base_count <= Decimal("0.0"):
+            return Decimal("0.0")
+
+        period = str(getattr(leave_type, "allocation_period", "") or "").strip().upper()
+        if not period and leave_type.leave_template:
+            period = str(getattr(leave_type.leave_template, "time_line", "") or "").strip().upper()
+        if not period:
+            period = "YEARLY"
+
+        cycle_total_days = (cycle_end - cycle_start).days + 1
         if cycle_total_days <= 0:
             cycle_total_days = 365
 
+        total_cycle_months = (cycle_end.year - cycle_start.year) * 12 + (cycle_end.month - cycle_start.month) + 1
+        if total_cycle_months <= 0:
+            total_cycle_months = 12
+
+        if period in ["MONTHLY", "MONTH"]:
+            # Elapsed calendar months from eff_start up to eff_target
+            elapsed_months = (eff_target.year - eff_start.year) * 12 + (eff_target.month - eff_start.month) + 1
+            elapsed_periods = max(0, min(elapsed_months, total_cycle_months))
+
+            if leave_type.prorata_on_joining == "PRO_RATA" and staff.joining_date and staff.joining_date > cycle_start and staff.joining_date.day > 1:
+                days_in_m = calendar.monthrange(staff.joining_date.year, staff.joining_date.month)[1]
+                days_worked = days_in_m - staff.joining_date.day + 1
+                fraction = Decimal(days_worked) / Decimal(days_in_m)
+                total_periods = Decimal(max(0, elapsed_periods - 1)) + fraction
+                alloc_amount = quantize_half_day(base_count * total_periods)
+            elif leave_type.prorata_on_joining == "NONE" and staff.joining_date and staff.joining_date > cycle_start and staff.joining_date.day > 1:
+                total_periods = Decimal(max(0, elapsed_periods - 1))
+                alloc_amount = quantize_half_day(base_count * total_periods)
+            else:
+                alloc_amount = quantize_half_day(base_count * Decimal(elapsed_periods))
+
+            max_cycle_alloc = quantize_half_day(base_count * Decimal(total_cycle_months))
+            return min(alloc_amount, max_cycle_alloc)
+
+        elif period in ["QUARTERLY", "QUARTER"]:
+            elapsed_months = (eff_target.year - eff_start.year) * 12 + (eff_target.month - eff_start.month) + 1
+            elapsed_months = max(0, min(elapsed_months, total_cycle_months))
+            total_cycle_quarters = (total_cycle_months + 2) // 3
+            elapsed_quarters = min((elapsed_months + 2) // 3, total_cycle_quarters)
+
+            if leave_type.prorata_on_joining == "PRO_RATA" and staff.joining_date and staff.joining_date > cycle_start:
+                fraction_quarters = Decimal(elapsed_months) / Decimal("3.0")
+                alloc_amount = quantize_half_day(base_count * min(fraction_quarters, Decimal(total_cycle_quarters)))
+            else:
+                alloc_amount = quantize_half_day(base_count * Decimal(elapsed_quarters))
+
+            max_cycle_alloc = quantize_half_day(base_count * Decimal(total_cycle_quarters))
+            return min(alloc_amount, max_cycle_alloc)
+
+        else:
+            # YEARLY / ANNUAL
+            if leave_type.prorata_on_joining == "PRO_RATA" and staff.joining_date:
+                if staff.joining_date > cycle_end:
+                    alloc_amount = Decimal("0.0")
+                elif staff.joining_date > cycle_start:
+                    eligible_days = (cycle_end - staff.joining_date).days + 1
+                    fraction = Decimal(eligible_days) / Decimal(cycle_total_days)
+                    alloc_amount = quantize_half_day(base_count * fraction)
+                else:
+                    alloc_amount = base_count
+            elif leave_type.prorata_on_joining == "NONE" and staff.joining_date and staff.joining_date > cycle_start:
+                alloc_amount = Decimal("0.0")
+            else:
+                alloc_amount = base_count
+
+            return alloc_amount
+
+    @classmethod
+    @transaction.atomic
+    def allocate_leaves_for_staff(cls, staff, leave_cycle, as_of_date=None, user=None):
+        """
+        Allocates leaves for a single staff member for a specific cycle.
+        Applies joining-date pro-rata rules and respects allocation_period (MONTHLY, QUARTERLY, YEARLY).
+        Ensures future unearned leaves are not pre-allocated upfront while allowing dynamic accrual.
+        """
+        school = staff.school
+        template = staff.leave_template
+        leave_types = []
+        if template and template.is_active:
+            qs = template.leave_types.filter(is_active=True)
+            if staff.category:
+                cat_qs = qs.filter(Q(category__feature__name__iexact=staff.category) | Q(category__isnull=True))
+                if cat_qs.exists():
+                    qs = cat_qs
+            leave_types = list(qs)
+        if not leave_types:
+            existing_type_ids = LeaveBalance.objects.filter(staff=staff, leave_cycle=leave_cycle).values_list("leave_type_id", flat=True)
+            if existing_type_ids:
+                leave_types = list(LeaveType.objects.filter(id__in=existing_type_ids, is_active=True))
+
+        if not leave_types:
+            return []
+
         results = []
-        for lt in template.leave_types.filter(is_active=True):
-            # Check if allocation already exists
+        for lt in leave_types:
+            alloc_amount = cls.calculate_accrued_allocation(lt, staff, leave_cycle, as_of_date=as_of_date)
+
             balance, created = LeaveBalance.objects.get_or_create(
                 staff=staff,
                 leave_type=lt,
@@ -999,41 +1112,26 @@ class LeaveAllocationService:
                 },
             )
 
-            # Prevent double allocation
-            if not created and balance.allocated > Decimal("0.0"):
+            current_allocated = balance.allocated or Decimal("0.0")
+            if not created and current_allocated >= alloc_amount:
                 continue
 
-            base_count = Decimal(str(lt.allocation_count or 0.0))
-
-            # Pro-rata calculation
-            if lt.prorata_on_joining == "PRO_RATA" and staff.joining_date:
-                if staff.joining_date > leave_cycle.end_date:
-                    alloc_amount = Decimal("0.0")
-                elif staff.joining_date > leave_cycle.start_date:
-                    eligible_days = (leave_cycle.end_date - staff.joining_date).days + 1
-                    fraction = Decimal(eligible_days) / Decimal(cycle_total_days)
-                    alloc_amount = quantize_half_day(base_count * fraction)
-                else:
-                    alloc_amount = base_count
-            elif lt.prorata_on_joining == "NONE" and staff.joining_date and staff.joining_date > leave_cycle.start_date:
-                alloc_amount = Decimal("0.0")
-            else:
-                alloc_amount = base_count
-
+            delta = alloc_amount - current_allocated
             balance.allocated = alloc_amount
             balance.save()
 
-            LeaveTransaction.objects.create(
-                school=school,
-                staff=staff,
-                leave_type=lt,
-                leave_cycle=leave_cycle,
-                transaction_type="ALLOCATION",
-                amount=alloc_amount,
-                balance_after=balance.available,
-                description=f"Allocated {alloc_amount} days for cycle {leave_cycle.name} (Rule: {lt.prorata_on_joining})",
-                created_by=user,
-            )
+            if delta > Decimal("0.0"):
+                LeaveTransaction.objects.create(
+                    school=school,
+                    staff=staff,
+                    leave_type=lt,
+                    leave_cycle=leave_cycle,
+                    transaction_type="ALLOCATION",
+                    amount=delta,
+                    balance_after=balance.available,
+                    description=f"Allocated {delta} days ({alloc_amount} total accrued) for cycle {leave_cycle.name} (Rule: {lt.allocation_period})",
+                    created_by=user,
+                )
             results.append((lt.name or lt.leave_type, alloc_amount))
 
         return results
@@ -1137,11 +1235,22 @@ class LeaveAllocationService:
             if base_count <= Decimal("0.0"):
                 base_count = balance.allocated
 
-            if total_cycle_months > 0:
-                ratio = Decimal(str(eligible_months)) / Decimal(str(total_cycle_months))
-                calc_quota = quantize_half_day(base_count * ratio)
+            period = str(getattr(lt, "allocation_period", "") or "").strip().upper()
+            if not period and lt.leave_template:
+                period = str(getattr(lt.leave_template, "time_line", "") or "").strip().upper()
+            if not period:
+                period = "YEARLY"
+
+            if period in ["MONTHLY", "MONTH"]:
+                calc_quota = quantize_half_day(base_count * Decimal(str(eligible_months)))
+            elif period in ["QUARTERLY", "QUARTER"]:
+                calc_quota = quantize_half_day(base_count * (Decimal(str(eligible_months)) / Decimal("3.0")))
             else:
-                calc_quota = base_count
+                if total_cycle_months > 0:
+                    ratio = Decimal(str(eligible_months)) / Decimal(str(total_cycle_months))
+                    calc_quota = quantize_half_day(base_count * ratio)
+                else:
+                    calc_quota = base_count
 
             # Cap at existing allocation (clawback deallocates, never increases beyond original)
             if balance.allocated > Decimal("0.0"):

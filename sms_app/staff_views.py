@@ -166,6 +166,18 @@ class StaffView(ModelViewSet):
         except Exception as e:
             print("Failed to broadcast staff event:", e)
 
+        # Auto-sync leave balances if template is assigned
+        if instance.leave_template and school:
+            try:
+                from sms_app.models import LeaveCycle
+                from sms_app.services.leave_service import LeaveAllocationService
+                active_cycle = LeaveCycle.objects.filter(school=school, is_active=True).first()
+                if active_cycle:
+                    LeaveAllocationService.allocate_leaves_for_staff(instance, active_cycle)
+            except Exception as e:
+                print("Failed to auto-allocate leaves on staff creation:", e)
+
+
     def perform_update(self, serializer):
         category = serializer.validated_data.pop("category", None)
         instance = serializer.save()
@@ -219,6 +231,17 @@ class StaffView(ModelViewSet):
                 )
         except Exception as e:
             print("Failed to broadcast staff update:", e)
+
+        # Auto-sync leave balances if template is assigned
+        if instance.leave_template and school:
+            try:
+                from sms_app.models import LeaveCycle
+                from sms_app.services.leave_service import LeaveAllocationService
+                active_cycle = LeaveCycle.objects.filter(school=school, is_active=True).first()
+                if active_cycle:
+                    LeaveAllocationService.allocate_leaves_for_staff(instance, active_cycle)
+            except Exception as e:
+                print("Failed to auto-allocate leaves on staff update:", e)
 
         cache.delete(f"staff_list_{self.request.user.id}")
 

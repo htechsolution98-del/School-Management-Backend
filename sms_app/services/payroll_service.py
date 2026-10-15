@@ -391,6 +391,43 @@ def calculate_attendance_days(staff, effective_start, effective_end):
     return present_count, half_day_count, late_count
 
 
+def calculate_absent_days(staff, effective_start, effective_end):
+    """
+    Calculates explicit unexcused absence days for staff between effective_start and effective_end.
+    Absence rules:
+      - Attendance record explicitly marked with canonical_status == 'ABSENT'
+        (or is_present=False and source not in ['Holiday', 'Week Off', 'Leave']) -> 1.0 day
+      - Half-day punch (is_present=True and is_half_day=True) where there is NO approved leave covering the other half -> 0.5 day
+      - Weekends (Sundays/week-offs) and official school holidays are credited and NEVER treated as absences.
+    """
+    if not effective_start or not effective_end:
+        return Decimal("0.0")
+
+    attendance_records = Attendance.objects.filter(
+        staff=staff, attendance_date__range=(effective_start, effective_end)
+    )
+
+    # Approved leave dates for this staff in this period
+    approved_leave_dates = set(
+        LeavePerDay.objects.filter(
+            leave__staff=staff,
+            status="APPROVED",
+            date__range=(effective_start, effective_end),
+        ).values_list("date", flat=True)
+    )
+
+    absent_count = Decimal("0.0")
+    for att in attendance_records:
+        if att.canonical_status == "ABSENT":
+            if att.attendance_date not in approved_leave_dates:
+                absent_count += Decimal("1.0")
+        elif att.is_present and att.is_half_day:
+            if att.attendance_date not in approved_leave_dates:
+                absent_count += Decimal("0.5")
+
+    return absent_count
+
+
 def generate_payslip(
     staff,
     month,
@@ -406,9 +443,9 @@ def generate_payslip(
       Priority 1: Joining/Exit pro-rata eligible working days
       Priority 2: Missing Punch detection (aborts/flags if unregularized)
       Priority 3: Sum Approved Paid Leaves and Approved Unpaid Leaves (LOP)
-      Priority 4: Sum Present, Late, and Half-Days
-      Payable Days = Present + Paid Leaves + (Half-Days * 0.5)
-      ProRataMultiplier = Payable Days / Total Working Days
+      Priority 4: Sum Present, Late, Half-Days, and Explicit Absences
+      Payable Days = Eligible Days - Unpaid Leaves (LOP) - Absences
+      ProRataMultiplier = Payable Days / Total Working Days (Calendar Days in Month)
       Component Math: Fixed * Multiplier, Percentage against calc_base
       Enforces Payroll Lock constraint
     """
@@ -461,20 +498,25 @@ def generate_payslip(
     # 3. Priority 3 (Leaves)
     paid_leaves, unpaid_leaves = calculate_leaves(staff, effective_start, effective_end)
 
-    # 4. Priority 4 (Attendance)
+    # 4. Priority 4 (Attendance & Absence)
     full_day_present, half_days, late_count = calculate_attendance_days(
         staff, effective_start, effective_end
     )
     total_worked_hours = calculate_total_worked_hours(
         staff, effective_start, effective_end
     )
+    absent_days = calculate_absent_days(staff, effective_start, effective_end)
 
-    # Calculate Payable Days = Present + Paid Leaves + (Half-Days * 0.5)
-    raw_payable = full_day_present + paid_leaves + (half_days * Decimal("0.5"))
-    payable_days = min(raw_payable, Decimal(eligible_working_days))
+    # Calculate Payable Days:
+    # Full credit is given for eligible employment days in the month (including weekends & official holidays).
+    # Deductions occur ONLY for explicitly Unpaid Leaves (LOP) or Unexcused Absences.
+    base_eligible_days = Decimal(str(eligible_working_days))
+    deduction_days = unpaid_leaves + absent_days
+    raw_payable = base_eligible_days - deduction_days
+    payable_days = max(Decimal("0.0"), min(base_eligible_days, raw_payable))
 
-    # Calculate ProRataMultiplier = Payable Days / Total Working Days
-    total_working_days_dec = Decimal(total_working_days)
+    # Calculate ProRataMultiplier = Payable Days / Total Working Days (Calendar Days in Month)
+    total_working_days_dec = Decimal(str(total_working_days))
     if total_working_days_dec > Decimal("0.0"):
         pro_rata_multiplier = (payable_days / total_working_days_dec).quantize(
             Decimal("0.0001")
@@ -769,13 +811,14 @@ def generate_payslip(
         Decimal("0.01")
     )
 
-    # Calculate LOP (Unpaid Leave) deduction snapshot
+    # Calculate LOP (Unpaid Leave) & Absent deduction snapshot
     per_day_base = (
         (base_salary_val / total_working_days_dec).quantize(Decimal("0.01"))
         if total_working_days_dec > Decimal("0")
         else Decimal("0.00")
     )
     lop_amount = (unpaid_leaves * per_day_base).quantize(Decimal("0.01"))
+    absent_deduction_amount = (absent_days * per_day_base).quantize(Decimal("0.01"))
 
     # Construct Component Breakdown JSON
     component_breakdown = {
@@ -788,7 +831,9 @@ def generate_payslip(
         "half_days": float(half_days),
         "paid_leaves": float(paid_leaves),
         "unpaid_leaves": float(unpaid_leaves),
+        "absent_days": float(absent_days),
         "lop_deduction_amount": str(lop_amount),
+        "absent_deduction_amount": str(absent_deduction_amount),
         "payable_days": float(payable_days),
         "pro_rata_multiplier": str(pro_rata_multiplier),
         "earnings": earnings_list,
@@ -858,7 +903,7 @@ def generate_payslip(
             for d in deductions_list
         ]
 
-        absent_days_count = max(0, total_working_days - int(payable_days))
+        absent_days_count = int(absent_days)
         salary_calculation_fields = {
             "staff_name": staff.name,
             "staff_category": staff.category,
@@ -869,7 +914,7 @@ def generate_payslip(
             "present_days": payable_days,
             "absent_days": absent_days_count,
             "half_days": int(half_days),
-            "attendance_deduction": lop_amount,
+            "attendance_deduction": (lop_amount + absent_deduction_amount).quantize(Decimal("0.01")),
             "component_snapshot": legacy_snapshot,
             "net_salary": net_salary,
         }
