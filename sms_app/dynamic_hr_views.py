@@ -900,7 +900,7 @@ def _sync_staff_payslips_from_payments(staff):
         if not p.salary_month:
             continue
         try:
-            parts = str(p.salary_month).split("-")
+            parts = p.salary_month.split("-")
             m_date = date(int(parts[0]), int(parts[1]), 1)
         except Exception:
             continue

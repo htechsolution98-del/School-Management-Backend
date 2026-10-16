@@ -349,7 +349,7 @@ class Division(models.Model):
 
     
     SchoolClass = models.ForeignKey(SchoolClass, on_delete=models.CASCADE)
-    division = models.CharField(null=True, blank=True, max_length=20)
+    division = models.CharField(null=True, blank=True, max_length=50)
     capacity = models.IntegerField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
