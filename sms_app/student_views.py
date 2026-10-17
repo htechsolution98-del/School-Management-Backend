@@ -1098,6 +1098,14 @@ class AssignRollNumberAPIView(APIView):
 
     def post(self, request, *args, **kwargs):
         school = request.user.school
+        division = request.data.get("division")
+        if not division or not str(division).strip() or str(division).strip().upper() == "ALL":
+            return Response(
+                {"division": ["Division is required to assign roll numbers."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        division = str(division).strip()
         assignments = request.data.get("assignments", [])
 
         if not isinstance(assignments, list):
@@ -1115,6 +1123,15 @@ class AssignRollNumberAPIView(APIView):
                 st = Student.objects.filter(admission__admission_number=adm_no, school=school).first()
             if st:
                 student_map[st.id] = st
+
+        # Verify that all assigned students belong to the specified division
+        for st in student_map.values():
+            if not st.division or st.division.strip().upper() != division.upper():
+                student_name = f"{st.surname or ''} {st.name or ''}".strip() or f"Student #{st.id}"
+                return Response(
+                    {"division": [f"Student '{student_name}' does not belong to division '{division}'."]},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
         # Step 2: Check duplicate roll numbers within the request payload per (school_class, division)
         seen_rolls = {}  # key: (school_class_id, division, roll_no)
@@ -1206,7 +1223,7 @@ class StudentViewSet(StudentProfileActionsMixin, ModelViewSet):
     http_method_names = ["get", "post", "patch", "put", "delete", "head", "options"]
 
     def get_permissions(self):
-        if self.action in ["list", "retrieve", "my_profile"]:
+        if self.action in ["list", "retrieve", "my_profile", "check_aadhaar"]:
             return [IsAuthenticated()]
         return [IsAuthenticated(), IsCLerk()]
 
@@ -1330,6 +1347,23 @@ class StudentViewSet(StudentProfileActionsMixin, ModelViewSet):
             return Response({"error": "Student profile not found"}, status=404)
         serializer = self.get_serializer(student)
         return Response(serializer.data)
+
+    @action(detail=False, methods=["get"], permission_classes=[IsAuthenticated])
+    def check_aadhaar(self, request):
+        raw_val = request.query_params.get("aadhar_number", "")
+        exclude_id = request.query_params.get("exclude_id")
+        clean_val = re.sub(r"[\s-]", "", str(raw_val or "").strip())
+        if not clean_val or not re.fullmatch(r"[0-9]{12}", clean_val):
+            return Response({"is_unique": True, "message": ""})
+        qs = Student.objects.filter(aadhar_number=clean_val)
+        if exclude_id and str(exclude_id).isdigit():
+            qs = qs.exclude(pk=int(exclude_id))
+        if qs.exists():
+            return Response({
+                "is_unique": False,
+                "message": "A student with this Aadhaar number already exists."
+            })
+        return Response({"is_unique": True, "message": ""})
 
 
 StudentGetView = StudentViewSet

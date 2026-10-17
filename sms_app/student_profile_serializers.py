@@ -21,7 +21,7 @@ class StudentProfileSerializer(StudentGetSerializer):
         fields = StudentGetSerializer.Meta.fields + ["completion", "sections", "extra_details", "guardians", "admission_number", "document_slots", "custom_ids", "shared_document_fields", "custom_id_values"]
 
     def validate_aadhar_number(self, value):
-        return validate_aadhaar(value)
+        return validate_aadhaar(value, exclude_student_id=self.instance.pk if self.instance else None)
 
     def validate_udise_no(self, value):
         return validate_udise(value)

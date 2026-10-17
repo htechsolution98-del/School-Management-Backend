@@ -1,4 +1,5 @@
 
+from typing import Any
 import string
 import math
 # pyrefly: ignore [missing-import]
@@ -55,8 +56,10 @@ def generate_staff_username(name):
 def generate_username(email=None, mobile=None, otp=None):
     if email:
         base = email.split("@")[0][:4]  # first 4 chars
+    elif mobile:
+        base = str(mobile)[-4:]  # last 4 digits of mobile
     else:
-        base = mobile[-4:]  # last 4 digits of mobile
+        base = "user"
 
     otp_part = otp[-3:] if otp else str(random.randint(100, 999))
 
@@ -176,6 +179,7 @@ def import_students_from_excel(file, school_id, use_bulk=True):
 
     # ✅ Track duplicates inside Excel
     excel_gr_set = set()
+    excel_aadhar_set = set()
 
     # ✅ Fetch existing GR numbers from DB
     existing_gr_nos = set(
@@ -183,6 +187,7 @@ def import_students_from_excel(file, school_id, use_bulk=True):
     )
 
     for index, row in df.iterrows():
+        row_num = int(index) + 2
         try:
             data = {}
             for excel_col, model_field in COLUMN_MAPPING.items():
@@ -194,16 +199,16 @@ def import_students_from_excel(file, school_id, use_bulk=True):
             # 🔴 GR NO VALIDATION
             # ----------------------------
             if not gr_no:
-                errors.append(f"Row {index+2}: GR No is required")
+                errors.append(f"Row {row_num}: GR No is required")
                 continue
 
             if gr_no in excel_gr_set:
-                errors.append(f"Row {index+2}: Duplicate GR No '{gr_no}' in Excel")
+                errors.append(f"Row {row_num}: Duplicate GR No '{gr_no}' in Excel")
                 continue
 
             if gr_no in existing_gr_nos:
                 errors.append(
-                    f"Row {index+2}: GR No '{gr_no}' already exists for this school"
+                    f"Row {row_num}: GR No '{gr_no}' already exists for this school"
                 )
                 continue
 
@@ -223,10 +228,10 @@ def import_students_from_excel(file, school_id, use_bulk=True):
                 ).first()
 
                 if not school_class:
-                    errors.append(f"Row {index+2}: Class '{class_name}' not found")
+                    errors.append(f"Row {row_num}: Class '{class_name}' not found")
                     continue
 
-            student_data = {
+            student_data: dict[str, Any] = {
                 "school": school,
                 "gr_no": gr_no,
                 "surname": data["surname"],
@@ -238,11 +243,19 @@ def import_students_from_excel(file, school_id, use_bulk=True):
                 "school_class": school_class,
                 "academic_year": data["academic_year"],
                 "mobile": data["mobile"],
-                "aadhar_number": data["aadhar_number"],
+                "aadhar_number": None,
             }
 
             from .student_profile_services import validate_aadhaar
-            student_data["aadhar_number"] = validate_aadhaar(student_data["aadhar_number"])
+            raw_aadhar = data.get("aadhar_number")
+            if raw_aadhar:
+                clean_aadhar = validate_aadhaar(raw_aadhar)
+                if clean_aadhar:
+                    if clean_aadhar in excel_aadhar_set:
+                        errors.append(f"Row {row_num}: Duplicate Aadhaar number '{clean_aadhar}' in Excel")
+                        continue
+                    excel_aadhar_set.add(clean_aadhar)
+                    student_data["aadhar_number"] = clean_aadhar
 
             extra_data = {
                 "religion": data.get("religion"),
@@ -258,7 +271,7 @@ def import_students_from_excel(file, school_id, use_bulk=True):
             students.append((student_data, extra_data))
 
         except Exception as e:
-            errors.append(f"Row {index+2}: {str(e)}")
+            errors.append(f"Row {row_num}: {str(e)}")
 
     # ----------------------------
     # STOP if any error

@@ -13,16 +13,24 @@ from .models import AdmissionDocument, AdmissionFieldValue, DocumentField, RTEDo
 
 logger = logging.getLogger(__name__)
 AADHAAR_ERROR = "Aadhaar number must be exactly 12 digits."
+AADHAAR_DUPLICATE_ERROR = "A student with this Aadhaar number already exists."
 UDISE_ERROR = "UDISE number must be exactly 11 digits."
 ABC_ID_ERROR = "ABC ID must be exactly 12 digits."
 
 
-def validate_aadhaar(value):
+def validate_aadhaar(value, exclude_student_id=None):
     if value in (None, ""):
         return value
     if not isinstance(value, str) or not re.fullmatch(r"[0-9]{12}", value.strip()):
         raise serializers.ValidationError(AADHAAR_ERROR)
-    return value.strip()
+    val = value.strip()
+    from .models import Student
+    qs = Student.objects.filter(aadhar_number=val)
+    if exclude_student_id is not None:
+        qs = qs.exclude(pk=exclude_student_id)
+    if qs.exists():
+        raise serializers.ValidationError(AADHAAR_DUPLICATE_ERROR)
+    return val
 
 
 def validate_udise(value):
@@ -54,7 +62,10 @@ def validate_dynamic_id(attrs):
 
 class AadhaarValidationMixin:
     def validate_aadhar_number(self, value):
-        return validate_aadhaar(value)
+        exclude_id = None
+        if hasattr(self, "instance") and self.instance:
+            exclude_id = getattr(self.instance, "pk", None)
+        return validate_aadhaar(value, exclude_student_id=exclude_id)
 
 
 class DynamicIDValidationMixin:
