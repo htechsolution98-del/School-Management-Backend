@@ -6,6 +6,7 @@ from django.contrib.auth.models import AbstractUser
 from django.utils import timezone
 from django.utils.text import slugify
 from django.core.validators import MinValueValidator
+from django.core.exceptions import ValidationError
 from django.conf import settings
 from django.db.models import Sum
 from django.utils import timezone
@@ -251,6 +252,11 @@ class Staff(models.Model):
 
     def __str__(self):
         return f"{self.name} ({self.category})"
+
+    def save(self, *args, **kwargs):
+        if self.exit_date and self.exit_date <= timezone.localdate():
+            self.is_active = False
+        super().save(*args, **kwargs)
 
     class Meta:
         db_table = "staff"
@@ -665,13 +671,35 @@ class Student(models.Model):
     def __str__(self):
         return f"{self.gr_no}"
 
+    def clean(self):
+        super().clean()
+        if self.aadhar_number:
+            val = self.aadhar_number.strip()
+            if val:
+                existing = Student.objects.filter(aadhar_number=val)
+                if self.pk:
+                    existing = existing.exclude(pk=self.pk)
+                if existing.exists():
+                    raise ValidationError({"aadhar_number": "A student with this Aadhaar number already exists."})
+
+    def save(self, *args, **kwargs):
+        if self.aadhar_number is not None:
+            stripped = self.aadhar_number.strip()
+            self.aadhar_number = stripped if stripped else None
+        super().save(*args, **kwargs)
+
     class Meta:
         db_table = "student"
         constraints = [
             models.UniqueConstraint(
                 fields=["school", "gr_no"],
                 name="unique_school_gr_no",
-            )
+            ),
+            models.UniqueConstraint(
+                fields=["aadhar_number"],
+                condition=models.Q(aadhar_number__isnull=False) & ~models.Q(aadhar_number=""),
+                name="unique_student_aadhar_number",
+            ),
         ]
 
 class Perents(models.Model):

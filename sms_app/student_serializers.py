@@ -44,6 +44,10 @@ class ManualStudentSerializer(AadhaarValidationMixin, serializers.ModelSerialize
                     }
                 )
 
+        aadhar_number = attrs.get("aadhar_number")
+        if aadhar_number:
+            validate_aadhaar(aadhar_number, exclude_student_id=self.instance.pk if self.instance else None)
+
         if academic_year and school and academic_year.school_id != school.id:
             raise serializers.ValidationError(
                 {"academic_year": "Invalid academic year for this school."}
@@ -705,6 +709,10 @@ class AdmissionSubmissionSerializer(serializers.ModelSerializer):
             item["value"] = value
             if error:
                 field_errors[str(field_obj.id)] = error
+            elif (is_aadhaar_field(valid_field) or valid_field.map_to_student_field == "aadhar_number") and value:
+                clean_val = re.sub(r"[\s-]", "", str(value).strip())
+                if clean_val and Student.objects.filter(aadhar_number=clean_val).exists():
+                    field_errors[str(field_obj.id)] = "A student with this Aadhaar number already exists."
         for field_id, field in form_fields.items():
             if field.is_required and field_id not in supplied_ids:
                 field_errors[str(field_id)] = f"{field.label} is required"
@@ -1408,6 +1416,15 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
             # =========================
 
             # Generate GR number
+            # Check Aadhaar uniqueness before creating student
+            for fv in instance.field_values.all():
+                if fv.field and (fv.field.map_to_student_field == "aadhar_number" or is_aadhaar_field(fv.field)):
+                    val = re.sub(r"[\s-]", "", str(fv.value or "").strip())
+                    if val and Student.objects.filter(aadhar_number=val).exists():
+                        raise serializers.ValidationError(
+                            {"message": "A student with this Aadhaar number already exists."}
+                        )
+
             if StudentVerify.objects.filter(
                 admission_number=instance.admission_number
             ).exists():

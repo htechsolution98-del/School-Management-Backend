@@ -181,6 +181,14 @@ class StaffView(ModelViewSet):
     def perform_update(self, serializer):
         category = serializer.validated_data.pop("category", None)
         instance = serializer.save()
+        if instance.exit_date and instance.exit_date <= timezone.localdate():
+            if instance.is_active:
+                instance.is_active = False
+                instance.save(update_fields=["is_active"])
+        elif instance.exit_date is None or instance.exit_date > timezone.localdate():
+            if serializer.validated_data.get("is_active") is not False and not instance.is_active:
+                instance.is_active = True
+                instance.save(update_fields=["is_active"])
         user = instance.user
         if user:
             if instance.name:

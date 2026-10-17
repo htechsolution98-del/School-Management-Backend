@@ -3,6 +3,7 @@ from rest_framework import serializers
 from .models import *
 # pyrefly: ignore [missing-import]
 from django.contrib.auth import get_user_model
+from django.utils import timezone
 from .validators import validate_mobile
 import numpy as np
 import cv2
@@ -91,6 +92,19 @@ class StaffSerializer(serializers.ModelSerializer):
         department = attrs.get("department") or (self.instance.department if self.instance else None)
         if not is_clerk and not department:
             raise serializers.ValidationError({"department": "Department is required for this role."})
+
+        # Auto-deactivate when exit_date is set and <= today; auto-activate when cleared or future
+        if "exit_date" in attrs:
+            exit_date = attrs.get("exit_date")
+            if exit_date and exit_date <= timezone.localdate():
+                attrs["is_active"] = False
+            elif exit_date is None or exit_date > timezone.localdate():
+                if attrs.get("is_active") is not False:
+                    attrs["is_active"] = True
+        else:
+            exit_date = self.instance.exit_date if self.instance else None
+            if exit_date and exit_date <= timezone.localdate():
+                attrs["is_active"] = False
 
         return attrs
 

@@ -749,6 +749,19 @@ class StaffSerializer(serializers.ModelSerializer):
         if not is_clerk and not department:
             raise serializers.ValidationError({"department": "Department is required for this role."})
 
+        # Auto-deactivate when exit_date is set and <= today; auto-activate when cleared or future
+        if "exit_date" in attrs:
+            exit_date = attrs.get("exit_date")
+            if exit_date and exit_date <= timezone.localdate():
+                attrs["is_active"] = False
+            elif exit_date is None or exit_date > timezone.localdate():
+                if attrs.get("is_active") is not False:
+                    attrs["is_active"] = True
+        else:
+            exit_date = self.instance.exit_date if self.instance else None
+            if exit_date and exit_date <= timezone.localdate():
+                attrs["is_active"] = False
+
         return attrs
 
 
@@ -1042,6 +1055,10 @@ class ManualStudentSerializer(AadhaarValidationMixin, serializers.ModelSerialize
                         "gr_no": "A student with this gr_no already exists for this school."
                     }
                 )
+
+        aadhar_number = attrs.get("aadhar_number")
+        if aadhar_number:
+            validate_aadhaar(aadhar_number, exclude_student_id=self.instance.pk if self.instance else None)
 
         if academic_year and school and academic_year.school_id != school.id:
             raise serializers.ValidationError(
@@ -1503,6 +1520,11 @@ class AdmissionSubmissionSerializer(serializers.ModelSerializer):
 
             if valid_field.is_required and not item.get("value"):
                 raise serializers.ValidationError(f"{valid_field.label} is required")
+
+            if (is_aadhaar_field(valid_field) or valid_field.map_to_student_field == "aadhar_number") and item.get("value"):
+                clean_val = re.sub(r"[\s-]", "", str(item.get("value")).strip())
+                if clean_val and Student.objects.filter(aadhar_number=clean_val).exists():
+                    raise serializers.ValidationError({str(valid_field.id): "A student with this Aadhaar number already exists."})
 
         resolved_school_class = school_class or self._extract_school_class_from_fields(
             form, field_values
@@ -2258,6 +2280,15 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
             # =========================
             # 2. CREATE STUDENT
             # =========================
+
+            # Check Aadhaar uniqueness before creating student
+            for fv in instance.field_values.all():
+                if fv.field and (fv.field.map_to_student_field == "aadhar_number" or is_aadhaar_field(fv.field)):
+                    val = re.sub(r"[\s-]", "", str(fv.value or "").strip())
+                    if val and Student.objects.filter(aadhar_number=val).exists():
+                        raise serializers.ValidationError(
+                            {"message": "A student with this Aadhaar number already exists."}
+                        )
 
             # Generate GR number
             if StudentVerify.objects.filter(
