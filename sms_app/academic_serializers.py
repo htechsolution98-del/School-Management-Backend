@@ -111,7 +111,11 @@ class DivisionSetSerilaizer(serializers.ModelSerializer):
         ]
 
     def create(self, validated_data):
-        total_division = int(validated_data.pop("division"))
+        division_raw = validated_data.pop("division", "1")
+        try:
+            total_division = int(division_raw)
+        except (ValueError, TypeError):
+            total_division = 1
         capacity = validated_data.pop("capacity")
 
         alphabet = string.ascii_uppercase[:total_division]

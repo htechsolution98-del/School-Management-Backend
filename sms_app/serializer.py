@@ -744,7 +744,7 @@ class StaffSerializer(serializers.ModelSerializer):
             except (ValueError, TypeError):
                 role_name = str(category_val)
 
-        is_clerk = "CLERK" in str(role_name).strip().upper()
+        is_clerk = "CLERK" in role_name.strip().upper()
         department = attrs.get("department") or (self.instance.department if self.instance else None)
         if not is_clerk and not department:
             raise serializers.ValidationError({"department": "Department is required for this role."})
@@ -2139,7 +2139,11 @@ class DivisionSetSerilaizer(serializers.ModelSerializer):
         fields = ["created_at", "division", "capacity"]
 
     def create(self, validated_data):
-        total_division = int(validated_data.pop("division"))
+        division_raw = validated_data.pop("division", "1")
+        try:
+            total_division = int(division_raw)
+        except (ValueError, TypeError):
+            total_division = 1
         capacity = validated_data.pop("capacity")
 
         alphabet = string.ascii_uppercase[:total_division]
