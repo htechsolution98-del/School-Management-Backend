@@ -1,5 +1,6 @@
 from .student_profile_services import AadhaarValidationMixin, DynamicIDValidationMixin, is_aadhaar_field, validate_aadhaar
 import random
+import re
 from decimal import Decimal, InvalidOperation
 from rest_framework import serializers
 from django.db import transaction
@@ -1541,25 +1542,102 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
                     rte_doc.save()
 
             # =========================
+            # DETERMINE STUDENT PERSONAL MOBILE VS. PARENT/GUARDIAN MOBILE
+            # =========================
+            parent_rel_keywords = [
+                "parent", "parents", "guardian", "gardian", "gurdian",
+                "father", "mother"
+            ]
+            phone_keywords = [
+                "mobile", "phone", "mo.no", "mono", "no.", "number",
+                "numbr", "contact", "cell"
+            ]
+
+            general_mobile = None
+            parent_specific_mobile = None
+
+            for fv in instance.field_values.all().select_related("field"):
+                val = str(fv.value or "").strip()
+                digits = re.sub(r"\D", "", val)
+                if not digits:
+                    continue
+                clean_phone = digits[-10:] if len(digits) >= 10 else digits
+                if len(clean_phone) < 7:
+                    continue
+
+                lbl = (getattr(fv.field, "label", "") or "").lower().strip()
+                mapping = getattr(fv.field, "map_to_student_field", None)
+
+                is_parent_rel = any(k in lbl for k in parent_rel_keywords)
+                is_phone_field = (
+                    mapping == "mobile" or
+                    any(k in lbl for k in phone_keywords) or
+                    getattr(fv.field, "field_type", "") in ["phone", "tel"]
+                )
+
+                if any(k in lbl for k in ["name", "email", "occupation", "qualification"]):
+                    if not any(k in lbl for k in ["mobile", "phone", "mo.no", "mono", "number", "numbr"]):
+                        continue
+
+                if is_parent_rel and is_phone_field:
+                    if not parent_specific_mobile:
+                        parent_specific_mobile = clean_phone
+                elif mapping == "mobile" or (any(k in lbl for k in ["student mobile", "candidate mobile", "personal mobile"]) and not is_parent_rel):
+                    if not general_mobile:
+                        general_mobile = clean_phone
+                elif is_phone_field and not is_parent_rel:
+                    if not general_mobile:
+                        general_mobile = clean_phone
+
+            if parent_specific_mobile:
+                parent_mobile = parent_specific_mobile
+                student_personal_mobile = general_mobile
+            else:
+                parent_mobile = general_mobile
+                student_personal_mobile = None
+
+            if student_personal_mobile:
+                student.mobile = student_personal_mobile
+            elif parent_mobile and not student.mobile:
+                student.mobile = parent_mobile
+            student.save(update_fields=["mobile"])
+
+            # =========================
             # 6. CREATE USER (STUDENT)
             # =========================
 
             if not student.user:
-                student_user = User.objects.create(username=gr_no)
-                student_user.set_password(gr_no)
+                student_username = str(gr_no)
+                if User.objects.filter(username=student_username).exists():
+                    student_username = f"{gr_no}_{student.school.id}"
+                    counter = 1
+                    while User.objects.filter(username=student_username).exists():
+                        student_username = f"{gr_no}_{student.school.id}_{counter}"
+                        counter += 1
 
+                student_user_mobile = None
+                if student_personal_mobile and not User.objects.filter(mobile=student_personal_mobile).exists():
+                    student_user_mobile = student_personal_mobile
+
+                student_user = User.objects.create(
+                    username=student_username,
+                    school=student.school,
+                    mobile=student_user_mobile,
+                )
+                student_user.set_password(gr_no)
+                student_user.role = "student"
                 student_user.save()
 
                 group, _ = Group.objects.get_or_create(name="student")
                 student_user.groups.add(group)
-                student_user.role = "student"
-                student_user.save() 
-
-                
-                # student_user = self.context["request"].user.school
 
                 student.user = student_user
                 student.save()
+            else:
+                if student_personal_mobile and not student.user.mobile:
+                    if not User.objects.filter(mobile=student_personal_mobile).exclude(id=student.user.id).exists():
+                        student.user.mobile = student_personal_mobile
+                        student.user.save(update_fields=["mobile"])
 
             # =========================
             # 7. CREATE PARENT USER
@@ -1574,20 +1652,49 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
                 .first()
             )
 
-            parent_user = existing_parent.user if (existing_parent and existing_parent.user) else None
+            existing_parent_user = None
+            if parent_mobile:
+                existing_parent_user = User.objects.filter(
+                    Q(mobile=parent_mobile) | Q(username=parent_mobile),
+                    school=school,
+                    role="parents",
+                ).first()
+                if not existing_parent_user:
+                    existing_parent_user = User.objects.filter(
+                        Q(mobile=parent_mobile) | Q(username=parent_mobile),
+                        role="parents",
+                    ).first()
+
+            parent_user = existing_parent_user or (existing_parent.user if (existing_parent and existing_parent.user) else None)
 
             if not parent_user:
-                base_username = f"parent_{school.id}_{student.id}"
-                username = base_username
-                counter = 1 
-                while User.objects.filter(username=username).exists():
-                    username = f"{base_username}_{counter}"
-                    counter += 1
+                if parent_mobile and not User.objects.filter(username=parent_mobile).exists():
+                    username = parent_mobile
+                else:
+                    base_username = f"parent_{school.id}_{student.id}"
+                    username = base_username
+                    counter = 1 
+                    while User.objects.filter(username=username).exists():
+                        username = f"{base_username}_{counter}"
+                        counter += 1
 
-                parent_user = User.objects.create(username=username)
+                parent_user_mobile = None
+                if parent_mobile and not User.objects.filter(mobile=parent_mobile).exists():
+                    parent_user_mobile = parent_mobile
+
+                parent_user = User.objects.create(
+                    username=username,
+                    school=school,
+                    role="parents",
+                    mobile=parent_user_mobile,
+                )
                 parent_user.set_password("123456")
-                parent_user.role = "parents"
                 parent_user.save()
+            else:
+                if parent_mobile and not parent_user.mobile:
+                    if not User.objects.filter(mobile=parent_mobile).exclude(id=parent_user.id).exists():
+                        parent_user.mobile = parent_mobile
+                        parent_user.save(update_fields=["mobile"])
 
             group, _ = Group.objects.get_or_create(name="parents")
             parent_user.groups.add(group)

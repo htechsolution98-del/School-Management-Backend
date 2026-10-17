@@ -47,17 +47,18 @@ INSTALLED_APPS = [
     "sms_app",
     "sms_shared_core",
     
-    # Microservice Apps
-    "services.auth_identity",
-    "services.tenant_subscription",
-    "services.academic_timetable",
-    "services.student_admission",
-    "services.staff_hr",
-    "services.examination_result",
-    "services.finance_accounting",
-    "services.library_management",
-    "services.inventory_asset",
-    "services.notification_messaging",
+    # Microservice Apps (Uncomment when microservices database migrations are applied)
+    # "services.auth_identity",
+    # "services.tenant_subscription",
+    # "services.academic_timetable",
+    # "services.student_admission",
+    # "services.staff_hr",
+    # "services.examination_result",
+    # "services.finance_accounting",
+    # "services.library_management",
+    # "services.inventory_asset",
+    # "services.notification_messaging",
+
     
     "rest_framework",
     "rest_framework_simplejwt",

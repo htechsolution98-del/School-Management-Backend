@@ -1,3 +1,4 @@
+import re
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -13,10 +14,10 @@ class IsSuperAdminOrReadOnly(permissions.BasePermission):
     """
 
     def has_permission(self, request, view):
-        if not request.user or not request.user.is_authenticated:
-            return False
         if request.method in permissions.SAFE_METHODS:
             return True
+        if not request.user or not request.user.is_authenticated:
+            return False
         return bool(
             request.user.is_superuser
             or request.user.groups.filter(name="super_admin").exists()
@@ -33,11 +34,37 @@ class PageTutorialViewSet(viewsets.ModelViewSet):
         role = self.request.query_params.get('role')
         if role:
             role_upper = role.upper().strip()
-            # Fees alias handling
+            # Role alias handling
             if role_upper in ['FEES_MANAGEMENT', 'ACCOUNTANT', 'FINANCE']:
                 role_upper = 'FEES'
+            elif role_upper in ['LIBRARIAN', 'LIBRARY', 'LIB']:
+                role_upper = 'LIBRARIAN'
+            elif role_upper in ['SUPER_ADMIN', 'SUPER-ADMIN']:
+                role_upper = 'SUPERADMIN'
             qs = qs.filter(Q(role=role_upper) | Q(role='GLOBAL'))
         return qs
+
+    def create(self, request, *args, **kwargs):
+        role = request.data.get('role', '').upper().strip()
+        route_path = request.data.get('route_path', '').strip().rstrip('/')
+        if route_path and not route_path.startswith('/'):
+            route_path = '/' + route_path
+
+        if role in ['FEES_MANAGEMENT', 'ACCOUNTANT', 'FINANCE']:
+            role = 'FEES'
+        elif role in ['LIBRARIAN', 'LIBRARY', 'LIB']:
+            role = 'LIBRARIAN'
+        elif role in ['SUPER_ADMIN', 'SUPER-ADMIN']:
+            role = 'SUPERADMIN'
+
+        existing = PageTutorial.objects.filter(role=role, route_path=route_path).first()
+        if existing:
+            serializer = self.get_serializer(existing, data=request.data, partial=True)
+            serializer.is_valid(raise_exception=True)
+            self.perform_update(serializer)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+
+        return super().create(request, *args, **kwargs)
 
     def perform_create(self, serializer):
         serializer.save(updated_by=self.request.user)
@@ -58,22 +85,40 @@ class PageTutorialViewSet(viewsets.ModelViewSet):
 
         if role in ['FEES_MANAGEMENT', 'ACCOUNTANT', 'FINANCE']:
             role = 'FEES'
+        elif role in ['LIBRARIAN', 'LIBRARY', 'LIB']:
+            role = 'LIBRARIAN'
+        elif role in ['SUPER_ADMIN', 'SUPER-ADMIN']:
+            role = 'SUPERADMIN'
 
-        # First search for exact (role, path)
-        query = Q(route_path=path) | Q(route_path=path + '/')
-        if role:
-            tutorial = PageTutorial.objects.filter(query, role=role).first()
-            if not tutorial:
-                # Try GLOBAL
-                tutorial = PageTutorial.objects.filter(query, role='GLOBAL').first()
-        else:
-            tutorial = PageTutorial.objects.filter(query).first()
+        candidate_paths = [path]
+        # Strip trailing numeric or UUID identifiers (e.g. /clerk/student-profiles/29 -> /clerk/student-profiles)
+        stripped = re.sub(r'/\d+$', '', path)
+        if stripped != path and stripped:
+            candidate_paths.append(stripped)
+        uuid_stripped = re.sub(r'/[0-9a-f-]{36}$', '', path, flags=re.I)
+        if uuid_stripped not in candidate_paths and uuid_stripped:
+            candidate_paths.append(uuid_stripped)
+        if '/' in path:
+            parent = path.rsplit('/', 1)[0]
+            if parent and parent not in candidate_paths:
+                candidate_paths.append(parent)
 
-        if tutorial:
-            serializer = self.get_serializer(tutorial)
-            return Response(serializer.data)
+        for candidate in candidate_paths:
+            query = Q(route_path=candidate) | Q(route_path=candidate + '/')
+            tutorial = None
+            if role:
+                tutorial = PageTutorial.objects.filter(query, role=role).first()
+                if not tutorial:
+                    tutorial = PageTutorial.objects.filter(query, role='GLOBAL').first()
+            else:
+                tutorial = PageTutorial.objects.filter(query).first()
+
+            if tutorial:
+                serializer = self.get_serializer(tutorial)
+                return Response(serializer.data)
 
         return Response(
-            {"detail": "No custom tutorial found for this path.", "route_path": path, "role": role},
-            status=status.HTTP_404_NOT_FOUND
+            {"detail": "Default tutorial active.", "custom": False, "route_path": path, "role": role},
+            status=status.HTTP_200_OK
         )
+

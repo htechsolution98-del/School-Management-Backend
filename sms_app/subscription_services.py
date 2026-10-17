@@ -15,6 +15,9 @@ from .models import (
 )
 
 
+from dateutil.relativedelta import relativedelta
+
+
 class SubscriptionBillingService:
     @staticmethod
     def get_active_student_count(school: School) -> int:
@@ -42,16 +45,18 @@ class SubscriptionBillingService:
         school: School,
         plan: Optional[SubscriptionPlan] = None,
         billing_cycle: str = "MONTHLY",
+        months_count: int = 1,
         custom_student_count: Optional[int] = None,
         discount_amount: float = 0.0,
         flat_override: Optional[float] = None,
         per_student_override: Optional[float] = None,
     ) -> Dict[str, Any]:
         """
-        Calculates subscription billing details.
+        Calculates subscription billing details with support for multi-month stacking.
         Returns:
-            dict containing student_count, pricing_model, billing_cycle, unit_rate,
-            subtotal, tax_percentage, tax_amount, discount_amount, final_amount, price_snapshot.
+            dict containing student_count, pricing_model, billing_cycle, months_count,
+            unit_rate, subtotal, tax_percentage, tax_amount, discount_amount, final_amount,
+            current_due_date, new_due_date, expanded_days, price_snapshot.
         """
         student_count = (
             custom_student_count
@@ -61,38 +66,43 @@ class SubscriptionBillingService:
 
         pricing_model = plan.pricing_model if plan else "FLAT"
 
+        # Resolve effective months count
+        effective_months = max(1, int(months_count or 1))
+        if billing_cycle == "QUARTERLY" and effective_months == 1:
+            effective_months = 3
+        elif billing_cycle == "HALF_YEARLY" and effective_months == 1:
+            effective_months = 6
+        elif billing_cycle == "YEARLY" and effective_months == 1:
+            effective_months = 12
+
         # Determine base price based on cycle
         if flat_override is not None and pricing_model == "FLAT":
             unit_rate = Decimal(str(flat_override))
         elif per_student_override is not None and pricing_model == "PER_STUDENT":
             unit_rate = Decimal(str(per_student_override))
         elif plan:
-            if billing_cycle == "QUARTERLY":
+            if billing_cycle == "QUARTERLY" and effective_months == 3:
                 unit_rate = plan.quarterly_price
-            elif billing_cycle == "HALF_YEARLY":
+            elif billing_cycle == "HALF_YEARLY" and effective_months == 6:
                 unit_rate = plan.half_yearly_price
-            elif billing_cycle == "YEARLY":
+            elif billing_cycle == "YEARLY" and effective_months == 12:
                 unit_rate = plan.yearly_price
-            else:  # MONTHLY
+            else:  # MONTHLY or multi-month custom
                 unit_rate = plan.monthly_price
         else:
             unit_rate = Decimal("0.00")
 
         # Multipliers / Subtotal calculation
         if pricing_model == "PER_STUDENT":
-            # For per-student pricing, subtotal = student_count * per_student_rate * cycle_months
-            cycle_months = 1
-            if billing_cycle == "QUARTERLY":
-                cycle_months = 3
-            elif billing_cycle == "HALF_YEARLY":
-                cycle_months = 6
-            elif billing_cycle == "YEARLY":
-                cycle_months = 12
-
-            subtotal = Decimal(str(student_count)) * unit_rate * Decimal(str(cycle_months))
+            # For per-student pricing, subtotal = student_count * per_student_rate * months
+            subtotal = Decimal(str(student_count)) * unit_rate * Decimal(str(effective_months))
         else:
-            # Flat pricing is per cycle directly
-            subtotal = unit_rate
+            # Flat pricing: if cycle matches preset (Quarterly/Half/Yearly) and months match preset, unit_rate is cycle total.
+            # Otherwise (e.g. 2 months, 4 months), subtotal is monthly_price * effective_months.
+            if billing_cycle == "MONTHLY" and effective_months > 1:
+                subtotal = unit_rate * Decimal(str(effective_months))
+            else:
+                subtotal = unit_rate
 
         disc = Decimal(str(discount_amount))
         net_subtotal = max(Decimal("0.00"), subtotal - disc)
@@ -106,11 +116,19 @@ class SubscriptionBillingService:
         tax_amt = round(net_subtotal * (tax_pct / Decimal("100.0")), 2)
         total_amt = round(net_subtotal + tax_amt, 2)
 
+        # Calculate days expansion & future due date
+        today = timezone.now().date()
+        sub = getattr(school, "subscription", None)
+        base_date = sub.due_date if (sub and sub.due_date and sub.due_date > today and sub.status in ["ACTIVE", "TRIAL", "GRACE_PERIOD"]) else today
+        new_due_date = base_date + relativedelta(months=effective_months)
+        expanded_days = (new_due_date - today).days
+
         snapshot = {
             "plan_id": plan.id if plan else None,
             "plan_name": plan.name if plan else "Custom",
             "pricing_model": pricing_model,
             "billing_cycle": billing_cycle,
+            "months_count": effective_months,
             "unit_rate": float(unit_rate),
             "student_count": student_count,
             "subtotal": float(subtotal),
@@ -119,12 +137,16 @@ class SubscriptionBillingService:
             "tax_amount": float(tax_amt),
             "discount_amount": float(disc),
             "total_amount": float(total_amt),
+            "current_due_date": str(base_date),
+            "new_due_date": str(new_due_date),
+            "expanded_days": expanded_days,
             "captured_at": timezone.now().isoformat(),
         }
 
         return {
             "pricing_model": pricing_model,
             "billing_cycle": billing_cycle,
+            "months_count": effective_months,
             "student_count": student_count,
             "unit_rate": float(unit_rate),
             "subtotal": float(subtotal),
@@ -132,6 +154,9 @@ class SubscriptionBillingService:
             "tax_amount": float(tax_amt),
             "discount_amount": float(disc),
             "final_amount": float(total_amt),
+            "current_due_date": str(base_date),
+            "new_due_date": str(new_due_date),
+            "expanded_days": expanded_days,
             "price_snapshot": snapshot,
         }
 

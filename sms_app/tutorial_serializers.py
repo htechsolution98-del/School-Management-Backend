@@ -15,6 +15,7 @@ class PageTutorialSerializer(serializers.ModelSerializer):
             'summary',
             'steps',
             'dummy_data',
+            'show_video',
             'video_url',
             'tips',
             'created_at',
