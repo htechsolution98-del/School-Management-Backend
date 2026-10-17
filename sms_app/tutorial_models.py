@@ -8,6 +8,8 @@ ROLE_CHOICES = (
     ('TRUSTEE', 'Trustee'),
     ('FEES', 'Fees Management'),
     ('INVENTORY', 'Inventory'),
+    ('LIBRARIAN', 'Librarian'),
+    ('SUPERADMIN', 'Super Admin'),
     ('GLOBAL', 'Global / All Roles'),
 )
 
@@ -25,6 +27,10 @@ class PageTutorial(models.Model):
         default=list,
         blank=True,
         help_text="List of dummy data/fields: [{'field': '...', 'sample_value': '...', 'instructions': '...'}]"
+    )
+    show_video = models.BooleanField(
+        default=True,
+        help_text="Whether to show or hide the video tutorial card on this screen"
     )
     video_url = models.CharField(
         max_length=500,
