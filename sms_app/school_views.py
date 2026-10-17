@@ -4,7 +4,7 @@ from rest_framework import generics
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.decorators import action
-from django.db.models import Q, Count, Sum
+from django.db.models import Q, Count, Sum, ProtectedError
 from django.db.models.functions import TruncMonth
 from django.utils import timezone
 from .models import *
@@ -367,8 +367,30 @@ class SchoolView(ModelViewSet):
 
     # 🔹 Delete + clear cache
     def perform_destroy(self, instance):
+        login_user = instance.login_id
         instance.delete()
+        if login_user:
+            try:
+                login_user.delete()
+            except Exception:
+                pass
         cache.delete("school_list")
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        try:
+            self.perform_destroy(instance)
+            return Response({"message": "School deleted successfully."}, status=status.HTTP_200_OK)
+        except ProtectedError:
+            return Response(
+                {"error": "Cannot delete school because active records (such as students) are linked to it."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except Exception as e:
+            return Response(
+                {"error": f"Failed to delete school: {str(e)}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
     # 🔹 Custom response
     def create(self, request, *args, **kwargs):

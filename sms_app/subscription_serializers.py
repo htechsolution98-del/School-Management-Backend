@@ -166,6 +166,7 @@ class SchoolSubscriptionSerializer(serializers.ModelSerializer):
 class SchoolInvoiceSerializer(serializers.ModelSerializer):
     school_name = serializers.CharField(source="school.name", read_only=True)
     school_code = serializers.CharField(source="school.code", read_only=True)
+    plan_name = serializers.SerializerMethodField()
 
     class Meta:
         model = SchoolInvoice
@@ -175,6 +176,7 @@ class SchoolInvoiceSerializer(serializers.ModelSerializer):
             "school_name",
             "school_code",
             "subscription",
+            "plan_name",
             "invoice_number",
             "billing_model",
             "billing_cycle",
@@ -196,6 +198,15 @@ class SchoolInvoiceSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+
+    def get_plan_name(self, obj):
+        if obj.subscription and obj.subscription.plan:
+            return obj.subscription.plan.name
+        if obj.notes and " - " in obj.notes:
+            parts = obj.notes.split(" - ")
+            if len(parts) > 1 and parts[-1].strip():
+                return parts[-1].strip()
+        return "Standard School License"
 
 
 class SubscriptionPaymentSerializer(serializers.ModelSerializer):

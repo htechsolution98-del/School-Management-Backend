@@ -15,6 +15,7 @@ from .serializer import _user_display_name
 from .permissions import *
 from .utils import *
 import datetime
+import re
 from django.core.cache import cache
 from sms_app.library_leave_views import carry_forward_leave
 
@@ -455,9 +456,41 @@ class ChangePasswordView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        if len(new_password) < 6:
+        # 1. Disallow identical current and new password
+        if current_password == new_password or user.check_password(new_password):
             return Response(
-                {"error": "New password must be at least 6 characters long."},
+                {"error": "Current password and new password cannot be the same. Please choose a different password."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # 2. Strong password validation rules
+        if len(new_password) < 8:
+            return Response(
+                {"error": "New password must be at least 8 characters long."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not re.search(r"[A-Z]", new_password):
+            return Response(
+                {"error": "New password must contain at least one uppercase letter (A-Z)."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not re.search(r"[a-z]", new_password):
+            return Response(
+                {"error": "New password must contain at least one lowercase letter (a-z)."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not re.search(r"\d", new_password):
+            return Response(
+                {"error": "New password must contain at least one number (0-9)."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not re.search(r"[!@#$%^&*(),.?\":{}|<>\-_+=\[\]\\;'`~]", new_password):
+            return Response(
+                {"error": "New password must contain at least one special character (!@#$%^&* etc.)."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -467,16 +500,10 @@ class ChangePasswordView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Verify current password using standard Django hasher
+        # 3. Verify current password using standard Django hasher
         if not user.check_password(current_password):
             return Response(
                 {"error": "Current password is incorrect. Please verify and try again."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        if current_password == new_password:
-            return Response(
-                {"error": "New password cannot be the same as your current password."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
