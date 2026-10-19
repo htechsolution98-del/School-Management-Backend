@@ -186,8 +186,7 @@ def import_students_from_excel(file, school_id, use_bulk=True):
         Student.objects.filter(school=school).values_list("gr_no", flat=True)
     )
 
-    for index, row in df.iterrows():
-        row_num = int(index) + 2
+    for row_num, (_, row) in enumerate(df.iterrows(), start=2):
         try:
             data = {}
             for excel_col, model_field in COLUMN_MAPPING.items():
