@@ -3795,6 +3795,13 @@ class BookCopy(models.Model):
     class Meta:
         db_table = "book_copy"
         unique_together = ('school', 'accession_no')
+        constraints = [
+            models.UniqueConstraint(
+                fields=['school', 'barcode'],
+                condition=models.Q(barcode__isnull=False) & ~models.Q(barcode=''),
+                name='unique_school_book_copy_barcode'
+            )
+        ]
 
 
 class LateBookFees(models.Model):
@@ -3847,6 +3854,7 @@ class BookIssued(models.Model):
 
     class Meta:
         db_table = "book_issued"
+        ordering = ["-id"]
         constraints = [models.CheckConstraint(
             condition=(models.Q(student__isnull=False, staff__isnull=True) | models.Q(student__isnull=True, staff__isnull=False)),
             name='library_loan_exactly_one_borrower',

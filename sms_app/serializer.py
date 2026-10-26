@@ -872,6 +872,10 @@ class CurrentUserProfileSerializer(serializers.ModelSerializer):
     def get_avatar(self, user):
         school = getattr(user, "school", None) or getattr(user, "managed_school", None)
         if not school:
+            staff = Staff.objects.filter(user=user).select_related("school").first()
+            if staff:
+                school = staff.school
+        if not school:
             student = Student.objects.filter(user=user).select_related("school").first()
             if student:
                 school = student.school
@@ -891,6 +895,10 @@ class CurrentUserProfileSerializer(serializers.ModelSerializer):
             return None
         school = getattr(user, "school", None) or getattr(user, "managed_school", None)
         if not school:
+            staff = Staff.objects.filter(user=user).select_related("school").first()
+            if staff:
+                school = staff.school
+        if not school:
             student = Student.objects.filter(user=user).select_related("school").first()
             if not student and getattr(user, "username", None):
                 student = Student.objects.filter(gr_no=user.username).select_related("school").first()
@@ -903,7 +911,19 @@ class CurrentUserProfileSerializer(serializers.ModelSerializer):
 
         if not school:
             return None
-        return {"id": school.id, "name": school.name, "slug": school.slug}
+
+        logo_url = None
+        if school.logo:
+            request = self.context.get("request")
+            url = school.logo.url
+            logo_url = request.build_absolute_uri(url) if request else url
+
+        return {
+            "id": school.id,
+            "name": school.name,
+            "slug": school.slug,
+            "logo": logo_url,
+        }
 
     def get_modules(self, user):
         return list(
