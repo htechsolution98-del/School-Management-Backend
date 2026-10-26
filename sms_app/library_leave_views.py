@@ -1,7 +1,7 @@
 from decimal import Decimal
 from django.utils import timezone
 from django.core.exceptions import ValidationError as DjangoValidationError, PermissionDenied as DjangoPermissionDenied
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from .models import StaffRemainingLeave
 from .models import *
 from rest_framework.viewsets import ModelViewSet, ViewSet
@@ -2313,7 +2313,14 @@ class BookCategoryViewSet(ModelViewSet):
         staff = Staff.objects.filter(user=self.request.user).first()
         if not staff:
             raise PermissionDenied("You are not registered as staff.")
-        return BookCategory.objects.filter(school=staff.school, is_active=True)
+        qs = BookCategory.objects.filter(school=staff.school)
+        active_param = self.request.query_params.get("is_active") or self.request.query_params.get("active")
+        if active_param is not None:
+            if active_param.lower() in ["true", "1"]:
+                qs = qs.filter(is_active=True)
+            elif active_param.lower() in ["false", "0"]:
+                qs = qs.filter(is_active=False)
+        return qs.order_by("name")
 
     def perform_create(self, serializer):
         staff = Staff.objects.filter(user=self.request.user).first()
@@ -2340,8 +2347,31 @@ class BookCategoryViewSet(ModelViewSet):
             })
 
     def perform_destroy(self, instance):
-        instance.is_active = False
-        instance.save()
+        # Category cannot be deleted if it has books
+        books_count = Book.objects.filter(
+            school=instance.school
+        ).filter(
+            Q(category_ref=instance) | Q(category__iexact=instance.name)
+        ).count()
+
+        if books_count > 0:
+            raise ValidationError({
+                "detail": f"Cannot delete Category '{instance.name}': It currently contains {books_count} book(s). Categories with existing books cannot be deleted. You can deactivate it instead."
+            })
+
+        instance.delete()
+
+    @action(detail=True, methods=["post", "patch"], url_path="toggle-active")
+    def toggle_active(self, request, pk=None):
+        instance = self.get_object()
+        instance.is_active = not instance.is_active
+        instance.save(update_fields=["is_active"])
+        return Response({
+            "id": instance.id,
+            "name": instance.name,
+            "is_active": instance.is_active,
+            "message": f"Category '{instance.name}' is now {'activated' if instance.is_active else 'deactivated'}."
+        }, status=status.HTTP_200_OK)
 
 
 class AuthorViewSet(ModelViewSet):
@@ -2352,7 +2382,14 @@ class AuthorViewSet(ModelViewSet):
         staff = Staff.objects.filter(user=self.request.user).first()
         if not staff:
             raise PermissionDenied("You are not registered as staff.")
-        return Author.objects.filter(school=staff.school, is_active=True)
+        qs = Author.objects.filter(school=staff.school)
+        active_param = self.request.query_params.get("is_active") or self.request.query_params.get("active")
+        if active_param is not None:
+            if active_param.lower() in ["true", "1"]:
+                qs = qs.filter(is_active=True)
+            elif active_param.lower() in ["false", "0"]:
+                qs = qs.filter(is_active=False)
+        return qs.order_by("name")
 
     def perform_create(self, serializer):
         staff = Staff.objects.filter(user=self.request.user).first()
@@ -2379,8 +2416,31 @@ class AuthorViewSet(ModelViewSet):
             })
 
     def perform_destroy(self, instance):
-        instance.is_active = False
-        instance.save()
+        # Author cannot be deleted if it has books
+        books_count = Book.objects.filter(
+            school=instance.school
+        ).filter(
+            Q(author_ref=instance) | Q(author__iexact=instance.name)
+        ).count()
+
+        if books_count > 0:
+            raise ValidationError({
+                "detail": f"Cannot delete Author '{instance.name}': Currently associated with {books_count} book(s). Authors with existing books cannot be deleted. You can deactivate them instead."
+            })
+
+        instance.delete()
+
+    @action(detail=True, methods=["post", "patch"], url_path="toggle-active")
+    def toggle_active(self, request, pk=None):
+        instance = self.get_object()
+        instance.is_active = not instance.is_active
+        instance.save(update_fields=["is_active"])
+        return Response({
+            "id": instance.id,
+            "name": instance.name,
+            "is_active": instance.is_active,
+            "message": f"Author '{instance.name}' is now {'activated' if instance.is_active else 'deactivated'}."
+        }, status=status.HTTP_200_OK)
 
 
 class PublisherViewSet(ModelViewSet):
@@ -2391,7 +2451,14 @@ class PublisherViewSet(ModelViewSet):
         staff = Staff.objects.filter(user=self.request.user).first()
         if not staff:
             raise PermissionDenied("You are not registered as staff.")
-        return Publisher.objects.filter(school=staff.school, is_active=True)
+        qs = Publisher.objects.filter(school=staff.school)
+        active_param = self.request.query_params.get("is_active") or self.request.query_params.get("active")
+        if active_param is not None:
+            if active_param.lower() in ["true", "1"]:
+                qs = qs.filter(is_active=True)
+            elif active_param.lower() in ["false", "0"]:
+                qs = qs.filter(is_active=False)
+        return qs.order_by("name")
 
     def perform_create(self, serializer):
         staff = Staff.objects.filter(user=self.request.user).first()
@@ -2420,8 +2487,29 @@ class PublisherViewSet(ModelViewSet):
             })
 
     def perform_destroy(self, instance):
-        instance.is_active = False
-        instance.save()
+        books_count = Book.objects.filter(
+            school=instance.school,
+            publisher_ref=instance
+        ).count()
+
+        if books_count > 0:
+            raise ValidationError({
+                "detail": f"Cannot delete Publisher '{instance.name}': Currently associated with {books_count} book(s). Publishers with existing books cannot be deleted. You can deactivate them instead."
+            })
+
+        instance.delete()
+
+    @action(detail=True, methods=["post", "patch"], url_path="toggle-active")
+    def toggle_active(self, request, pk=None):
+        instance = self.get_object()
+        instance.is_active = not instance.is_active
+        instance.save(update_fields=["is_active"])
+        return Response({
+            "id": instance.id,
+            "name": instance.name,
+            "is_active": instance.is_active,
+            "message": f"Publisher '{instance.name}' is now {'activated' if instance.is_active else 'deactivated'}."
+        }, status=status.HTTP_200_OK)
 
 
 class RackViewSet(ModelViewSet):
@@ -2432,7 +2520,14 @@ class RackViewSet(ModelViewSet):
         staff = Staff.objects.filter(user=self.request.user).first()
         if not staff:
             raise PermissionDenied("You are not registered as staff.")
-        return Rack.objects.filter(school=staff.school, is_active=True)
+        qs = Rack.objects.filter(school=staff.school)
+        active_param = self.request.query_params.get("is_active") or self.request.query_params.get("active")
+        if active_param is not None:
+            if active_param.lower() in ["true", "1"]:
+                qs = qs.filter(is_active=True)
+            elif active_param.lower() in ["false", "0"]:
+                qs = qs.filter(is_active=False)
+        return qs.order_by("rack_code")
 
     def perform_create(self, serializer):
         staff = Staff.objects.filter(user=self.request.user).first()
@@ -2467,10 +2562,41 @@ class RackViewSet(ModelViewSet):
             })
 
     def perform_destroy(self, instance):
-        instance.is_active = False
-        instance.save()
-        # Also deactivate child shelves
-        instance.shelves.all().update(is_active=False)
+        # Rack CANNOT be deleted if it has shelves, books, or copies
+        shelves_count = instance.shelves.count()
+        books_count = Book.objects.filter(rack=instance).count()
+        copies_count = BookCopy.objects.filter(
+            Q(rack=instance) | Q(shelf__rack=instance)
+        ).count()
+
+        if shelves_count > 0 or books_count > 0 or copies_count > 0:
+            reasons = []
+            if shelves_count > 0:
+                reasons.append(f"{shelves_count} shelf/shelves")
+            if books_count > 0:
+                reasons.append(f"{books_count} book title(s)")
+            if copies_count > 0:
+                reasons.append(f"{copies_count} physical copy/copies")
+            reasons_str = ", ".join(reasons)
+            raise ValidationError({
+                "detail": f"Cannot delete Rack '{instance.rack_code}' ('{instance.rack_name}'): It currently houses {reasons_str}. Racks with existing data cannot be deleted. You can deactivate it instead."
+            })
+
+        instance.delete()
+
+    @action(detail=True, methods=["post", "patch"], url_path="toggle-active")
+    def toggle_active(self, request, pk=None):
+        instance = self.get_object()
+        instance.is_active = not instance.is_active
+        instance.save(update_fields=["is_active"])
+        # If deactivating rack, child shelves can also be deactivated; if activating, rack is restored
+        return Response({
+            "id": instance.id,
+            "rack_name": instance.rack_name,
+            "rack_code": instance.rack_code,
+            "is_active": instance.is_active,
+            "message": f"Rack '{instance.rack_name}' is now {'activated' if instance.is_active else 'deactivated'}."
+        }, status=status.HTTP_200_OK)
 
 
 class ShelfViewSet(ModelViewSet):
@@ -2481,7 +2607,17 @@ class ShelfViewSet(ModelViewSet):
         staff = Staff.objects.filter(user=self.request.user).first()
         if not staff:
             raise PermissionDenied("You are not registered as staff.")
-        return Shelf.objects.filter(school=staff.school, is_active=True)
+        qs = Shelf.objects.filter(school=staff.school)
+        rack_param = self.request.query_params.get("rack")
+        if rack_param:
+            qs = qs.filter(rack_id=rack_param)
+        active_param = self.request.query_params.get("is_active") or self.request.query_params.get("active")
+        if active_param is not None:
+            if active_param.lower() in ["true", "1"]:
+                qs = qs.filter(is_active=True)
+            elif active_param.lower() in ["false", "0"]:
+                qs = qs.filter(is_active=False)
+        return qs.order_by("shelf_code")
 
     def perform_create(self, serializer):
         staff = Staff.objects.filter(user=self.request.user).first()
@@ -2517,8 +2653,101 @@ class ShelfViewSet(ModelViewSet):
             })
 
     def perform_destroy(self, instance):
-        instance.is_active = False
-        instance.save()
+        # Shelf CANNOT be deleted if it has books or copies
+        books_count = Book.objects.filter(shelf=instance).count()
+        copies_count = BookCopy.objects.filter(shelf=instance).count()
+
+        if books_count > 0 or copies_count > 0:
+            raise ValidationError({
+                "detail": f"Cannot delete Shelf '{instance.shelf_code}' ('{instance.shelf_name}'): It currently holds {books_count} book title(s) and {copies_count} physical copy/copies. Shelves with existing data cannot be deleted. You can deactivate it instead."
+            })
+
+        instance.delete()
+
+    @action(detail=True, methods=["post", "patch"], url_path="toggle-active")
+    def toggle_active(self, request, pk=None):
+        instance = self.get_object()
+        instance.is_active = not instance.is_active
+        instance.save(update_fields=["is_active"])
+        return Response({
+            "id": instance.id,
+            "shelf_name": instance.shelf_name,
+            "shelf_code": instance.shelf_code,
+            "is_active": instance.is_active,
+            "message": f"Shelf '{instance.shelf_name}' is now {'activated' if instance.is_active else 'deactivated'}."
+        }, status=status.HTTP_200_OK)
+
+
+def create_unique_book_copy(
+    school,
+    book,
+    rack=None,
+    shelf=None,
+    purchase_price=None,
+    condition="GOOD",
+    status="AVAILABLE",
+    preferred_prefix=None
+):
+    """
+    Thread-safe and collision-free generator for physical BookCopy instances.
+    - Guarantees each copy receives a unique accession_no (SBIN) and unique barcode.
+    - Preserves existing naming convention (SBIN- or BC-) for the book or defaults to SBIN-.
+    - Validates against any pre-existing identifiers across the entire school tenant.
+    - Advances sequence until both accession_no and barcode are confirmed strictly unique.
+    """
+    import re
+
+    # 1. Inspect existing copies of this book to detect established prefix and highest sequence
+    existing_copies = list(BookCopy.objects.filter(school=school, book=book).values_list("accession_no", flat=True))
+
+    detected_prefix = None
+    max_seq = 0
+
+    for acc in existing_copies:
+        if not acc:
+            continue
+        acc_str = str(acc).strip()
+        if acc_str.upper().startswith("SBIN-") and not detected_prefix:
+            detected_prefix = "SBIN-"
+        elif acc_str.upper().startswith("BC-") and not detected_prefix:
+            detected_prefix = "BC-"
+
+        match = re.search(r'(\d+)$', acc_str)
+        if match:
+            num = int(match.group(1))
+            if num > max_seq:
+                max_seq = num
+
+    prefix = preferred_prefix or detected_prefix or "SBIN-"
+    clean_code_prefix = prefix.replace("-", "")
+
+    seq = max_seq + 1
+
+    # Guarantee uniqueness across the school for both accession_no and barcode
+    while True:
+        candidate_acc = f"{prefix}{book.id:04d}-{seq:03d}"
+        candidate_bc = f"{clean_code_prefix}{book.id:04d}{seq:03d}"
+
+        collision = BookCopy.objects.filter(school=school).filter(
+            Q(accession_no=candidate_acc) | Q(barcode=candidate_bc)
+        ).exists()
+
+        if not collision:
+            break
+        seq += 1
+
+    copy = BookCopy.objects.create(
+        school=school,
+        book=book,
+        accession_no=candidate_acc,
+        barcode=candidate_bc,
+        rack=rack or book.rack,
+        shelf=shelf or book.shelf,
+        status=status,
+        condition=condition,
+        purchase_price=purchase_price if purchase_price is not None else book.price
+    )
+    return copy
 
 
 class BookCopyViewSet(ModelViewSet):
@@ -2612,36 +2841,36 @@ class BookCopyViewSet(ModelViewSet):
             raise PermissionDenied("You are not registered as staff.")
         
         book_id = request.data.get("book_id")
-        count = int(request.data.get("count", 1))
+        try:
+            count = int(request.data.get("count", 1))
+        except (ValueError, TypeError):
+            count = 1
+        count = max(1, min(count, 500))
         rack_id = request.data.get("rack_id")
         shelf_id = request.data.get("shelf_id")
 
-        book = Book.objects.filter(id=book_id, school=staff.school).first()
-        if not book:
-            raise ValidationError("Book not found.")
+        with transaction.atomic():
+            book = Book.objects.select_for_update().filter(id=book_id, school=staff.school).first()
+            if not book:
+                raise ValidationError("Book not found.")
 
-        existing_count = BookCopy.objects.filter(school=staff.school, book=book).count()
-        created_copies = []
-        for i in range(1, count + 1):
-            copy_num = existing_count + i
-            accession_no = f"BC-{book.id:04d}-{copy_num:03d}"
-            barcode = f"{book.id:04d}{copy_num:03d}"
-            copy = BookCopy.objects.create(
-                school=staff.school,
-                book=book,
-                accession_no=accession_no,
-                barcode=barcode,
-                rack_id=rack_id,
-                shelf_id=shelf_id,
-                status="AVAILABLE",
-                condition="GOOD",
-                purchase_price=book.price
-            )
-            created_copies.append(copy)
+            rack = Rack.objects.filter(id=rack_id, school=staff.school).first() if rack_id else book.rack
+            shelf = Shelf.objects.filter(id=shelf_id, school=staff.school).first() if shelf_id else book.shelf
 
-        book.total_copies = book.copies.filter(is_active=True).count()
-        book.available_copies = book.copies.filter(is_active=True, status="AVAILABLE").count()
-        book.save()
+            created_copies = []
+            for _ in range(count):
+                copy = create_unique_book_copy(
+                    school=staff.school,
+                    book=book,
+                    rack=rack,
+                    shelf=shelf,
+                    purchase_price=book.price
+                )
+                created_copies.append(copy)
+
+            book.total_copies = book.copies.filter(is_active=True).count()
+            book.available_copies = book.copies.filter(is_active=True, status="AVAILABLE").count()
+            book.save(update_fields=["total_copies", "available_copies", "updated_at"])
 
         serializer = self.get_serializer(created_copies, many=True)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -2659,6 +2888,9 @@ class BookManageView(ModelViewSet):
         cat = self.request.query_params.get("category")
         if cat and cat.upper() != "ALL":
             qs = qs.filter(Q(category__iexact=cat) | Q(category_ref__name__iexact=cat))
+        auth = self.request.query_params.get("author")
+        if auth and auth.upper() != "ALL":
+            qs = qs.filter(Q(author__iexact=auth) | Q(author_ref__name__iexact=auth))
         book_id = self.request.query_params.get("book") or self.request.query_params.get("book_id")
         if book_id and str(book_id).upper() != "ALL":
             qs = qs.filter(id=book_id)
@@ -2672,65 +2904,149 @@ class BookManageView(ModelViewSet):
         if staff is None:
             raise PermissionDenied("You are not registered as staff for any school.")
 
-        title = serializer.validated_data.get("title")
-        author = serializer.validated_data.get("author")
+        title = (serializer.validated_data.get("title") or "").strip()
+        author = (serializer.validated_data.get("author") or "").strip()
+        category = (serializer.validated_data.get("category") or "").strip()
+        isbn = (serializer.validated_data.get("isbn") or "").strip()
         total_copies = serializer.validated_data.get("total_copies", 1)
 
-        book_already = Book.objects.filter(
-            school=staff.school, title=title, author=author
-        ).first()
+        with transaction.atomic():
+            if isbn:
+                clean_isbn = re.sub(r'[-\s]', '', isbn).lower()
+                existing_isbn_books = Book.objects.filter(school=staff.school).exclude(isbn__isnull=True).exclude(isbn="")
+                for eb in existing_isbn_books:
+                    eb_clean = re.sub(r'[-\s]', '', eb.isbn or '').lower()
+                    if eb_clean == clean_isbn or (eb.isbn or '').strip().lower() == isbn.lower():
+                        raise ValidationError(f"A book with ISBN '{isbn}' already exists: '{eb.title}' by '{eb.author}' (Book ID #{eb.pk}).")
 
-        if book_already is not None:
-            raise ValidationError(f"Book already exists, id = {book_already.pk}")
+            book_already = Book.objects.filter(
+                school=staff.school, title__iexact=title, author__iexact=author
+            ).first()
 
-        book = serializer.save(school=staff.school, available_copies=total_copies)
+            if book_already is not None:
+                raise ValidationError(f"Book '{title}' by '{author}' already exists in your library (Book ID #{book_already.pk}).")
 
-        # Auto-create physical BookCopy instances for individual barcode/accession tracking
-        for i in range(1, total_copies + 1):
-            accession_no = f"BC-{book.id:04d}-{i:03d}"
-            barcode = f"{book.id:04d}{i:03d}"
-            BookCopy.objects.create(
-                school=staff.school,
-                book=book,
-                accession_no=accession_no,
-                barcode=barcode,
-                rack=book.rack,
-                shelf=book.shelf,
-                status="AVAILABLE",
-                condition="GOOD",
-                purchase_price=book.price
-            )
+            book = serializer.save(school=staff.school, available_copies=total_copies)
+
+            # Ensure category master is created/active and linked
+            if category:
+                cat_obj = BookCategory.objects.filter(school=staff.school, name__iexact=category).first()
+                if not cat_obj:
+                    cat_obj = BookCategory.objects.create(
+                        school=staff.school,
+                        name=category.title(),
+                        is_active=True
+                    )
+                elif not cat_obj.is_active:
+                    cat_obj.is_active = True
+                    cat_obj.save(update_fields=["is_active"])
+                if not book.category_ref:
+                    book.category_ref = cat_obj
+                    book.save(update_fields=["category_ref"])
+
+            # Ensure author master is created/active and linked
+            if author:
+                auth_obj = Author.objects.filter(school=staff.school, name__iexact=author).first()
+                if not auth_obj:
+                    auth_obj = Author.objects.create(
+                        school=staff.school,
+                        name=author.title(),
+                        is_active=True
+                    )
+                elif not auth_obj.is_active:
+                    auth_obj.is_active = True
+                    auth_obj.save(update_fields=["is_active"])
+                if not book.author_ref:
+                    book.author_ref = auth_obj
+                    book.save(update_fields=["author_ref"])
+
+            # Auto-create physical BookCopy instances for individual barcode/accession tracking
+            for _ in range(total_copies):
+                create_unique_book_copy(
+                    school=staff.school,
+                    book=book,
+                    rack=book.rack,
+                    shelf=book.shelf,
+                    purchase_price=book.price,
+                    preferred_prefix="SBIN-"
+                )
 
     def perform_destroy(self, instance):
-        if instance.total_copies != instance.available_copies:
+        active_loans = BookIssued.objects.filter(book=instance, status="ISSUED").count()
+        if active_loans > 0:
             raise ValidationError(
-                "Can't delete: this book is currently issued to someone. "
-                "It must be returned first."
+                f"Cannot delete Book '{instance.title}': {active_loans} physical copy/copies are currently issued to students or staff. All copies must be returned before deleting this book."
             )
-        instance.copies.all().delete()
+        copies_count = instance.copies.count()
+        if copies_count > 0:
+            raise ValidationError(
+                f"Cannot delete Book '{instance.title}': It contains {copies_count} physical inventory copy/copies. A book with existing physical copies cannot be deleted. Please remove the physical copies in the Copies modal first."
+            )
         return super().perform_destroy(instance)
 
     def perform_update(self, serializer):
-        book = serializer.save()
-        # Keep copy count consistent if total copies increased
-        current_copies = book.copies.filter(is_active=True).count()
-        if book.total_copies > current_copies:
-            for i in range(current_copies + 1, book.total_copies + 1):
-                accession_no = f"BC-{book.id:04d}-{i:03d}"
-                barcode = f"{book.id:04d}{i:03d}"
-                BookCopy.objects.create(
-                    school=book.school,
-                    book=book,
-                    accession_no=accession_no,
-                    barcode=barcode,
-                    rack=book.rack,
-                    shelf=book.shelf,
-                    status="AVAILABLE",
-                    condition="GOOD",
-                    purchase_price=book.price
-                )
-        book.available_copies = book.copies.filter(is_active=True, status="AVAILABLE").count()
-        book.save()
+        staff = Staff.objects.filter(user=self.request.user).first()
+        isbn = (serializer.validated_data.get("isbn") or "").strip()
+        instance = serializer.instance
+        if isbn and staff:
+            clean_isbn = re.sub(r'[-\s]', '', isbn).lower()
+            existing_isbn_books = Book.objects.filter(school=staff.school).exclude(id=instance.id).exclude(isbn__isnull=True).exclude(isbn="")
+            for eb in existing_isbn_books:
+                eb_clean = re.sub(r'[-\s]', '', eb.isbn or '').lower()
+                if eb_clean == clean_isbn or (eb.isbn or '').strip().lower() == isbn.lower():
+                    raise ValidationError(f"A book with ISBN '{isbn}' already exists: '{eb.title}' by '{eb.author}' (Book ID #{eb.pk}).")
+
+        with transaction.atomic():
+            book = serializer.save()
+            book = Book.objects.select_for_update().get(id=book.id)
+
+            # Ensure category master is created/active and linked
+            cat_name = (book.category or "").strip()
+            if cat_name:
+                cat_obj = BookCategory.objects.filter(school=book.school, name__iexact=cat_name).first()
+                if not cat_obj:
+                    cat_obj = BookCategory.objects.create(
+                        school=book.school,
+                        name=cat_name.title(),
+                        is_active=True
+                    )
+                elif not cat_obj.is_active:
+                    cat_obj.is_active = True
+                    cat_obj.save(update_fields=["is_active"])
+                if not book.category_ref:
+                    book.category_ref = cat_obj
+                    book.save(update_fields=["category_ref"])
+
+            # Ensure author master is created/active and linked
+            auth_name = (book.author or "").strip()
+            if auth_name:
+                auth_obj = Author.objects.filter(school=book.school, name__iexact=auth_name).first()
+                if not auth_obj:
+                    auth_obj = Author.objects.create(
+                        school=book.school,
+                        name=auth_name.title(),
+                        is_active=True
+                    )
+                elif not auth_obj.is_active:
+                    auth_obj.is_active = True
+                    auth_obj.save(update_fields=["is_active"])
+                if not book.author_ref:
+                    book.author_ref = auth_obj
+                    book.save(update_fields=["author_ref"])
+
+            current_active = book.copies.filter(is_active=True).count()
+            if book.total_copies > current_active:
+                diff = book.total_copies - current_active
+                for _ in range(diff):
+                    create_unique_book_copy(
+                        school=book.school,
+                        book=book,
+                        rack=book.rack,
+                        shelf=book.shelf,
+                        purchase_price=book.price
+                    )
+            book.available_copies = book.copies.filter(is_active=True, status="AVAILABLE").count()
+            book.save(update_fields=["available_copies", "updated_at"])
 
 
 class LateBookFeesViews(ModelViewSet):
@@ -2763,14 +3079,39 @@ class BookIssuedView(ModelViewSet):
         staff = Staff.objects.filter(user=self.request.user).first()
         if staff is None:
             raise PermissionDenied("You are not registered as staff for any school.")
-        qs = BookIssued.objects.filter(school=staff.school).select_related("book", "student", "staff", "book_copy")
+        qs = BookIssued.objects.filter(school=staff.school).select_related("book", "student", "staff", "book_copy", "school")
         book_id = self.request.query_params.get("book") or self.request.query_params.get("book_id")
         if book_id and str(book_id).upper() != "ALL":
             qs = qs.filter(book_id=book_id)
         cat = self.request.query_params.get("category")
         if cat and cat.upper() != "ALL":
             qs = qs.filter(Q(book__category__iexact=cat) | Q(book__category_ref__name__iexact=cat))
-        return qs
+        return qs.order_by("-id")
+
+    @action(detail=False, methods=['get'], url_path='receipt')
+    def get_receipt(self, request):
+        staff = Staff.objects.filter(user=request.user).first()
+        if staff is None:
+            raise PermissionDenied("You are not registered as staff for any school.")
+        receipt_no = request.query_params.get("receipt_no")
+        issued_id = request.query_params.get("id")
+        qs = self.get_queryset()
+        record = None
+        if receipt_no:
+            record = qs.filter(payment_receipt_no=receipt_no).first()
+        elif issued_id:
+            record = qs.filter(pk=issued_id).first()
+        if not record:
+            raise NotFound("Receipt record not found for your school.")
+        serializer = self.get_serializer(record)
+        return Response({
+            "detail": "Receipt fetched successfully.",
+            "receipt_no": record.payment_receipt_no,
+            "amount_paid": str(record.fine_paid_amount),
+            "remaining_due": str(max(Decimal("0.00"), record.total_fine - record.fine_paid_amount)),
+            "is_fine_paid": record.is_fine_paid,
+            "record": serializer.data,
+        }, status=status.HTTP_200_OK)
 
     @action(detail=False, methods=['get'], url_path='staff-borrowers')
     def staff_borrowers(self, request):
@@ -3129,13 +3470,20 @@ class BookIssuedView(ModelViewSet):
             raise ValidationError(f"Amount ₹{amount} exceeds remaining fine due of ₹{remaining}.")
 
         method = request.data.get("payment_method", "Cash").strip()
+        if method.lower() == "cash":
+            clean_method = "Cash"
+        elif method.lower() in ["online", "upi", "card"]:
+            clean_method = "Online"
+        else:
+            clean_method = method.capitalize() if method else "Cash"
+
         now = timezone.now()
         receipt_no = f"LIB-RCP-{now.strftime('%Y%m%d')}-{issued.id:04d}"
 
         issued.fine_paid_amount += amount
         if issued.fine_paid_amount >= issued.total_fine:
             issued.is_fine_paid = True
-        issued.payment_method = method
+        issued.payment_method = clean_method
         issued.payment_date = now
         issued.payment_receipt_no = receipt_no
         issued.save()
@@ -3370,10 +3718,18 @@ def _finalize_return(issued: BookIssued, condition="GOOD", remarks="", custom_da
         issued.is_fine_paid = True
         issued.fine_paid_amount = Decimal("0.00")
     else:
+        clean_method = (payment_method or "Cash").strip()
+        if clean_method.lower() in ["cash"]:
+            clean_method = "Cash"
+        elif clean_method.lower() in ["online", "upi", "card", "netbanking"]:
+            clean_method = "Online"
+        else:
+            clean_method = clean_method.capitalize() if clean_method else "Cash"
+
+        issued.payment_method = clean_method
         if pay_now:
             issued.is_fine_paid = True
             issued.fine_paid_amount = issued.total_fine
-            issued.payment_method = payment_method or "Cash"
             issued.payment_date = now
             issued.payment_receipt_no = f"LIB-RCP-{now.strftime('%Y%m%d')}-{issued.id:04d}"
         else:
