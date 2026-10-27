@@ -15,6 +15,7 @@ from .models import (School, Staff, Department, AcademicYear, Attendance, Assign
                      LeaveRequest, LeavePerDay, LeaveBalance, PayrollPayslip, StaffSalaryPayment)
 from .trustee_inventory_report import IsTrustee, money
 from .trustee_staff_access import can_view_salary, can_view_contacts
+from .utils import format_report_timestamp
 
 
 STATUSES = ['PRESENT', 'ABSENT', 'LATE', 'HALF_DAY', 'LEAVE', 'HOLIDAY', 'WEEK_OFF', 'MISSING_PUNCH']
@@ -289,7 +290,7 @@ class TrusteeStaffReport(APIView):
             'Service duration uses joining date through today or exit date. It is tenure, not prior teaching experience. Profile completion measures name, department, designation, category and joining date only; it does not certify document compliance.',
             'Subject distribution counts distinct assigned staff per subject; one teacher can appear in multiple subjects. Teaching uses the explicit TEACHER category; OTHER/blank is unclassified. Gender and qualification cannot be inferred.',
         ]
-        return Response({'school': school.name, 'generated_at': timezone.now(), 'from_date': start, 'to_date': end,
+        return Response({'school': school.name, 'generated_at': format_report_timestamp(timezone.now()), 'from_date': start, 'to_date': end,
             'permissions': {'salary': salary_allowed, 'contacts': contacts_allowed}, 'unavailable': UNAVAILABLE, 'summary': summary,
             'staff': {'count': count, 'page': p['page'], 'page_size': p['page_size'], 'results': rows if p['export_all'] else rows[offset:offset + p['page_size']]},
             'distribution': {'department': distribution(rows, 'department'), 'designation': distribution(rows, 'designation'), 'category': distribution(rows, 'category'), 'teaching': distribution(rows, 'teaching_group'), 'subjects': [{'label': name, 'count': len(teacher_ids)} for name, teacher_ids in sorted(subjects.items())]},

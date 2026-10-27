@@ -20,7 +20,7 @@ from decimal import Decimal
 import re
 from django.core.cache import cache
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Q, Sum
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.decorators import api_view, permission_classes, action
 from sms_app.finance_serializers import (
@@ -397,24 +397,34 @@ class RazorpayWebhookView(APIView):
 class FeeTypeViewSet(ModelViewSet):
     queryset = FeeType.objects.all()
     serializer_class = FeeTypeSerializer
-    permission_classes = [IsAuthenticated, IsFeeManager | IsClerkOrPrincipal]
+    permission_classes = [IsAuthenticated, IsFeeTypePermission]
 
     def get_queryset(self):
         user = self.request.user
         school = getattr(user, "school", None)
         if not school:
-            staff = getattr(user, "staff", None)
+            staff = getattr(user, "staff", None) or getattr(user, "staff_profile", None)
             if staff and staff.school:
                 school = staff.school
-        return FeeType.objects.filter(school=school)
+        if not school:
+            from .inventory_views import resolve_school_from_request
+            school = resolve_school_from_request(self.request)
+        if school:
+            return FeeType.objects.filter(school=school)
+        if getattr(user, "is_superuser", False) or getattr(user, "is_staff", False):
+            return FeeType.objects.all()
+        return FeeType.objects.none()
 
     def perform_create(self, serializer):
         user = self.request.user
         school = getattr(user, "school", None)
         if not school:
-            staff = getattr(user, "staff", None)
+            staff = getattr(user, "staff", None) or getattr(user, "staff_profile", None)
             if staff and staff.school:
                 school = staff.school
+        if not school:
+            from .inventory_views import resolve_school_from_request
+            school = resolve_school_from_request(self.request)
         serializer.save(school=school)
 
 
@@ -951,6 +961,14 @@ class BulkCollectStudentFeePaymentView(APIView):
         payment_date = request.data.get("payment_date") or timezone.now()
         transaction_id = request.data.get("transaction_id", "")
         note = request.data.get("note", "")
+        payment_details = request.data.get("payment_details")
+        if isinstance(payment_details, str):
+            try:
+                payment_details = json.loads(payment_details)
+            except Exception:
+                pass
+        if not isinstance(payment_details, dict):
+            payment_details = {}
 
         # Generate a single unified receipt number for all items in this transaction
         current_year = timezone.now().year
@@ -1054,6 +1072,7 @@ class BulkCollectStudentFeePaymentView(APIView):
                 transaction_id=transaction_id or None,
                 receipt_number=shared_receipt_number,
                 payment_date=payment_date,
+                payment_details=payment_details,
                 note=note or (f"Fee collection for {fee_obj.feetype.name} ({fee_obj.billing_period})" if fee_obj.feetype else ""),
                 collected_by=user if user.is_authenticated else None,
                 is_verified=payment_mode != "cheque",
@@ -1597,6 +1616,874 @@ class RTESummaryView(APIView):
             "class_quota": class_quota,
             "students": students_list,
         })
+
+
+class DailyCashAuditView(APIView):
+    """
+    GET /api/fees/daily-cash-audit/?date=YYYY-MM-DD
+    Aggregates cash collections, change returned, net cash, and note/coin denomination breakdowns.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        school = getattr(user, "school", None)
+        if not school:
+            staff = getattr(user, "staff", None)
+            if staff and staff.school:
+                school = staff.school
+
+        date_str = request.query_params.get("date")
+        if date_str:
+            try:
+                target_date = datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
+            except ValueError:
+                target_date = timezone.localdate()
+        else:
+            target_date = timezone.localdate()
+
+        # Query successful Cash fee payments for the date
+        payments_qs = StudentFeePayment.objects.filter(
+            payment_mode__iexact="cash",
+            is_bounced=False
+        ).filter(
+            Q(payment_date__date=target_date) | (Q(payment_date__isnull=True) & Q(created_at__date=target_date))
+        )
+        if school:
+            payments_qs = payments_qs.filter(school=school)
+
+        payments = payments_qs.select_related(
+            "student",
+            "student__school_class",
+            "feetype",
+            "collected_by"
+        ).order_by("-id")
+
+        note_denominations = [500, 200, 100, 50, 20, 10]
+        coin_denominations = [20, 10, 5, 2, 1]
+
+        notes_counts = {denom: 0 for denom in note_denominations}
+        coins_counts = {denom: 0 for denom in coin_denominations}
+
+        total_gross_cash = Decimal("0.00")
+        total_change_returned = Decimal("0.00")
+        total_net_cash = Decimal("0.00")
+        transaction_items = []
+
+        for p in payments:
+            net_amt = p.amount or Decimal("0.00")
+            total_net_cash += net_amt
+
+            details = p.payment_details
+            if isinstance(details, str):
+                try:
+                    details = json.loads(details)
+                except Exception:
+                    details = {}
+            elif not isinstance(details, dict):
+                details = {}
+
+            # Determine return change & total received
+            p_change = Decimal("0.00")
+            p_received = None
+
+            if details:
+                ret_val = (
+                    details.get("return_change")
+                    or details.get("change_to_return")
+                    or details.get("changeToReturn")
+                )
+                if ret_val is not None:
+                    try:
+                        p_change = Decimal(str(ret_val))
+                    except Exception:
+                        p_change = Decimal("0.00")
+
+                rec_val = details.get("total_received") or details.get("totalReceived")
+                if rec_val is not None:
+                    try:
+                        p_received = Decimal(str(rec_val))
+                    except Exception:
+                        p_received = None
+
+            # Fallback note parsing if missing in details
+            note_text = p.note or ""
+            if p_received is None or p_change == Decimal("0.00"):
+                m_ret = re.search(
+                    r'Change Ret(?:urned)?:\s*[₹Rs.]*\s*([0-9.]+)',
+                    note_text,
+                    re.IGNORECASE
+                )
+                if m_ret and p_change == Decimal("0.00"):
+                    try:
+                        p_change = Decimal(m_ret.group(1))
+                    except Exception:
+                        pass
+
+                m_rec = re.search(
+                    r'Cash Recd:\s*[₹Rs.]*\s*([0-9.]+)',
+                    note_text,
+                    re.IGNORECASE
+                )
+                if m_rec and p_received is None:
+                    try:
+                        p_received = Decimal(m_rec.group(1))
+                    except Exception:
+                        pass
+
+            if p_received is None:
+                p_received = net_amt + p_change
+
+            total_gross_cash += p_received
+            total_change_returned += p_change
+
+            # Denominations count
+            breakdown_parts = []
+            if details:
+                notes_dict = details.get("notes") if isinstance(details.get("notes"), dict) else {}
+                coins_dict = details.get("coins") if isinstance(details.get("coins"), dict) else {}
+
+                for note in note_denominations:
+                    c = (
+                        details.get(str(note))
+                        or notes_dict.get(str(note))
+                        or notes_dict.get(note)
+                        or 0
+                    )
+                    try:
+                        c_int = int(c)
+                    except Exception:
+                        c_int = 0
+                    if c_int > 0:
+                        notes_counts[note] += c_int
+                        breakdown_parts.append(f"₹{note}x{c_int}")
+
+                for coin in coin_denominations:
+                    c = (
+                        details.get(f"coin_{coin}")
+                        or coins_dict.get(str(coin))
+                        or coins_dict.get(coin)
+                        or (details.get(str(coin)) if coin <= 5 else 0)
+                        or 0
+                    )
+                    try:
+                        c_int = int(c)
+                    except Exception:
+                        c_int = 0
+                    if c_int > 0:
+                        coins_counts[coin] += c_int
+                        breakdown_parts.append(f"₹{coin}x{c_int}")
+
+            # Student info
+            st = p.student
+            st_name = f"{st.name or ''} {st.surname or ''}".strip() if st else "N/A"
+            st_adm = (
+                getattr(st, "admission_number", "")
+                or (f"GR-{st.gr_no}" if st and st.gr_no else "")
+            )
+            c_name = "N/A"
+            if st and getattr(st, "school_class", None):
+                sc = st.school_class
+                c_name = (
+                    getattr(getattr(sc, "category", None), "class_name", None)
+                    or getattr(sc, "name", "N/A")
+                )
+
+            collected_by_name = (
+                p.collected_by.get_full_name() or p.collected_by.username
+                if p.collected_by
+                else "Counter Cashier"
+            )
+
+            breakdown_str = ", ".join(breakdown_parts) if breakdown_parts else "-"
+            if breakdown_parts and p_received:
+                breakdown_str += f" (Recd: ₹{p_received} | Ret: ₹{p_change})"
+
+            transaction_items.append({
+                "id": p.id,
+                "receipt_number": p.receipt_number or f"REC-{p.id}",
+                "payment_date": (
+                    p.payment_date.isoformat()
+                    if p.payment_date
+                    else (p.created_at.isoformat() if p.created_at else None)
+                ),
+                "student_id": st.id if st else None,
+                "student_name": st_name,
+                "student_admission_number": st_adm,
+                "class_name": c_name,
+                "feetype_name": p.feetype.name if p.feetype else "Fee",
+                "net_amount": float(net_amt),
+                "total_received": float(p_received),
+                "return_change": float(p_change),
+                "collected_by_name": collected_by_name,
+                "breakdown_text": breakdown_str,
+                "note": note_text,
+                "payment_details": details,
+            })
+
+        notes_list = []
+        notes_subtotal = Decimal("0.00")
+        for denom in note_denominations:
+            cnt = notes_counts[denom]
+            val = Decimal(denom * cnt)
+            notes_subtotal += val
+            notes_list.append({
+                "denomination": denom,
+                "label": f"₹{denom} Note",
+                "type": "note",
+                "count": cnt,
+                "total_value": float(val),
+            })
+
+        coins_list = []
+        coins_subtotal = Decimal("0.00")
+        for denom in coin_denominations:
+            cnt = coins_counts[denom]
+            val = Decimal(denom * cnt)
+            coins_subtotal += val
+            coins_list.append({
+                "denomination": denom,
+                "label": f"₹{denom} Coin",
+                "type": "coin",
+                "count": cnt,
+                "total_value": float(val),
+            })
+
+        # Query CashTransaction for daily transactions (Expenses, Bank Deposits, Misc Income)
+        cash_txs_qs = CashTransaction.objects.filter(date=target_date)
+        if school:
+            cash_txs_qs = cash_txs_qs.filter(school=school)
+        cash_txs = cash_txs_qs.select_related("recorded_by").order_by("-id")
+
+        total_expenses = Decimal("0.00")
+        total_bank_deposits = Decimal("0.00")
+        total_misc_income = Decimal("0.00")
+        outflow_items = []
+
+        for ctx in cash_txs:
+            amt = ctx.amount or Decimal("0.00")
+            if ctx.type == "EXPENSE":
+                total_expenses += amt
+                type_lbl = "Daily Expense"
+            elif ctx.type == "BANK_DEPOSIT":
+                total_bank_deposits += amt
+                type_lbl = "Bank Deposit"
+            elif ctx.type == "MISC_INCOME":
+                total_misc_income += amt
+                type_lbl = "Misc Income"
+            else:
+                type_lbl = ctx.type
+
+            recorder_name = (
+                ctx.recorded_by.get_full_name() or ctx.recorded_by.username
+                if ctx.recorded_by else "Staff"
+            )
+            outflow_items.append({
+                "id": ctx.id,
+                "type": ctx.type,
+                "type_label": type_lbl,
+                "amount": float(amt),
+                "category": ctx.category or ("Bank Deposit" if ctx.type == "BANK_DEPOSIT" else "General"),
+                "bank_name": ctx.bank_name or "",
+                "reference_number": ctx.reference_number or "",
+                "date": ctx.date.isoformat(),
+                "notes": ctx.notes or "",
+                "recorded_by_name": recorder_name,
+                "created_at": ctx.created_at.isoformat() if ctx.created_at else None,
+            })
+
+        # Calculate opening balance: Sum of all historical cash inflows minus outflows strictly before target_date
+        hist_payments_qs = StudentFeePayment.objects.filter(
+            payment_mode__iexact="cash",
+            is_bounced=False
+        ).filter(
+            Q(payment_date__date__lt=target_date) | (Q(payment_date__isnull=True) & Q(created_at__date__lt=target_date))
+        )
+        if school:
+            hist_payments_qs = hist_payments_qs.filter(school=school)
+        hist_fee_net = hist_payments_qs.aggregate(total=Sum("amount"))["total"] or Decimal("0.00")
+
+        hist_cash_txs_qs = CashTransaction.objects.filter(date__lt=target_date)
+        if school:
+            hist_cash_txs_qs = hist_cash_txs_qs.filter(school=school)
+
+        hist_misc_income = hist_cash_txs_qs.filter(type="MISC_INCOME").aggregate(total=Sum("amount"))["total"] or Decimal("0.00")
+        hist_expenses = hist_cash_txs_qs.filter(type="EXPENSE").aggregate(total=Sum("amount"))["total"] or Decimal("0.00")
+        hist_bank_deposits = hist_cash_txs_qs.filter(type="BANK_DEPOSIT").aggregate(total=Sum("amount"))["total"] or Decimal("0.00")
+
+        opening_balance = (hist_fee_net + hist_misc_income) - (hist_expenses + hist_bank_deposits)
+
+        net_fee_cash = total_net_cash
+        net_cash_in_drawer = opening_balance + net_fee_cash + total_misc_income - total_expenses - total_bank_deposits
+
+        return Response({
+            "date": target_date.isoformat(),
+            "school_name": getattr(school, "name", "School") if school else "School",
+            "summary": {
+                "opening_balance": float(opening_balance),
+                "gross_cash_collected": float(total_gross_cash),
+                "total_change_returned": float(total_change_returned),
+                "net_fee_cash_collected": float(net_fee_cash),
+                "total_misc_income": float(total_misc_income),
+                "total_expenses": float(total_expenses),
+                "total_bank_deposits": float(total_bank_deposits),
+                "net_cash_in_drawer": float(net_cash_in_drawer),
+                "total_transactions": len(payments),
+                "total_outflows_count": len([x for x in cash_txs if x.type in ("EXPENSE", "BANK_DEPOSIT")]),
+                "total_adjustments_count": len(cash_txs),
+            },
+            "denominations": {
+                "notes": notes_list,
+                "coins": coins_list,
+                "notes_total_value": float(notes_subtotal),
+                "coins_total_value": float(coins_subtotal),
+                "total_denomination_value": float(notes_subtotal + coins_subtotal),
+            },
+            "transactions": transaction_items,
+            "outflows": outflow_items,
+        })
+
+
+def get_available_drawer_cash(school, target_date):
+    """Calculates available net cash in drawer for a given date including opening balance."""
+    # Historical cash fee payments strictly before target_date
+    hist_payments_qs = StudentFeePayment.objects.filter(
+        payment_mode__iexact="cash",
+        is_bounced=False
+    ).filter(
+        Q(payment_date__date__lt=target_date) | (Q(payment_date__isnull=True) & Q(created_at__date__lt=target_date))
+    )
+    if school:
+        hist_payments_qs = hist_payments_qs.filter(school=school)
+    hist_fee_net = hist_payments_qs.aggregate(total=Sum("amount"))["total"] or Decimal("0.00")
+
+    # Historical cash transactions strictly before target_date
+    hist_cash_txs_qs = CashTransaction.objects.filter(date__lt=target_date)
+    if school:
+        hist_cash_txs_qs = hist_cash_txs_qs.filter(school=school)
+
+    hist_misc_income = hist_cash_txs_qs.filter(type="MISC_INCOME").aggregate(total=Sum("amount"))["total"] or Decimal("0.00")
+    hist_expenses = hist_cash_txs_qs.filter(type="EXPENSE").aggregate(total=Sum("amount"))["total"] or Decimal("0.00")
+    hist_bank_deposits = hist_cash_txs_qs.filter(type="BANK_DEPOSIT").aggregate(total=Sum("amount"))["total"] or Decimal("0.00")
+
+    opening_balance = (hist_fee_net + hist_misc_income) - (hist_expenses + hist_bank_deposits)
+
+    # Today's cash fee payments
+    payments_qs = StudentFeePayment.objects.filter(
+        payment_mode__iexact="cash",
+        is_bounced=False
+    ).filter(
+        Q(payment_date__date=target_date) | (Q(payment_date__isnull=True) & Q(created_at__date=target_date))
+    )
+    if school:
+        payments_qs = payments_qs.filter(school=school)
+
+    fee_net = payments_qs.aggregate(total=Sum("amount"))["total"] or Decimal("0.00")
+
+    # Today's cash transactions
+    cash_txs_qs = CashTransaction.objects.filter(date=target_date)
+    if school:
+        cash_txs_qs = cash_txs_qs.filter(school=school)
+
+    expenses = Decimal("0.00")
+    deposits = Decimal("0.00")
+    misc_income = Decimal("0.00")
+
+    for tx in cash_txs_qs:
+        amt = tx.amount or Decimal("0.00")
+        if tx.type == "EXPENSE":
+            expenses += amt
+        elif tx.type == "BANK_DEPOSIT":
+            deposits += amt
+        elif tx.type == "MISC_INCOME":
+            misc_income += amt
+
+    return opening_balance + fee_net + misc_income - expenses - deposits
+
+
+class AddDailyExpenseView(APIView):
+    """
+    POST /api/finance/add-expense/
+    Payload: { amount: 250, category: "Stationery", notes: "Bought markers & paper", date: "2026-10-22" }
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        user = request.user
+        school = getattr(user, "school", None)
+        if not school:
+            staff = getattr(user, "staff", None)
+            if staff and staff.school:
+                school = staff.school
+
+        amount_val = request.data.get("amount")
+        if not amount_val:
+            return Response(
+                {"error": "Amount is required and must be greater than 0."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        try:
+            amount = Decimal(str(amount_val))
+            if amount <= Decimal("0.00"):
+                raise ValueError()
+        except Exception:
+            return Response(
+                {"error": "Invalid amount provided."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        category = request.data.get("category", "General Expense")
+        notes = request.data.get("notes", "")
+        if "other" in category.lower() and not str(notes).strip():
+            return Response(
+                {"error": "Notes / Description is required when category is Other / Miscellaneous."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        date_str = request.data.get("date")
+        if date_str:
+            try:
+                tx_date = datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
+            except ValueError:
+                tx_date = timezone.localdate()
+        else:
+            tx_date = timezone.localdate()
+
+        # Strict drawer limit validation
+        available_cash = get_available_drawer_cash(school, tx_date)
+        if amount > available_cash:
+            return Response(
+                {"error": f"Amount exceeds available drawer balance (₹{max(Decimal('0.00'), available_cash):.2f})."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        tx = CashTransaction.objects.create(
+            school=school,
+            type="EXPENSE",
+            amount=amount,
+            category=category,
+            notes=notes,
+            date=tx_date,
+            recorded_by=user
+        )
+
+        return Response({
+            "success": True,
+            "message": f"Recorded expense of ₹{amount} under {category}",
+            "transaction": {
+                "id": tx.id,
+                "type": tx.type,
+                "amount": float(tx.amount),
+                "category": tx.category,
+                "notes": tx.notes,
+                "date": tx.date.isoformat(),
+                "created_at": tx.created_at.isoformat(),
+                "recorded_by_name": user.get_full_name() or user.username
+            }
+        }, status=status.HTTP_201_CREATED)
+
+
+class BankDepositView(APIView):
+    """
+    POST /api/finance/bank-deposit/
+    Payload: { amount: 5000, bank_name: "State Bank of India", reference_number: "DEP-9812", notes: "Closing cash deposit", date: "2026-10-22" }
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        user = request.user
+        school = getattr(user, "school", None)
+        if not school:
+            staff = getattr(user, "staff", None)
+            if staff and staff.school:
+                school = staff.school
+
+        amount_val = request.data.get("amount")
+        if not amount_val:
+            return Response(
+                {"error": "Amount is required and must be greater than 0."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        try:
+            amount = Decimal(str(amount_val))
+            if amount <= Decimal("0.00"):
+                raise ValueError()
+        except Exception:
+            return Response(
+                {"error": "Invalid amount provided."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        bank_name = request.data.get("bank_name", "School Bank Account")
+        reference_number = request.data.get("reference_number", "")
+        notes = request.data.get("notes", "")
+        date_str = request.data.get("date")
+        if date_str:
+            try:
+                tx_date = datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
+            except ValueError:
+                tx_date = timezone.localdate()
+        else:
+            tx_date = timezone.localdate()
+
+        # Strict drawer limit validation
+        available_cash = get_available_drawer_cash(school, tx_date)
+        if amount > available_cash:
+            return Response(
+                {"error": f"Amount exceeds available drawer balance (₹{max(Decimal('0.00'), available_cash):.2f})."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        tx = CashTransaction.objects.create(
+            school=school,
+            type="BANK_DEPOSIT",
+            amount=amount,
+            bank_name=bank_name,
+            reference_number=reference_number,
+            notes=notes,
+            date=tx_date,
+            recorded_by=user
+        )
+
+        return Response({
+            "success": True,
+            "message": f"Recorded bank deposit of ₹{amount} to {bank_name}",
+            "transaction": {
+                "id": tx.id,
+                "type": tx.type,
+                "amount": float(tx.amount),
+                "bank_name": tx.bank_name,
+                "reference_number": tx.reference_number,
+                "notes": tx.notes,
+                "date": tx.date.isoformat(),
+                "created_at": tx.created_at.isoformat(),
+                "recorded_by_name": user.get_full_name() or user.username
+            }
+        }, status=status.HTTP_201_CREATED)
+
+
+class AddMiscIncomeView(APIView):
+    """
+    POST /api/finance/add-income/
+    Payload: { amount: 1200, category: "Scrap Sale", notes: "Old lab equipment scrap", date: "2026-10-22" }
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        user = request.user
+        school = getattr(user, "school", None)
+        if not school:
+            staff = getattr(user, "staff", None)
+            if staff and staff.school:
+                school = staff.school
+
+        amount_val = request.data.get("amount")
+        if not amount_val:
+            return Response(
+                {"error": "Amount is required and must be greater than 0."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        try:
+            amount = Decimal(str(amount_val))
+            if amount <= Decimal("0.00"):
+                raise ValueError()
+        except Exception:
+            return Response(
+                {"error": "Invalid amount provided."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        category = request.data.get("category", "Miscellaneous Income")
+        notes = request.data.get("notes", "")
+        date_str = request.data.get("date")
+        if date_str:
+            try:
+                tx_date = datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
+            except ValueError:
+                tx_date = timezone.localdate()
+        else:
+            tx_date = timezone.localdate()
+
+        tx = CashTransaction.objects.create(
+            school=school,
+            type="MISC_INCOME",
+            amount=amount,
+            category=category,
+            notes=notes,
+            date=tx_date,
+            recorded_by=user
+        )
+
+        return Response({
+            "success": True,
+            "message": f"Recorded miscellaneous income of ₹{amount} from {category}",
+            "transaction": {
+                "id": tx.id,
+                "type": tx.type,
+                "amount": float(tx.amount),
+                "category": tx.category,
+                "notes": tx.notes,
+                "date": tx.date.isoformat(),
+                "created_at": tx.created_at.isoformat(),
+                "recorded_by_name": user.get_full_name() or user.username
+            }
+        }, status=status.HTTP_201_CREATED)
+
+
+class AccountLedgerView(APIView):
+    """
+    GET /api/finance/account-ledger/?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD&type=all&order=desc
+    Returns unified cash transactions (Fee Receipts, Expenses, Bank Deposits, Misc Income)
+    within the specified date range, with opening balance and running balance.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        school = getattr(user, "school", None)
+        if not school:
+            staff = getattr(user, "staff", None)
+            if staff and staff.school:
+                school = staff.school
+
+        today = timezone.localdate()
+        first_day_of_month = today.replace(day=1)
+
+        start_date_str = request.query_params.get("start_date")
+        end_date_str = request.query_params.get("end_date")
+
+        if start_date_str:
+            try:
+                start_date = datetime.datetime.strptime(start_date_str, "%Y-%m-%d").date()
+            except ValueError:
+                start_date = first_day_of_month
+        else:
+            start_date = first_day_of_month
+
+        if end_date_str:
+            try:
+                end_date = datetime.datetime.strptime(end_date_str, "%Y-%m-%d").date()
+            except ValueError:
+                end_date = today
+        else:
+            end_date = today
+
+        if start_date > end_date:
+            start_date, end_date = end_date, start_date
+
+        # Calculate opening balance: Sum of all historical cash inflows minus outflows strictly before start_date
+        hist_payments_qs = StudentFeePayment.objects.filter(
+            payment_mode__iexact="cash",
+            is_bounced=False
+        ).filter(
+            Q(payment_date__date__lt=start_date) | (Q(payment_date__isnull=True) & Q(created_at__date__lt=start_date))
+        )
+        if school:
+            hist_payments_qs = hist_payments_qs.filter(school=school)
+        hist_fee_net = hist_payments_qs.aggregate(total=Sum("amount"))["total"] or Decimal("0.00")
+
+        hist_cash_txs_qs = CashTransaction.objects.filter(date__lt=start_date)
+        if school:
+            hist_cash_txs_qs = hist_cash_txs_qs.filter(school=school)
+
+        hist_misc_income = hist_cash_txs_qs.filter(type="MISC_INCOME").aggregate(total=Sum("amount"))["total"] or Decimal("0.00")
+        hist_expenses = hist_cash_txs_qs.filter(type="EXPENSE").aggregate(total=Sum("amount"))["total"] or Decimal("0.00")
+        hist_bank_deposits = hist_cash_txs_qs.filter(type="BANK_DEPOSIT").aggregate(total=Sum("amount"))["total"] or Decimal("0.00")
+
+        opening_balance = (hist_fee_net + hist_misc_income) - (hist_expenses + hist_bank_deposits)
+
+        # 1. Fetch cash fee payments in date range
+        payments_qs = StudentFeePayment.objects.filter(
+            payment_mode__iexact="cash",
+            is_bounced=False
+        ).filter(
+            Q(payment_date__date__range=(start_date, end_date))
+            | (Q(payment_date__isnull=True) & Q(created_at__date__range=(start_date, end_date)))
+        )
+        if school:
+            payments_qs = payments_qs.filter(school=school)
+
+        payments = payments_qs.select_related(
+            "student",
+            "student__school_class",
+            "feetype",
+            "collected_by"
+        ).order_by("payment_date", "created_at", "id")
+
+        items = []
+
+        for p in payments:
+            st = p.student
+            st_name = f"{st.name or ''} {st.surname or ''}".strip() if st else "N/A"
+            st_adm = getattr(st, "admission_number", "") or (f"GR-{st.gr_no}" if st and st.gr_no else "")
+            c_name = ""
+            if st and getattr(st, "school_class", None):
+                sc = st.school_class
+                c_name = getattr(getattr(sc, "category", None), "class_name", None) or getattr(sc, "name", "")
+
+            tx_dt = p.payment_date or p.created_at
+            tx_date_str = tx_dt.strftime("%Y-%m-%d") if tx_dt else str(start_date)
+            tx_time_str = tx_dt.strftime("%I:%M %p") if tx_dt else ""
+            collected_by = (
+                p.collected_by.get_full_name() or p.collected_by.username
+                if p.collected_by else "Counter Cashier"
+            )
+            feetype_name = p.feetype.name if p.feetype else "Fee"
+
+            particulars_parts = [f"Student: {st_name}"]
+            if c_name:
+                particulars_parts.append(f"Class: {c_name}")
+            if feetype_name:
+                particulars_parts.append(f"Fee: {feetype_name}")
+            if st_adm:
+                particulars_parts.append(f"Adm #{st_adm}")
+
+            particulars_desc = " | ".join(particulars_parts)
+            amt = float(p.amount or Decimal("0.00"))
+
+            items.append({
+                "id": f"FEE-{p.id}",
+                "raw_id": p.id,
+                "date": tx_date_str,
+                "time": tx_time_str,
+                "timestamp": tx_dt.isoformat() if tx_dt else f"{tx_date_str}T00:00:00",
+                "transaction_type": "FEE_RECEIPT",
+                "type_label": "Fee Receipt",
+                "reference_no": p.receipt_number or f"REC-{p.id}",
+                "particulars": particulars_desc,
+                "student_name": st_name,
+                "class_name": c_name,
+                "category": feetype_name,
+                "source": st_name,
+                "inflow": amt,
+                "outflow": 0.0,
+                "payment_mode": "Cash",
+                "recorded_by_name": collected_by,
+                "notes": p.note or "",
+            })
+
+        # 2. Fetch CashTransactions (Expenses, Bank Deposits, Misc Incomes)
+        cash_txs_qs = CashTransaction.objects.filter(
+            date__range=(start_date, end_date)
+        )
+        if school:
+            cash_txs_qs = cash_txs_qs.filter(school=school)
+
+        cash_txs = cash_txs_qs.select_related("recorded_by").order_by("date", "id")
+
+        for ctx in cash_txs:
+            tx_amt = float(ctx.amount or Decimal("0.00"))
+            tx_dt = ctx.created_at
+            tx_date_str = ctx.date.strftime("%Y-%m-%d")
+            tx_time_str = tx_dt.strftime("%I:%M %p") if tx_dt else ""
+            recorder_name = (
+                ctx.recorded_by.get_full_name() or ctx.recorded_by.username
+                if ctx.recorded_by else "Staff"
+            )
+
+            if ctx.type == "EXPENSE":
+                t_type = "EXPENSE"
+                t_label = "Expense"
+                inflow_val = 0.0
+                outflow_val = tx_amt
+                cat = ctx.category or "General Expense"
+                particulars_desc = f"{cat}{f': {ctx.notes}' if ctx.notes else ''}"
+                ref = ctx.reference_number or f"EXP-{ctx.id}"
+                source_val = cat
+            elif ctx.type == "BANK_DEPOSIT":
+                t_type = "BANK_DEPOSIT"
+                t_label = "Bank Deposit"
+                inflow_val = 0.0
+                outflow_val = tx_amt
+                bank = ctx.bank_name or "Bank Account"
+                particulars_desc = f"Deposited to {bank}{f' (Ref: {ctx.reference_number})' if ctx.reference_number else ''}{f': {ctx.notes}' if ctx.notes else ''}"
+                ref = ctx.reference_number or f"DEP-{ctx.id}"
+                source_val = bank
+            elif ctx.type == "MISC_INCOME":
+                t_type = "MISC_INCOME"
+                t_label = "Misc Income"
+                inflow_val = tx_amt
+                outflow_val = 0.0
+                cat = ctx.category or "Miscellaneous"
+                particulars_desc = f"{cat}{f': {ctx.notes}' if ctx.notes else ''}"
+                ref = ctx.reference_number or f"INC-{ctx.id}"
+                source_val = cat
+            else:
+                t_type = ctx.type
+                t_label = ctx.type
+                inflow_val = 0.0
+                outflow_val = tx_amt
+                particulars_desc = ctx.notes or ctx.category or "Transaction"
+                ref = ctx.reference_number or f"TX-{ctx.id}"
+                source_val = ctx.category or "Drawer"
+
+            items.append({
+                "id": f"{ctx.type}-{ctx.id}",
+                "raw_id": ctx.id,
+                "date": tx_date_str,
+                "time": tx_time_str,
+                "timestamp": tx_dt.isoformat() if tx_dt else f"{tx_date_str}T00:00:00",
+                "transaction_type": t_type,
+                "type_label": t_label,
+                "reference_no": ref,
+                "particulars": particulars_desc,
+                "student_name": "",
+                "class_name": "",
+                "category": ctx.category or ("Bank Deposit" if ctx.type == "BANK_DEPOSIT" else "General"),
+                "source": source_val,
+                "inflow": inflow_val,
+                "outflow": outflow_val,
+                "payment_mode": "Cash",
+                "recorded_by_name": recorder_name,
+                "notes": ctx.notes or "",
+            })
+
+        # Sort chronologically ascending to compute running balances
+        items.sort(key=lambda x: (x["date"], x["timestamp"] or "", x["id"]))
+
+        running = float(opening_balance)
+        for item in items:
+            running += (item["inflow"] - item["outflow"])
+            item["running_balance"] = round(running, 2)
+
+        total_inflow = sum(x["inflow"] for x in items)
+        total_outflow = sum(x["outflow"] for x in items)
+        net_change = total_inflow - total_outflow
+        closing_balance = float(opening_balance) + net_change
+
+        # Optional type filtering if user provided type query param
+        type_filter = request.query_params.get("type")
+        filtered_items = items
+        if type_filter and type_filter.upper() != "ALL":
+            filtered_items = [x for x in items if x["transaction_type"].upper() == type_filter.upper()]
+
+        # Sort order: default to newest first ('desc') for user convenience, or 'asc'
+        order = request.query_params.get("order", "desc").lower()
+        if order == "desc":
+            filtered_items = list(reversed(filtered_items))
+
+        return Response({
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+            "school_name": getattr(school, "name", "School") if school else "School",
+            "summary": {
+                "opening_balance": round(float(opening_balance), 2),
+                "total_inflow": round(total_inflow, 2),
+                "total_outflow": round(total_outflow, 2),
+                "net_change": round(net_change, 2),
+                "closing_balance": round(closing_balance, 2),
+                "total_transactions": len(items),
+                "fee_receipts_count": sum(1 for x in items if x["transaction_type"] == "FEE_RECEIPT"),
+                "expenses_count": sum(1 for x in items if x["transaction_type"] == "EXPENSE"),
+                "bank_deposits_count": sum(1 for x in items if x["transaction_type"] == "BANK_DEPOSIT"),
+                "misc_income_count": sum(1 for x in items if x["transaction_type"] == "MISC_INCOME"),
+            },
+            "transactions": filtered_items,
+        })
+
+
+
+
 
 
 

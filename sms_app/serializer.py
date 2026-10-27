@@ -1,6 +1,7 @@
 from .student_profile_services import AadhaarValidationMixin, DynamicIDValidationMixin, is_aadhaar_field, validate_aadhaar
 import math
 import calendar
+import json
 
 from os import name
 
@@ -423,9 +424,10 @@ class CustomeLoginSerializer(TokenObtainPairSerializer):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        if hasattr(self, "username_field") and self.username_field in self.fields:
-            self.fields[self.username_field].required = False
-            self.fields[self.username_field].allow_blank = True
+        username_field = getattr(CustomUser, "USERNAME_FIELD", "username")
+        if username_field in self.fields:
+            self.fields[username_field].required = False
+            self.fields[username_field].allow_blank = True
 
     def validate(self, attrs):
         raw_identifier = (
@@ -827,6 +829,8 @@ class CurrentUserProfileSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "username",
+            "first_name",
+            "last_name",
             "name",
             "email",
             "mobile",
@@ -1626,6 +1630,20 @@ class AdmissionSubmissionSerializer(serializers.ModelSerializer):
             admission_number = f"{school.id}{code}-{first_four}-ADM-{admission.id:04d}"
             admission.admission_number = admission_number
             admission.save()
+
+        # Sibling / Family linking: if parent_id was provided
+        parent_id_val = None
+        if "request" in self.context:
+            parent_id_val = self.context["request"].data.get("parent_id")
+        if parent_id_val and str(parent_id_val).isdigit():
+            p_user = User.objects.filter(id=int(parent_id_val), role="parents").first()
+            if not p_user:
+                p_rec = Perents.objects.filter(id=int(parent_id_val)).first()
+                if p_rec:
+                    p_user = p_rec.user
+            if p_user:
+                admission.temp_user = p_user
+                admission.save(update_fields=["temp_user"])
 
         # =====================================================
         # STORE FIELD VALUES
@@ -3246,6 +3264,7 @@ class GetStudentSerializer(serializers.ModelSerializer):
     studentverify = GetStudentVerifySerializer(read_only = True)
     extradata = GetStudentExtraDataSerializer(read_only = True)
     class_name = serializers.CharField(source = "school_class.school_class", default="", read_only=True)
+    academic_year_name = serializers.CharField(source = "academic_year.name", default="", read_only=True)
     name = serializers.SerializerMethodField()
     father_name = serializers.SerializerMethodField()
     mother_name = serializers.SerializerMethodField()
@@ -3312,6 +3331,8 @@ class GetStudentSerializer(serializers.ModelSerializer):
             "class_name",
             "division",
             "roll_no",
+            "academic_year",
+            "academic_year_name",
             "is_active",
             "created_at",
             "gr_no",
@@ -5072,6 +5093,16 @@ class StudentFeePaymentSerializer(serializers.ModelSerializer):
     collected_by_username = serializers.CharField(source="collected_by.username", read_only=True)
     verified_by_username = serializers.CharField(source="verified_by.username", read_only=True)
     balance_after_payment = serializers.SerializerMethodField()
+    payment_details = serializers.JSONField(required=False, default=dict)
+
+    def to_internal_value(self, data):
+        data_copy = data.copy() if hasattr(data, "copy") else dict(data)
+        if "payment_details" in data_copy and isinstance(data_copy["payment_details"], str):
+            try:
+                data_copy["payment_details"] = json.loads(data_copy["payment_details"])
+            except Exception:
+                pass
+        return super().to_internal_value(data_copy)
 
     class Meta:
         model = StudentFeePayment
@@ -5117,6 +5148,7 @@ class StudentFeePaymentSerializer(serializers.ModelSerializer):
             "receipt_number",
             "payment_date",
             "note",
+            "payment_details",
             "collected_by",
             "collected_by_username",
             "is_verified",

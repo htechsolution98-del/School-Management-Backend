@@ -1,3 +1,4 @@
+import logging
 from .student_profile_services import AadhaarValidationMixin, DynamicIDValidationMixin, is_aadhaar_field, validate_aadhaar
 import random
 import re
@@ -11,6 +12,7 @@ from .models import *
 from .academic_serializers import ALLOWED_STUDENT_FIELD_MAPPINGS
 from .admission_validation import validate_admission_value, validate_admission_upload
 
+logger = logging.getLogger(__name__)
 User = get_user_model()
 
 
@@ -485,11 +487,11 @@ class AdmissionFormSerializer(serializers.ModelSerializer):
         if data.get("fees_enable"):
             amounts = [data.get("fees")] if fee_type != "individual" else [item.get("fee_amount") for item in fee_structures]
             def _invalid_fee(amount: object) -> bool:
-                    d = Decimal(str(amount))
-                    if not d.is_finite() or d <= 0 or d > Decimal("9999999.99"):
-                        return True
-                    exp = d.as_tuple().exponent
-                    return isinstance(exp, int) and exp < -2
+                d = Decimal(str(amount))
+                if not d.is_finite() or d <= 0 or d > Decimal("9999999.99"):
+                    return True
+                exp = d.as_tuple().exponent
+                return isinstance(exp, int) and exp < -2
 
             try:
                 if any(_invalid_fee(amount) for amount in amounts):
@@ -502,7 +504,7 @@ class AdmissionFormSerializer(serializers.ModelSerializer):
                 "fee_structures_input is required when fee_type is 'individual'"
             )
 
-        return data
+        return attrs
 
     # ================= CREATE =================
     def create(self, validated_data):
@@ -815,6 +817,20 @@ class AdmissionSubmissionSerializer(serializers.ModelSerializer):
             admission_number = f"{school.id}{code}-{first_four}-ADM-{admission.id:04d}"
             admission.admission_number = admission_number
             admission.save()
+
+        # Sibling / Family linking: if parent_id was provided
+        parent_id_val = None
+        if "request" in self.context:
+            parent_id_val = self.context["request"].data.get("parent_id")
+        if parent_id_val and str(parent_id_val).isdigit():
+            p_user = User.objects.filter(id=int(parent_id_val), role="parents").first()
+            if not p_user:
+                p_rec = Perents.objects.filter(id=int(parent_id_val)).first()
+                if p_rec:
+                    p_user = p_rec.user
+            if p_user:
+                admission.temp_user = p_user
+                admission.save(update_fields=["temp_user"])
 
         # =====================================================
         # STORE FIELD VALUES
@@ -1827,6 +1843,7 @@ class GetStudentSerializer(serializers.ModelSerializer):
     studentverify = GetStudentVerifySerializer(read_only = True)
     extradata = GetStudentExtraDataSerializer(read_only = True)
     class_name = serializers.CharField(source = "school_class.school_class", default="", read_only=True)
+    academic_year_name = serializers.CharField(source = "academic_year.name", default="", read_only=True)
     email = serializers.SerializerMethodField()
     name = serializers.SerializerMethodField()
     father_name = serializers.SerializerMethodField()
@@ -1906,6 +1923,8 @@ class GetStudentSerializer(serializers.ModelSerializer):
             "class_name",
             "division",
             "roll_no",
+            "academic_year",
+            "academic_year_name",
             "is_active",
             "created_at",
             "gr_no",

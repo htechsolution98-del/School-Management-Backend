@@ -32,7 +32,15 @@ from django.conf.urls.static import static
 from sms_app.views import *
 from sms_app.auth_views import CustomLoginView, InitDatabaseView, CookieTokenRefreshView, ChangePasswordView, LogoutView
 from sms_app.finance_ledger_views import *
-from sms_app.finance_views import RTESummaryView, BulkCollectStudentFeePaymentView
+from sms_app.finance_views import (
+    RTESummaryView,
+    BulkCollectStudentFeePaymentView,
+    DailyCashAuditView,
+    AddDailyExpenseView,
+    BankDepositView,
+    AddMiscIncomeView,
+    AccountLedgerView,
+)
 from sms_app.library_leave_views import *
 from sms_app.subscription_views import (
     SubscriptionPlanViewSet,
@@ -48,7 +56,8 @@ from sms_app.inventory_views import (
     PurchaseViewSet, StockTransactionViewSet, StockAdjustmentViewSet,
     StudentItemEntitlementViewSet, StudentItemIssueViewSet,
     ReplacementRequestViewSet, StudentItemReturnViewSet,
-    InventoryAuditLogViewSet, InventoryReportViewSet
+    InventoryAuditLogViewSet, InventoryReportViewSet,
+    RequisitionViewSet
 )
 from sms_app.dynamic_hr_views import (
     AttendanceSettingViewSet,
@@ -136,6 +145,7 @@ router.register(r'submissions', FormSubmissionViewSet, basename='submissions')
 # ADMISSION FORM FILL DOCUMENT FIELDS Fapi-02
 from sms_app.student_views import (
     RTEDocumentViewSet,
+    CheckParentAPIView,
 )
 
 router.register(r'rtedocument', RTEDocumentViewSet, basename='rtedocument')
@@ -228,6 +238,7 @@ router.register(r'inventory/entitlements', StudentItemEntitlementViewSet, basena
 router.register(r'inventory/issues', StudentItemIssueViewSet, basename='inventory-issues')
 router.register(r'inventory/replacements', ReplacementRequestViewSet, basename='inventory-replacements')
 router.register(r'inventory/returns', StudentItemReturnViewSet, basename='inventory-returns')
+router.register(r'inventory/requisitions', RequisitionViewSet, basename='inventory-requisitions')
 router.register(r'inventory/reports', InventoryReportViewSet, basename='inventory-reports')
 
 router.register(r'board-meetings', BoardMeetingViewSet, basename='board-meetings')
@@ -372,6 +383,18 @@ urlpatterns = [
     path('api/finance/rte-summary/', RTESummaryView.as_view(), name='finance-rte-summary'),
     path('rte/summary/', RTESummaryView.as_view(), name='rte-summary-direct'),
     path('finance/rte-summary/', RTESummaryView.as_view(), name='finance-rte-summary-direct'),
+    path('api/fees/daily-cash-audit/', DailyCashAuditView.as_view(), name='daily-cash-audit'),
+    path('fees/daily-cash-audit/', DailyCashAuditView.as_view()),
+    path('api/finance/add-expense/', AddDailyExpenseView.as_view(), name='add-daily-expense'),
+    path('finance/add-expense/', AddDailyExpenseView.as_view()),
+    path('api/finance/bank-deposit/', BankDepositView.as_view(), name='bank-deposit'),
+    path('finance/bank-deposit/', BankDepositView.as_view()),
+    path('api/finance/add-income/', AddMiscIncomeView.as_view(), name='add-misc-income'),
+    path('finance/add-income/', AddMiscIncomeView.as_view()),
+    path('api/finance/account-ledger/', AccountLedgerView.as_view(), name='account-ledger'),
+    path('finance/account-ledger/', AccountLedgerView.as_view()),
+    path('api/fees/account-ledger/', AccountLedgerView.as_view()),
+    path('fees/account-ledger/', AccountLedgerView.as_view()),
     
     #FOR ATTENDANCE LOCATION
     path('api/get-location/', GetLocationView.as_view()),
@@ -471,6 +494,12 @@ urlpatterns = [
     path('api/monthly-report/',MonthlyProgressReportView.as_view()),
     path("api/monthly-report/<int:id>/",MonthlyProgressReportView.as_view()),
     path('api/parent/children/', ParentChildrenView.as_view()),
+    path('api/check-parent/', CheckParentAPIView.as_view(), name='check-parent'),
+    path('check-parent/', CheckParentAPIView.as_view()),
+    path('api/public-check-parent/', PublicCheckParentAPIView.as_view(), name='public-check-parent'),
+    path('public-check-parent/', PublicCheckParentAPIView.as_view()),
+    path('api/verify-parent-otp/', VerifyParentOTPAPIView.as_view(), name='verify-parent-otp'),
+    path('verify-parent-otp/', VerifyParentOTPAPIView.as_view()),
     path('api/trustee/analytics/', TrusteeAnalyticsView.as_view()),
     path('api/trustee/inventory-report/', TrusteeInventoryReport.as_view(), name='trustee-inventory-report'),
     path('api/trustee/library-report/', TrusteeLibraryReport.as_view(), name='trustee-library-report'),
@@ -603,12 +632,26 @@ inventory_router.register(r'entitlements', StudentItemEntitlementViewSet, basena
 inventory_router.register(r'issues', StudentItemIssueViewSet, basename='inventory-issue')
 inventory_router.register(r'replacements', ReplacementRequestViewSet, basename='inventory-replacement')
 inventory_router.register(r'returns', StudentItemReturnViewSet, basename='inventory-return')
+inventory_router.register(r'requisitions', RequisitionViewSet, basename='inventory-requisition')
 inventory_router.register(r'audit-logs', InventoryAuditLogViewSet, basename='inventory-audit-log')
 inventory_router.register(r'reports', InventoryReportViewSet, basename='inventory-report')
+
+from sms_app.id_card_views import (
+    IDCardTemplateViewSet,
+    IDCardRecordViewSet,
+    IDCardLogViewSet,
+)
+
+id_card_router = DefaultRouter()
+id_card_router.register(r'templates', IDCardTemplateViewSet, basename='id-card-template')
+id_card_router.register(r'records', IDCardRecordViewSet, basename='id-card-record')
+id_card_router.register(r'logs', IDCardLogViewSet, basename='id-card-log')
 
 urlpatterns += [
     path('api/inventory/', include(inventory_router.urls)),
     path('inventory/', include(inventory_router.urls)),
+    path('api/id-cards/', include(id_card_router.urls)),
+    path('id-cards/', include(id_card_router.urls)),
     
     # Microservice Routes
     path('', include('services.auth_identity.urls')),

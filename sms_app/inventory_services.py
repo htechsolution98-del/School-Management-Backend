@@ -137,7 +137,22 @@ class InventoryService:
             active_pricing = active_pricing.filter(school_class__isnull=True)
         active_pricing = active_pricing.first()
 
-        unit_purchase_cost = active_pricing.purchase_cost if active_pricing else Decimal('0.00')
+        unit_purchase_cost = active_pricing.purchase_cost if (active_pricing and active_pricing.purchase_cost > Decimal('0.00')) else Decimal('0.00')
+        if unit_purchase_cost <= Decimal('0.00'):
+            alt_pricing = item.pricings.filter(is_active=True, purchase_cost__gt=0).order_by('-academic_year__id').first()
+            if alt_pricing and alt_pricing.purchase_cost > Decimal('0.00'):
+                unit_purchase_cost = alt_pricing.purchase_cost
+            else:
+                last_pi = item.purchase_items.filter(unit_cost__gt=0).order_by('-purchase__purchase_date', '-id').first()
+                if last_pi and last_pi.unit_cost > Decimal('0.00'):
+                    unit_purchase_cost = last_pi.unit_cost
+                else:
+                    last_tx = item.stock_transactions.filter(
+                        transaction_type__in=['PURCHASE', 'OPENING'],
+                        unit_purchase_cost__gt=0
+                    ).order_by('-transaction_date', '-id').first()
+                    if last_tx and last_tx.unit_purchase_cost:
+                        unit_purchase_cost = last_tx.unit_purchase_cost
         unit_selling_price = active_pricing.selling_price if active_pricing else Decimal('0.00')
         effective_charging_type = charging_type or (active_pricing.charging_type if active_pricing else 'SEPARATE_CHARGE')
 

@@ -16,10 +16,11 @@ from .serializer import *
 from .permissions import *
 from .utils import *
 import datetime
+import random
 from django.core.cache import cache
 from django.db import transaction
 from django.db.models import Q
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.decorators import action
 from .student_profile_actions import StudentProfileActionsMixin
 from .student_profile_serializers import StudentProfileSerializer
@@ -1367,6 +1368,344 @@ class StudentViewSet(StudentProfileActionsMixin, ModelViewSet):
 
 
 StudentGetView = StudentViewSet
+
+
+def find_parent_and_sibling_details(clean_mobile: str, school=None):
+    """
+    Finds existing parent and sibling information based on mobile number.
+    Returns: (exists: bool, parent_payload: dict or None, siblings_list: list, message: str)
+    """
+    # 1. Search for existing Students with this mobile number or parent's mobile
+    student_query = (
+        Q(mobile=clean_mobile)
+        | Q(perents__user__mobile=clean_mobile)
+        | Q(perents__user__username=clean_mobile)
+    )
+    if school:
+        student_query &= Q(school=school)
+
+    students = (
+        Student.objects.filter(student_query)
+        .select_related("school", "school_class", "admission")
+        .prefetch_related("admission__field_values__field")
+        .distinct()
+    )
+
+    # 2. Search for existing Parent Users with this mobile number
+    parent_user_query = (
+        Q(mobile=clean_mobile) | Q(username=clean_mobile)
+    ) & Q(role="parents")
+    if school:
+        parent_user_query &= (Q(school=school) | Q(school__isnull=True))
+    parent_user = User.objects.filter(parent_user_query).first()
+
+    # 3. Search for Perents records
+    perents_query = (
+        Q(user__mobile=clean_mobile)
+        | Q(user__username=clean_mobile)
+        | Q(perents_of__mobile=clean_mobile)
+    )
+    if school:
+        perents_query &= Q(school=school)
+    parent_records = (
+        Perents.objects.filter(perents_query)
+        .select_related(
+            "user",
+            "perents_of",
+            "perents_of__school_class",
+            "perents_of__admission",
+        )
+        .prefetch_related("perents_of__admission__field_values__field")
+    )
+
+    # 4. Also check Admission records with this mobile number if no student records
+    admissions = []
+    if not students.exists() and not parent_records.exists():
+        adm_query = Q(field_values__value__icontains=clean_mobile)
+        if school:
+            adm_query &= Q(school=school)
+        admissions = (
+            Admission.objects.filter(adm_query)
+            .select_related("school", "form")
+            .prefetch_related("field_values__field")
+            .distinct()
+        )
+
+    if not students.exists() and not parent_records.exists() and not parent_user and not admissions:
+        return False, None, [], "No existing student or parent found with this mobile number."
+
+    # Found match! Gather parent details from the best available source
+    father_name = ""
+    mother_name = ""
+    surname = ""
+    guardian_name = ""
+    address = ""
+    city = ""
+    district = ""
+    state = ""
+    pincode = ""
+    parent_email = ""
+    resolved_parent_user_id = parent_user.id if parent_user else None
+    resolved_parent_id = parent_records.first().id if parent_records.exists() else None
+
+    def extract_from_field_values(field_values):
+        nonlocal father_name, mother_name, surname, guardian_name, address, city, district, state, pincode, parent_email
+        for fv in field_values:
+            lbl = (getattr(fv.field, "label", "") or "").lower().strip()
+            val = (fv.value or "").strip()
+            if not val:
+                continue
+            mapping = getattr(fv.field, "map_to_student_field", None) or ""
+
+            if mapping == "father_name" or ("father" in lbl and not any(k in lbl for k in ["mobile", "phone", "occup", "qualif", "email"])):
+                if not father_name:
+                    father_name = val
+            elif mapping == "mother_name" or ("mother" in lbl and not any(k in lbl for k in ["mobile", "phone", "occup", "qualif", "email"])):
+                if not mother_name:
+                    mother_name = val
+            elif mapping == "surname" or ("surname" in lbl or "last name" in lbl):
+                if not surname:
+                    surname = val
+            elif "guardian" in lbl and not any(k in lbl for k in ["mobile", "phone", "occup", "relation"]):
+                if not guardian_name:
+                    guardian_name = val
+            elif "address" in lbl and not address:
+                address = val
+            elif ("city" in lbl or "village" in lbl or "town" in lbl) and not city:
+                city = val
+            elif "district" in lbl and not district:
+                district = val
+            elif "state" in lbl and not state:
+                state = val
+            elif ("pincode" in lbl or "pin code" in lbl or "pin" in lbl) and not pincode:
+                pincode = val
+            elif "email" in lbl and "@" in val and not parent_email:
+                parent_email = val
+
+    siblings_list = []
+    seen_student_ids = set()
+
+    for s in students:
+        seen_student_ids.add(s.id)
+        if not father_name and s.father_name:
+            father_name = s.father_name
+        if not mother_name and s.mother_name:
+            mother_name = s.mother_name
+        if not surname and s.surname:
+            surname = s.surname
+
+        if hasattr(s, "admission") and s.admission:
+            extract_from_field_values(s.admission.field_values.all())
+
+        full_s_name = " ".join([p for p in [s.name, s.father_name, s.surname] if p]).strip() or f"Student #{s.id}"
+        siblings_list.append({
+            "id": s.id,
+            "name": full_s_name,
+            "gr_no": s.gr_no or "",
+            "class_name": s.school_class.school_class if s.school_class else "",
+            "admission_number": s.admission.admission_number if (hasattr(s, "admission") and s.admission) else "",
+        })
+
+    for p in parent_records:
+        if not resolved_parent_user_id and p.user_id:
+            resolved_parent_user_id = p.user_id
+        if p.user and p.user.email and not parent_email:
+            parent_email = p.user.email
+        if p.perents_of and p.perents_of_id not in seen_student_ids:
+            s = p.perents_of
+            seen_student_ids.add(s.id)
+            if not father_name and s.father_name:
+                father_name = s.father_name
+            if not mother_name and s.mother_name:
+                mother_name = s.mother_name
+            if not surname and s.surname:
+                surname = s.surname
+            if hasattr(s, "admission") and s.admission:
+                extract_from_field_values(s.admission.field_values.all())
+            full_s_name = " ".join([part for part in [s.name, s.father_name, s.surname] if part]).strip() or f"Student #{s.id}"
+            siblings_list.append({
+                "id": s.id,
+                "name": full_s_name,
+                "gr_no": s.gr_no or "",
+                "class_name": s.school_class.school_class if s.school_class else "",
+                "admission_number": s.admission.admission_number if (hasattr(s, "admission") and s.admission) else "",
+            })
+
+    for adm in admissions:
+        extract_from_field_values(adm.field_values.all())
+        siblings_list.append({
+            "id": adm.id,
+            "name": f"Applicant ({adm.admission_number or f'ID {adm.id}'})",
+            "gr_no": "",
+            "class_name": "",
+            "admission_number": adm.admission_number or "",
+        })
+
+    if parent_user:
+        if not resolved_parent_user_id:
+            resolved_parent_user_id = parent_user.id
+        if parent_user.email and not parent_email:
+            parent_email = parent_user.email
+
+    parent_payload = {
+        "id": resolved_parent_id,
+        "parent_user_id": resolved_parent_user_id,
+        "mobile": clean_mobile,
+        "father_name": father_name,
+        "mother_name": mother_name,
+        "surname": surname,
+        "guardian_name": guardian_name or father_name,
+        "address": address,
+        "city": city,
+        "district": district,
+        "state": state,
+        "pincode": pincode,
+        "email": parent_email,
+        "field_values": {
+            "father_name": father_name,
+            "mother_name": mother_name,
+            "surname": surname,
+            "guardian_name": guardian_name or father_name,
+            "address": address,
+            "city": city,
+            "district": district,
+            "state": state,
+            "pincode": pincode,
+            "email": parent_email,
+        },
+    }
+
+    sibling_count = len(siblings_list)
+    msg = f"Found {sibling_count} registered student(s) with parent mobile {clean_mobile}."
+    return True, parent_payload, siblings_list, msg
+
+
+class CheckParentAPIView(APIView):
+    """
+    Endpoint: GET /api/check-parent/?mobile=<number>
+    Checks if a student or parent with the given mobile number already exists in the system.
+    Returns existing parent details and sibling details for clerk manual admission.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        raw_mobile = request.query_params.get("mobile", "").strip()
+        if not raw_mobile:
+            return Response(
+                {"exists": False, "message": "Mobile number is required.", "parent": None, "siblings": []},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        clean_mobile = re.sub(r"\D", "", raw_mobile)
+        if len(clean_mobile) >= 10:
+            clean_mobile = clean_mobile[-10:]
+        else:
+            return Response(
+                {"exists": False, "message": "Enter a valid 10-digit mobile number.", "parent": None, "siblings": []},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        school = getattr(request.user, "school", None)
+        exists, parent_payload, siblings_list, msg = find_parent_and_sibling_details(clean_mobile, school=school)
+
+        return Response({
+            "exists": exists,
+            "parent": parent_payload,
+            "siblings": siblings_list,
+            "message": msg,
+        }, status=status.HTTP_200_OK)
+
+
+class PublicCheckParentAPIView(APIView):
+    """
+    Endpoint: POST /api/public-check-parent/
+    Checks if a student or parent with given mobile_number already exists for online admission applicants.
+    If exists: DOES NOT return parent details immediately. Triggers OTP and returns requires_otp: True.
+    If not exists: returns requires_otp: False, exists: False.
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        raw_mobile = str(request.data.get("mobile_number") or request.data.get("mobile") or "").strip()
+        clean_mobile = re.sub(r"\D", "", raw_mobile)
+        if len(clean_mobile) >= 10:
+            clean_mobile = clean_mobile[-10:]
+        else:
+            return Response(
+                {"requires_otp": False, "exists": False, "message": "Please enter a valid 10-digit mobile number."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        exists, _, _, _ = find_parent_and_sibling_details(clean_mobile, school=None)
+
+        if not exists:
+            return Response({
+                "requires_otp": False,
+                "exists": False,
+                "message": "Mobile number is new and available.",
+            }, status=status.HTTP_200_OK)
+
+        # Record exists! Generate 6-digit OTP
+        otp = f"{random.randint(100000, 999999):06d}"
+        OTP.objects.filter(mobile=clean_mobile).delete()
+        OTP.objects.create(mobile=clean_mobile, otp=otp)
+
+        print(f"\n==========================================")
+        print(f"[OTP SIBLING VERIFICATION] Mobile: {clean_mobile} -> OTP: {otp}")
+        print(f"==========================================\n")
+
+        return Response({
+            "requires_otp": True,
+            "exists": True,
+            "message": "This mobile number is already registered. Please enter the 6-digit OTP sent to your number to retrieve your details.",
+            "otp": otp,  # Provided for development / console debugging
+        }, status=status.HTTP_200_OK)
+
+
+class VerifyParentOTPAPIView(APIView):
+    """
+    Endpoint: POST /api/verify-parent-otp/
+    Verifies 6-digit OTP sent to parent's mobile.
+    Upon success, returns existing parent details and siblings for auto-fill.
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        raw_mobile = str(request.data.get("mobile_number") or request.data.get("mobile") or "").strip()
+        clean_mobile = re.sub(r"\D", "", raw_mobile)
+        if len(clean_mobile) >= 10:
+            clean_mobile = clean_mobile[-10:]
+        else:
+            return Response(
+                {"success": False, "message": "Please enter a valid 10-digit mobile number."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        entered_otp = str(request.data.get("otp", "")).strip()
+        if not entered_otp:
+            return Response(
+                {"success": False, "message": "Please enter the 6-digit OTP."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        otp_record = OTP.objects.filter(mobile=clean_mobile, otp=entered_otp).order_by("-created_at").first()
+        if not otp_record:
+            return Response(
+                {"success": False, "message": "Invalid or expired OTP. Please check and try again."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Valid OTP! Clean up
+        OTP.objects.filter(mobile=clean_mobile).delete()
+
+        exists, parent_payload, siblings_list, msg = find_parent_and_sibling_details(clean_mobile, school=None)
+        return Response({
+            "success": True,
+            "message": "OTP verified successfully.",
+            "parent": parent_payload,
+            "siblings": siblings_list,
+        }, status=status.HTTP_200_OK)
+
 
 
 

@@ -15,6 +15,7 @@ from sms_app.inventory_views import (
     ReplacementRequestViewSet,
     StudentItemReturnViewSet,
     InventoryReportViewSet,
+    RequisitionViewSet,
 )
 
 router = DefaultRouter()
@@ -31,6 +32,7 @@ router.register(r"student-entitlements", StudentItemEntitlementViewSet, basename
 router.register(r"student-issues", StudentItemIssueViewSet, basename="student-issues")
 router.register(r"replacements", ReplacementRequestViewSet, basename="replacements")
 router.register(r"student-returns", StudentItemReturnViewSet, basename="student-returns")
+router.register(r"requisitions", RequisitionViewSet, basename="requisitions")
 router.register(r"reports", InventoryReportViewSet, basename="inventory-reports")
 
 urlpatterns = [
