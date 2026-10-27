@@ -294,6 +294,12 @@ class AnnouncementConsumer(AsyncWebsocketConsumer):
             self.all_group,
             self.channel_name
         )
+
+        self.user_group = f"school_{school.id}_user_{user.id}"
+        await self.channel_layer.group_add(
+            self.user_group,
+            self.channel_name
+        )
         await self.accept()
 
     async def disconnect(self,close_code):
@@ -305,6 +311,12 @@ class AnnouncementConsumer(AsyncWebsocketConsumer):
 
             await self.channel_layer.group_discard(
                 self.all_group,
+                self.channel_name
+            )
+
+        if hasattr(self, "user_group"):
+            await self.channel_layer.group_discard(
+                self.user_group,
                 self.channel_name
             )
 
@@ -328,6 +340,8 @@ class AnnouncementConsumer(AsyncWebsocketConsumer):
                 "target_division": event.get("target_division"),
                 "target_student": event.get("target_student"),
                 "target_student_name": event.get("target_student_name"),
+                "target_user": event.get("target_user"),
+                "target_user_name": event.get("target_user_name"),
             })
         )
 

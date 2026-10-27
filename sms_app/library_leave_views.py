@@ -3979,50 +3979,68 @@ class ReportsView(ViewSet):
  
     @action(detail=False, methods=["get"])
     def overdue_and_late(self, request):
-        """
-        Two parts:
-          - currently_overdue: loans still ISSUED, past (due_date + grace
-            period) — i.e. would be charged a fee right now if returned today.
-          - historical_late_rate: of all RETURNED loans, what % came back
-            after the grace period (is_late=True).
-        """
         staff = Staff.objects.filter(user=request.user).first()
         if staff is None:
             raise PermissionDenied("You are not registered as staff for any school.")
- 
+
         now = timezone.now()
-        fee_policy = LateBookFees.objects.filter(school=staff.school).first()
-        grace_days = fee_policy.grace_period_days if fee_policy else 0
- 
+        setting = _get_or_create_library_setting(staff.school)
+        grace_days = setting.grace_period_days or 0
+        per_day_fee = Decimal(str(setting.fine_per_day or "0"))
+
         currently_issued = BookIssued.objects.filter(
             school=staff.school, status="ISSUED"
-        ).select_related("book", "student")
- 
+        ).select_related("book", "student", "staff", "book_copy")
+
         overdue_list = []
         for loan in currently_issued:
             grace_deadline = loan.due_date + timezone.timedelta(days=grace_days)
             if now > grace_deadline:
                 days_overdue = (now.date() - grace_deadline.date()).days
+                accrued_penalty = Decimal(str(max(days_overdue, 0))) * per_day_fee
+                b_name = ""
+                b_gr = ""
+                b_class = ""
+                if loan.student:
+                    b_name = f"{getattr(loan.student, 'name', '')} {getattr(loan.student, 'surname', '')}".strip() or f"Student #{loan.student_id}"
+                    b_gr = getattr(loan.student, 'gr_no', '')
+                    b_class = f"{getattr(loan.student, 'class_name', '')} {getattr(loan.student, 'division', '')}".strip()
+                elif loan.staff:
+                    b_name = getattr(loan.staff, 'name', 'Staff Member')
+                    b_gr = f"Staff #{loan.staff_id}"
+                    b_class = getattr(loan.staff, 'role', 'Staff')
+
+                accession_code = loan.book_copy.accession_no if loan.book_copy else f"BC-{loan.book_id}"
+
                 overdue_list.append({
                     "loan_id": loan.id,
                     "book_id": loan.book_id,
                     "book_title": loan.book.title,
+                    "accession_no": accession_code,
                     "student_id": loan.student_id,
-                    "student_name": getattr(loan.student, "name", str(loan.student_id)),
+                    "student_name": b_name,
+                    "borrower_name": b_name,
+                    "borrower_gr": b_gr,
+                    "borrower_class": b_class,
                     "due_date": loan.due_date,
                     "days_overdue": days_overdue,
+                    "per_day_fee": float(per_day_fee),
+                    "grace_days": grace_days,
+                    "due_penalty": float(accrued_penalty),
                 })
- 
+
         overdue_list.sort(key=lambda x: x["days_overdue"], reverse=True)
- 
+
         returned_qs = BookIssued.objects.filter(school=staff.school, status="RETURNED")
         total_returned = returned_qs.count()
         total_late = returned_qs.filter(is_late=True).count()
         late_rate_percent = round((total_late / total_returned) * 100, 1) if total_returned else 0.0
- 
+
         return Response({
             "currently_overdue": overdue_list,
             "currently_overdue_count": len(overdue_list),
+            "per_day_rate": float(per_day_fee),
+            "grace_days": grace_days,
             "historical_late_rate": {
                 "total_returned_loans": total_returned,
                 "total_late_returns": total_late,
@@ -4032,40 +4050,127 @@ class ReportsView(ViewSet):
  
     @action(detail=False, methods=["get"])
     def fee_collection(self, request):
-        """
-        Total late fees across all returned loans, plus a month-by-month
-        breakdown (grouped by actual_return_date).
- 
-        Note: reflects fees computed at return time — the model has no
-        separate paid/unpaid flag, so every RETURNED loan's late_fees
-        value is treated as the amount owed for that loan.
-        """
         staff = Staff.objects.filter(user=request.user).first()
         if staff is None:
             raise PermissionDenied("You are not registered as staff for any school.")
- 
-        returned_qs = BookIssued.objects.filter(school=staff.school, status="RETURNED")
-        total_fees = returned_qs.aggregate(total=Sum("late_fees"))["total"] or 0
- 
+
+        closed_qs = BookIssued.objects.filter(school=staff.school).exclude(status="ISSUED").select_related("book", "student", "staff", "book_copy")
+
+        # Settled Revenue Breakdown
+        settled_qs = closed_qs.filter(is_fine_paid=True, total_fine__gt=0)
+        total_fees_collected = sum(Decimal(str(l.fine_paid_amount or l.total_fine or 0)) for l in settled_qs)
+        total_late_collected = sum(Decimal(str(l.late_fees or 0)) for l in settled_qs)
+        total_damage_collected = sum(Decimal(str(l.damage_fees or 0)) for l in settled_qs)
+        total_lost_collected = sum(Decimal(str(l.lost_fees or 0)) for l in settled_qs)
+
+        # Unsettled Pending Dues Breakdown
+        unpaid_qs = closed_qs.filter(is_fine_paid=False, total_fine__gt=0)
+        total_pending_dues = sum(
+            max(Decimal("0.00"), Decimal(str(l.total_fine or 0)) - Decimal(str(l.fine_paid_amount or 0)))
+            for l in unpaid_qs
+        )
+
+        # Organized Table 1: Pending Due Penalties
+        pending_dues_list = []
+        for loan in unpaid_qs.order_by("-actual_return_date", "-id"):
+            b_name = ""
+            b_gr = ""
+            b_class = ""
+            if loan.student:
+                b_name = f"{getattr(loan.student, 'name', '')} {getattr(loan.student, 'surname', '')}".strip() or f"Student #{loan.student_id}"
+                b_gr = getattr(loan.student, 'gr_no', '')
+                b_class = f"{getattr(loan.student, 'class_name', '')} {getattr(loan.student, 'division', '')}".strip()
+            elif loan.staff:
+                b_name = getattr(loan.staff, 'name', 'Staff Member')
+                b_gr = f"Staff #{loan.staff_id}"
+                b_class = getattr(loan.staff, 'role', 'Staff')
+
+            rem = max(Decimal("0.00"), Decimal(str(loan.total_fine or 0)) - Decimal(str(loan.fine_paid_amount or 0)))
+            pending_dues_list.append({
+                "id": loan.id,
+                "book_id": loan.book_id,
+                "book_title": loan.book.title,
+                "accession_no": loan.book_copy.accession_no if loan.book_copy else "",
+                "borrower_name": b_name,
+                "borrower_gr": b_gr,
+                "borrower_class": b_class,
+                "return_date": loan.actual_return_date,
+                "condition": loan.condition_on_return or loan.status,
+                "late_fees": float(loan.late_fees or 0),
+                "damage_fees": float(loan.damage_fees or 0),
+                "lost_fees": float(loan.lost_fees or 0),
+                "total_fine": float(loan.total_fine or 0),
+                "fine_paid_amount": float(loan.fine_paid_amount or 0),
+                "fine_remaining": float(rem),
+            })
+
+        # Organized Table 2: Damage & Lost Book Cost Ledger
+        damage_lost_qs = closed_qs.filter(
+            Q(damage_fees__gt=0) | Q(lost_fees__gt=0) | Q(condition_on_return__in=['MINOR_DAMAGE', 'MAJOR_DAMAGE', 'DAMAGED', 'LOST']) | Q(status__in=['DAMAGED', 'LOST'])
+        ).order_by("-actual_return_date", "-id")
+
+        damage_records_list = []
+        for loan in damage_lost_qs:
+            b_name = ""
+            b_gr = ""
+            if loan.student:
+                b_name = f"{getattr(loan.student, 'name', '')} {getattr(loan.student, 'surname', '')}".strip() or f"Student #{loan.student_id}"
+                b_gr = getattr(loan.student, 'gr_no', '')
+            elif loan.staff:
+                b_name = getattr(loan.staff, 'name', 'Staff Member')
+                b_gr = f"Staff #{loan.staff_id}"
+
+            damage_records_list.append({
+                "id": loan.id,
+                "book_title": loan.book.title,
+                "accession_no": loan.book_copy.accession_no if loan.book_copy else "",
+                "borrower_name": b_name,
+                "borrower_gr": b_gr,
+                "condition": loan.condition_on_return or loan.status,
+                "damage_fees": float(loan.damage_fees or 0),
+                "lost_fees": float(loan.lost_fees or 0),
+                "late_fees": float(loan.late_fees or 0),
+                "total_fine": float(loan.total_fine or 0),
+                "is_fine_paid": loan.is_fine_paid,
+                "payment_method": loan.payment_method or ("Paid" if loan.is_fine_paid else "Pending"),
+                "payment_receipt_no": loan.payment_receipt_no or "",
+                "return_date": loan.actual_return_date,
+            })
+
+        # Organized Table 3: Monthly Breakdown
         monthly = (
-            returned_qs.filter(is_late=True)
+            closed_qs.filter(total_fine__gt=0)
             .annotate(month=TruncMonth("actual_return_date"))
             .values("month")
-            .annotate(total_fees=Sum("late_fees"), late_returns=Count("id"))
-            .order_by("month")
+            .annotate(
+                total_collected=Sum("fine_paid_amount"),
+                total_assessed=Sum("total_fine"),
+                total_damage=Sum("damage_fees"),
+                total_late=Sum("late_fees"),
+                fined_returns=Count("id")
+            )
+            .order_by("-month")
         )
- 
+
         monthly_data = [
             {
-                "month": row["month"].strftime("%Y-%m") if row["month"] else None,
-                "total_fees": str(row["total_fees"]),
-                "late_returns": row["late_returns"],
+                "month": row["month"].strftime("%Y-%m") if row["month"] else "N/A",
+                "fined_returns": row["fined_returns"],
+                "total_fees": str(row["total_collected"] or row["total_assessed"] or 0),
+                "damage_fees": str(row["total_damage"] or 0),
+                "late_fees": str(row["total_late"] or 0),
             }
             for row in monthly
         ]
- 
+
         return Response({
-            "total_fees_collected": str(total_fees),
+            "total_fees_collected": str(total_fees_collected),
+            "total_late_collected": str(total_late_collected),
+            "total_damage_collected": str(total_damage_collected),
+            "total_lost_collected": str(total_lost_collected),
+            "total_pending_dues": str(total_pending_dues),
+            "pending_dues": pending_dues_list,
+            "damage_records": damage_records_list,
             "monthly_breakdown": monthly_data,
         })
  

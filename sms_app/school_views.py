@@ -754,6 +754,86 @@ class SchoolListView(generics.ListAPIView):
 
 
 
+def broadcast_announcement(announcement, school=None, user=None):
+    try:
+        channel_layer = get_channel_layer()
+        if not channel_layer:
+            return
+        if not school:
+            school = announcement.school
+        if not user:
+            user = announcement.created_by
+
+        author_name = f"{user.first_name} {user.last_name}".strip() if user else "Administration"
+        if not author_name and user:
+            author_name = user.username or "Administration"
+
+        ws_payload = {
+            "type": "announcement_send",
+            "id": announcement.id,
+            "title": announcement.title,
+            "description": announcement.description,
+            "announcement_for": announcement.announcement_for or "ALL",
+            "is_everyone": announcement.is_everyone,
+            "priority": announcement.priority,
+            "created_at": announcement.created_at.isoformat() if announcement.created_at else timezone.now().isoformat(),
+            "expires_at": announcement.expires_at.isoformat() if announcement.expires_at else None,
+            "created_by": user.username if user else "admin",
+            "created_by_name": author_name,
+            "created_by_role": announcement.created_by_role or "ADMIN",
+            "target_class": announcement.target_class_id,
+            "target_class_name": getattr(announcement.target_class, "school_class", None) if announcement.target_class else None,
+            "target_division": announcement.target_division,
+            "target_student": announcement.target_student_id,
+            "target_student_name": f"{announcement.target_student.name} {announcement.target_student.surname}".strip() if announcement.target_student else None,
+            "target_user": announcement.target_user_id,
+            "target_user_name": f"{announcement.target_user.first_name} {announcement.target_user.last_name}".strip() if announcement.target_user else None,
+        }
+
+        # If targeted to a specific individual user, ONLY send to that user's private group and creator's group!
+        if announcement.target_user_id:
+            async_to_sync(channel_layer.group_send)(
+                f"school_{school.id}_user_{announcement.target_user_id}",
+                ws_payload
+            )
+            if user and user.id != announcement.target_user_id:
+                async_to_sync(channel_layer.group_send)(
+                    f"school_{school.id}_user_{user.id}",
+                    ws_payload
+                )
+        elif announcement.target_student_id:
+            st = announcement.target_student
+            if st and st.user_id:
+                async_to_sync(channel_layer.group_send)(
+                    f"school_{school.id}_user_{st.user_id}",
+                    ws_payload
+                )
+            if user and (not st or st.user_id != user.id):
+                async_to_sync(channel_layer.group_send)(
+                    f"school_{school.id}_user_{user.id}",
+                    ws_payload
+                )
+        else:
+            # If for everyone, send to choice_all
+            if announcement.is_everyone or (announcement.announcement_for or "").upper() == "ALL":
+                async_to_sync(channel_layer.group_send)(
+                    f"school_{school.id}_choice_all",
+                    ws_payload
+                )
+            elif announcement.announcement_for:
+                # Targeted to specific role group(s)
+                import re
+                roles = [r.strip().upper() for r in announcement.announcement_for.split(",") if r.strip()]
+                for r in roles:
+                    sanitized = re.sub(r"[^a-zA-Z0-9_\-\.]", "_", r)
+                    async_to_sync(channel_layer.group_send)(
+                        f"school_{school.id}_choice_{sanitized}",
+                        ws_payload
+                    )
+    except Exception as e:
+        print("Failed to broadcast announcement WebSocket message:", e)
+
+
 class AnnouncementView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -786,7 +866,7 @@ class AnnouncementView(APIView):
         user = request.user
         role = str(getattr(user, "role", "") or "").strip().upper()
 
-        # Management roles see all announcements for the school
+        # Management roles see all school announcements, plus direct notifications targeted to them
         is_management = (
             user.is_superuser
             or user.is_staff
@@ -802,17 +882,23 @@ class AnnouncementView(APIView):
         )
 
         if is_management:
-            announcements = Announcement.objects.filter(school=school)
+            announcements = Announcement.objects.filter(school=school).filter(
+                models.Q(target_user__isnull=True) | models.Q(target_user=user) | models.Q(created_by=user)
+            )
         elif role == "STUDENT":
             student = Student.objects.filter(user=user, school=school).first()
             base_q = (
-                models.Q(is_everyone=True)
-                | models.Q(announcement_for__iexact="ALL")
-                | models.Q(announcement_for__iexact="STUDENT")
-                | models.Q(announcement_for__iexact="STUDENTS_PARENTS")
-                | models.Q(announcement_for__iexact="STUDENT_PARENT")
-                | models.Q(announcement_for__isnull=True)
-                | models.Q(announcement_for="")
+                models.Q(target_user__isnull=True)
+                & (
+                    models.Q(is_everyone=True)
+                    | models.Q(announcement_for__iexact="ALL")
+                    | models.Q(announcement_for__iexact="STUDENT")
+                    | models.Q(announcement_for__icontains="STUDENT")
+                    | models.Q(announcement_for__iexact="STUDENTS_PARENTS")
+                    | models.Q(announcement_for__iexact="STUDENT_PARENT")
+                    | models.Q(announcement_for__isnull=True)
+                    | models.Q(announcement_for="")
+                )
             )
             if student:
                 student_q = (
@@ -823,20 +909,27 @@ class AnnouncementView(APIView):
                         & (models.Q(target_division__isnull=True) | models.Q(target_division="") | models.Q(target_division__iexact=student.division or ""))
                     )
                 )
-                announcements = Announcement.objects.filter(school=school).filter(base_q & student_q)
+                announcements = Announcement.objects.filter(school=school).filter(
+                    (base_q & student_q) | models.Q(target_user=user)
+                )
             else:
-                announcements = Announcement.objects.filter(school=school).filter(base_q & models.Q(target_student__isnull=True))
+                announcements = Announcement.objects.filter(school=school).filter(
+                    (base_q & models.Q(target_student__isnull=True)) | models.Q(target_user=user)
+                )
         elif role in ["PARENT", "PARENTS"]:
-            # Check if parent is linked to student
             student = Student.objects.filter(models.Q(user=user) | models.Q(mobile=getattr(user, "mobile", "")), school=school).first()
             base_q = (
-                models.Q(is_everyone=True)
-                | models.Q(announcement_for__iexact="ALL")
-                | models.Q(announcement_for__iexact="PARENT")
-                | models.Q(announcement_for__iexact="STUDENTS_PARENTS")
-                | models.Q(announcement_for__iexact="STUDENT_PARENT")
-                | models.Q(announcement_for__isnull=True)
-                | models.Q(announcement_for="")
+                models.Q(target_user__isnull=True)
+                & (
+                    models.Q(is_everyone=True)
+                    | models.Q(announcement_for__iexact="ALL")
+                    | models.Q(announcement_for__iexact="PARENT")
+                    | models.Q(announcement_for__icontains="PARENT")
+                    | models.Q(announcement_for__iexact="STUDENTS_PARENTS")
+                    | models.Q(announcement_for__iexact="STUDENT_PARENT")
+                    | models.Q(announcement_for__isnull=True)
+                    | models.Q(announcement_for="")
+                )
             )
             if student:
                 student_q = (
@@ -847,32 +940,67 @@ class AnnouncementView(APIView):
                         & (models.Q(target_division__isnull=True) | models.Q(target_division="") | models.Q(target_division__iexact=student.division or ""))
                     )
                 )
-                announcements = Announcement.objects.filter(school=school).filter(base_q & student_q)
+                announcements = Announcement.objects.filter(school=school).filter(
+                    (base_q & student_q) | models.Q(target_user=user)
+                )
             else:
-                announcements = Announcement.objects.filter(school=school).filter(base_q & models.Q(target_student__isnull=True))
+                announcements = Announcement.objects.filter(school=school).filter(
+                    (base_q & models.Q(target_student__isnull=True)) | models.Q(target_user=user)
+                )
         elif role in ["TRANSPORT", "TRANSPORTATION", "DRIVER"]:
             announcements = Announcement.objects.filter(
                 school=school
             ).filter(
-                models.Q(is_everyone=True)
-                | models.Q(announcement_for__iexact="ALL")
-                | models.Q(announcement_for__iexact="TRANSPORT")
-                | models.Q(announcement_for__isnull=True)
-                | models.Q(announcement_for="")
+                models.Q(target_user=user)
+                | (
+                    models.Q(target_user__isnull=True)
+                    & (
+                        models.Q(is_everyone=True)
+                        | models.Q(announcement_for__iexact="ALL")
+                        | models.Q(announcement_for__iexact="TRANSPORT")
+                        | models.Q(announcement_for__icontains="TRANSPORT")
+                        | models.Q(announcement_for__isnull=True)
+                        | models.Q(announcement_for="")
+                    )
+                )
             )
         else:
-            # Staff roles (Teacher, Clerk, Fee Manager, Librarian, Inventory, etc.)
-            announcements = Announcement.objects.filter(
-                school=school
-            ).filter(
-                models.Q(is_everyone=True)
-                | models.Q(announcement_for__iexact="ALL")
-                | models.Q(announcement_for__iexact=role)
-                | models.Q(announcement_for__iexact="TEACHER")
-                | models.Q(created_by=user)
-                | models.Q(announcement_for__isnull=True)
-                | models.Q(announcement_for="")
+            # Staff roles (Teacher, Clerk, Fee Manager, Librarian, Principal, Trustee, etc.)
+            role_token_q = models.Q(announcement_for__iexact=role) | models.Q(announcement_for__icontains=role)
+            if role in ["FEES", "FEES MANAGEMENT", "FEE-MANAGER", "FEE_MANAGER", "ACCOUNTANT"]:
+                role_target_q = (
+                    role_token_q
+                    | models.Q(announcement_for__icontains="FEE")
+                    | models.Q(announcement_for__icontains="ACCOUNTANT")
+                )
+            elif role in ["CLERK", "ASSISTANT CLERK", "ASSISTANT_CLERK", "ASSISTANTCLERK"]:
+                role_target_q = role_token_q | models.Q(announcement_for__icontains="CLERK")
+            elif role == "LIBRARIAN":
+                role_target_q = role_token_q | models.Q(announcement_for__icontains="LIBRARIAN")
+            elif role == "TEACHER":
+                role_target_q = role_token_q | models.Q(announcement_for__icontains="TEACHER")
+            elif role in ["PRINCIPAL", "VICE PRINCIPAL"]:
+                role_target_q = role_token_q | models.Q(announcement_for__icontains="PRINCIPAL")
+            elif role in ["TRUSTEE", "ADMIN(TRUSTEE)", "ADMIN"]:
+                role_target_q = role_token_q | models.Q(announcement_for__icontains="TRUSTEE") | models.Q(announcement_for__icontains="ADMIN")
+            elif role in ["INVENTORY", "INVENTORY-MANAGER", "INVENTORY_MANAGER", "INVENTORY MANAGER"]:
+                role_target_q = role_token_q | models.Q(announcement_for__icontains="INVENTORY")
+            else:
+                role_target_q = role_token_q
+
+            general_q = (
+                models.Q(target_user__isnull=True)
+                & (
+                    models.Q(is_everyone=True)
+                    | models.Q(announcement_for__iexact="ALL")
+                    | models.Q(announcement_for__isnull=True)
+                    | models.Q(announcement_for="")
+                    | role_target_q
+                )
             )
+            direct_q = models.Q(target_user=user) | models.Q(created_by=user)
+
+            announcements = Announcement.objects.filter(school=school).filter(general_q | direct_q)
 
         announcements = announcements.order_by("-created_at")
         serializer = AnnouncementSerializer(announcements, many=True, context={"request": request})
@@ -903,44 +1031,8 @@ class AnnouncementView(APIView):
                 created_by_role=created_role
             )
 
-            try:
-                channel_layer = get_channel_layer()
-                if channel_layer:
-                    author_name = f"{user.first_name} {user.last_name}".strip() or user.username
-                    ws_payload = {
-                        "type": "announcement_send",
-                        "id": announcement.id,
-                        "title": announcement.title,
-                        "description": announcement.description,
-                        "announcement_for": announcement.announcement_for or "ALL",
-                        "is_everyone": announcement.is_everyone,
-                        "priority": announcement.priority,
-                        "created_at": announcement.created_at.isoformat() if announcement.created_at else None,
-                        "expires_at": announcement.expires_at.isoformat() if announcement.expires_at else None,
-                        "created_by": user.username,
-                        "created_by_name": author_name,
-                        "created_by_role": created_role,
-                        "target_class": announcement.target_class_id,
-                        "target_class_name": getattr(announcement.target_class, "school_class", None) if announcement.target_class else None,
-                        "target_division": announcement.target_division,
-                        "target_student": announcement.target_student_id,
-                        "target_student_name": f"{announcement.target_student.name} {announcement.target_student.surname}".strip() if announcement.target_student else None,
-                    }
-
-                    # Broadcast to school all-group
-                    async_to_sync(channel_layer.group_send)(
-                        f"school_{school.id}_choice_all",
-                        ws_payload
-                    )
-
-                    # If targeted to a specific role, also broadcast to that role group
-                    if announcement.announcement_for and announcement.announcement_for.upper() != "ALL":
-                        async_to_sync(channel_layer.group_send)(
-                            f"school_{school.id}_choice_{announcement.announcement_for.upper()}",
-                            ws_payload
-                        )
-            except Exception as e:
-                print("Failed to broadcast announcement WebSocket message:", e)
+            # Broadcast via websocket helper
+            broadcast_announcement(announcement, school, user)
 
             # Record activity log
             try:
@@ -1054,6 +1146,170 @@ class AnnouncementView(APIView):
         )
 
 
+class AnnouncementRecipientsView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        school = getattr(user, "school", None)
+        if not school:
+            return Response([])
+
+        target_role = (request.query_params.get("role") or "").strip().upper()
+        search_query = (request.query_params.get("q") or "").strip()
+        class_id = request.query_params.get("class_id")
+        division = request.query_params.get("division")
+        student_id = request.query_params.get("student_id")
+
+        results = []
+
+        if target_role == "STUDENT":
+            students_qs = Student.objects.filter(school=school)
+            if class_id:
+                students_qs = students_qs.filter(school_class_id=class_id)
+            if division and division != "ALL":
+                students_qs = students_qs.filter(division__iexact=division)
+            if student_id:
+                students_qs = students_qs.filter(id=student_id)
+            if search_query:
+                students_qs = students_qs.filter(
+                    models.Q(name__icontains=search_query)
+                    | models.Q(surname__icontains=search_query)
+                    | models.Q(roll_no__icontains=search_query)
+                    | models.Q(gr_no__icontains=search_query)
+                )
+            for s in students_qs.select_related("school_class")[:60]:
+                results.append({
+                    "id": s.id,
+                    "student_id": s.id,
+                    "user_id": s.user_id if s.user else None,
+                    "name": f"{s.name} {s.surname}".strip(),
+                    "role": "STUDENT",
+                    "roll_no": s.roll_no or "",
+                    "class_name": getattr(s.school_class, "school_class", ""),
+                    "division": s.division or "",
+                    "details": f"Roll: {s.roll_no or 'N/A'} • Class: {getattr(s.school_class, 'school_class', '')} {s.division or ''}".strip(),
+                })
+        elif target_role in ["PARENT", "PARENTS"]:
+            students_qs = Student.objects.filter(school=school)
+            if class_id:
+                students_qs = students_qs.filter(school_class_id=class_id)
+            if division and division != "ALL":
+                students_qs = students_qs.filter(division__iexact=division)
+            if student_id:
+                students_qs = students_qs.filter(id=student_id)
+            if search_query:
+                students_qs = students_qs.filter(
+                    models.Q(father_name__icontains=search_query)
+                    | models.Q(mother_name__icontains=search_query)
+                    | models.Q(name__icontains=search_query)
+                    | models.Q(surname__icontains=search_query)
+                    | models.Q(mobile__icontains=search_query)
+                )
+            from django.contrib.auth import get_user_model
+            UserModel = get_user_model()
+            seen_keys = set()
+            for s in students_qs.select_related("school_class")[:60]:
+                p_name = s.father_name or s.mother_name or f"Parent of {s.name} {s.surname}".strip()
+                p_key = f"{s.id}_{s.mobile or ''}"
+                if p_key in seen_keys:
+                    continue
+                seen_keys.add(p_key)
+
+                parent_user = None
+                if s.mobile:
+                    parent_user = UserModel.objects.filter(school=school, role__icontains="parent").filter(
+                        models.Q(mobile=s.mobile) | models.Q(username=s.mobile)
+                    ).first()
+
+                results.append({
+                    "id": s.id,
+                    "student_id": s.id,
+                    "user_id": parent_user.id if parent_user else (s.user_id if s.user else None),
+                    "name": p_name,
+                    "role": "PARENT",
+                    "father_name": s.father_name or "",
+                    "mother_name": s.mother_name or "",
+                    "mobile": s.mobile or "",
+                    "student_name": f"{s.name} {s.surname}".strip(),
+                    "student_roll": s.roll_no or "",
+                    "class_name": getattr(s.school_class, "school_class", ""),
+                    "division": s.division or "",
+                    "details": f"Ward: {s.name} {s.surname} (Class {getattr(s.school_class, 'school_class', '')} {s.division or ''}) • Ph: {s.mobile or 'N/A'}",
+                })
+        else:
+            from django.contrib.auth import get_user_model
+            UserModel = get_user_model()
+
+            staff_members = Staff.objects.filter(school=school, user__isnull=False).select_related("user")
+            staff_user_ids = set(staff_members.values_list("user_id", flat=True))
+            direct_user_ids = set(UserModel.objects.filter(school=school).values_list("id", flat=True))
+            all_uids = staff_user_ids.union(direct_user_ids)
+
+            staff_map = {st.user_id: st for st in staff_members}
+
+            candidate_users = UserModel.objects.filter(id__in=all_uids).exclude(is_superuser=True)
+            if search_query:
+                sq = search_query.lower()
+                matching_uids = []
+                for u in candidate_users:
+                    st = staff_map.get(u.id)
+                    st_name = (st.name or "").lower() if st else ""
+                    if (
+                        sq in (u.username or "").lower()
+                        or sq in (u.first_name or "").lower()
+                        or sq in (u.last_name or "").lower()
+                        or sq in (u.email or "").lower()
+                        or sq in st_name
+                    ):
+                        matching_uids.append(u.id)
+                candidate_users = candidate_users.filter(id__in=matching_uids)
+
+            target_norm = target_role.lower()
+
+            for u in candidate_users[:60]:
+                st = staff_map.get(u.id)
+                u_role = (u.role or "").lower()
+                st_cat = (st.category or "").lower() if st else ""
+                st_desig = (st.designation or "").lower() if st else ""
+
+                hit = False
+                if not target_role or target_role == "ALL":
+                    hit = True
+                elif target_role == "CLERK":
+                    hit = "clerk" in u_role or "clerk" in st_cat or "clerk" in st_desig
+                elif target_role == "TEACHER":
+                    hit = "teacher" in u_role or "teacher" in st_cat or "teaching" in st_cat
+                elif target_role == "PRINCIPAL":
+                    hit = "principal" in u_role or "principal" in st_cat or "principal" in st_desig
+                elif target_role == "TRUSTEE":
+                    hit = "trustee" in u_role or "admin" in u_role or "trustee" in st_cat
+                elif target_role in ["FEE-MANAGER", "FEES", "ACCOUNTANT"]:
+                    hit = "fee" in u_role or "accountant" in u_role or "fee" in st_cat or "accountant" in st_cat
+                elif target_role == "LIBRARIAN":
+                    hit = "librarian" in u_role or "librarian" in st_cat
+                elif target_role in ["TRANSPORT", "DRIVER"]:
+                    hit = "transport" in u_role or "driver" in u_role or "transport" in st_cat
+                elif target_role in ["INVENTORY", "INVENTORY-MANAGER", "INVENTORY_MANAGER"]:
+                    hit = "inventory" in u_role or "inventory" in st_cat
+                else:
+                    hit = target_norm in u_role or target_norm in st_cat
+
+                if hit:
+                    user_full_name = f"{u.first_name} {u.last_name}".strip()
+                    display_name = user_full_name or (st.name if st else "") or u.username
+                    role_label = (st.category if st and st.category else u.role) or target_role
+                    results.append({
+                        "id": u.id,
+                        "user_id": u.id,
+                        "name": display_name,
+                        "role": role_label.upper(),
+                        "details": f"{u.email or u.username} • {role_label.capitalize()}",
+                    })
+
+        return Response(results)
+
+
 class HolidayCalendarView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -1146,6 +1402,30 @@ class HolidayCalendarView(APIView):
         serializer = HolidaySerializer(data=request.data, context={"request": request})
         if serializer.is_valid():
             inst = serializer.save(school=school, created_by=user)
+
+            # Auto-create announcement notification for the scheduled event
+            try:
+                target_aud = (request.data.get("target_audience") or "ALL").strip()
+                is_all = target_aud.upper() in ["ALL", "EVERYONE"]
+                event_ann = Announcement.objects.create(
+                    school=school,
+                    title=f"New {inst.event_type.title()}: {inst.name}",
+                    description=(
+                        f"{inst.name} is scheduled on {inst.start_date}"
+                        + (f" to {inst.end_date}" if inst.end_date and str(inst.end_date) != str(inst.start_date) else "")
+                        + (f". Location: {inst.location}" if getattr(inst, "location", None) else "")
+                        + (f". {inst.description}" if getattr(inst, "description", None) else "")
+                    ).strip(),
+                    announcement_for=target_aud if not is_all else "ALL",
+                    is_everyone=is_all,
+                    priority="IMPORTANT" if inst.is_holiday else "NORMAL",
+                    created_by=user,
+                    created_by_role=str(getattr(user, "role", "") or "MANAGEMENT").upper(),
+                )
+                broadcast_announcement(event_ann, school, user)
+            except Exception as e:
+                print("Failed to broadcast event announcement:", e)
+
             try:
                 from .activity_logger import log_activity
                 log_activity(

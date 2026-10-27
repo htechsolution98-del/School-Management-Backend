@@ -860,6 +860,30 @@ class PayrollRunViewSet(viewsets.ModelViewSet):
         payroll_run = self.get_object()
         payroll_run.status = "Locked"
         payroll_run.save(update_fields=["status", "updated_at"])
+
+        # Send targeted notification to each affected staff member
+        try:
+            from .models import Announcement
+            from .school_views import broadcast_announcement
+            month_label = payroll_run.salary_month.strftime("%B %Y") if payroll_run.salary_month else "the month"
+            payments = StaffSalaryPayment.objects.filter(payroll_run=payroll_run).select_related("staff__user")
+            for payment in payments:
+                target_user = getattr(payment.staff, "user", None)
+                if target_user:
+                    ann = Announcement.objects.create(
+                        school=payroll_run.school,
+                        title=f"Payslip Finalized: {month_label}",
+                        description=f"Your official salary slip for {month_label} has been finalized. Net Salary: ₹{payment.net_salary}. You can view and download it in My Payslips.",
+                        target_user=target_user,
+                        is_everyone=False,
+                        priority="NORMAL",
+                        created_by=request.user,
+                        created_by_role="FINANCE",
+                    )
+                    broadcast_announcement(ann, payroll_run.school, request.user)
+        except Exception as e:
+            print("Failed to broadcast salary notifications:", e)
+
         return Response({
             "status": "success",
             "message": f"Payroll run for {payroll_run.salary_month} is now Locked.",
