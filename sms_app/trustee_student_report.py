@@ -17,6 +17,7 @@ from .models import (School, Staff, Student, AcademicYear, SchoolClass, Division
                      StudentExtraData, StudentFieldValue, StudentAttendance,
                      StudentFee, StudentFeePayment, Result, FinalStudentResult)
 from .trustee_inventory_report import IsTrustee, money
+from .utils import format_report_timestamp
 
 
 def percent(numerator, denominator):
@@ -308,7 +309,7 @@ class TrusteeStudentReport(APIView):
         if start and start > end:
             notes.append('The selected academic year and date range do not overlap; date-based metrics have no records.')
         return Response({
-            'school': school.name, 'generated_at': timezone.now(), 'from_date': start, 'to_date': end,
+            'school': school.name, 'generated_at': format_report_timestamp(timezone.now()), 'from_date': start, 'to_date': end,
             'summary': summary, 'students': {'count': len(rows), 'page': params['page'], 'page_size': params['page_size'], 'results': visible},
             'class_strength': strength(['class_id', 'class_name']), 'division_strength': strength(['class_id', 'class_name', 'division']),
             'gender': [{'label': label, 'count': count} for label, count in Counter(row['gender'] for row in rows).items()],

@@ -174,15 +174,23 @@ class Isinventory(BasePermission):
         user = getattr(request, 'user', None)
         if not user or not user.is_authenticated:
             return False
-        if getattr(user, 'is_superuser', False):
+        if getattr(user, 'is_superuser', False) or getattr(user, 'is_staff', False):
             return True
         role = str(getattr(user, 'role', '') or '').strip().upper()
-        if role in ['INVENTORY', 'PRINCIPAL', 'ADMIN', 'SUPERADMIN']:
+        if role in ['INVENTORY', 'PRINCIPAL', 'ADMIN', 'SUPERADMIN'] + CLERK_ROLES:
             return True
-        if user.groups.filter(name__iexact='INVENTORY').exists() or user.groups.filter(name__iexact='PRINCIPAL').exists() or user.groups.filter(name__iexact='super_admin').exists():
+        if (
+            user.groups.filter(name__iexact='INVENTORY').exists()
+            or user.groups.filter(name__iexact='PRINCIPAL').exists()
+            or user.groups.filter(name__iexact='super_admin').exists()
+            or user.groups.filter(name__in=CLERK_GROUPS).exists()
+        ):
             return True
         staff = getattr(user, 'staff', None)
-        if staff and str(getattr(staff, 'category', '') or '').strip().upper() in ['INVENTORY', 'PRINCIPAL']:
+        if staff and str(getattr(staff, 'category', '') or '').strip().upper() in (['INVENTORY', 'PRINCIPAL'] + CLERK_ROLES):
+            return True
+        from .models import School
+        if School.objects.filter(login_id=user.id).exists():
             return True
         return False
 
@@ -429,4 +437,50 @@ class IsClerkOrReadOnly(BasePermission):
         if staff and str(getattr(staff, "category", "") or "").strip().upper() in CLERK_ROLES:
             return True
         return user.groups.filter(name__in=CLERK_GROUPS + ["ADMIN", "admin"]).exists()
+
+
+class IsFeeTypePermission(BasePermission):
+    """
+    Permission class for FeeTypeViewSet:
+    - Allows read-only access (SAFE_METHODS: GET, HEAD, OPTIONS) for:
+      - Authenticated users in Inventory roles/groups (Isinventory, 'Inventory Manager', 'INVENTORY', 'inventory')
+      - Authenticated users in Clerk roles/groups
+      - Authenticated users in Fee Management roles/groups
+      - Authenticated users with the 'sms_app.view_feetype' permission
+      - Principals, Admins, SuperAdmins, and Staff
+    - Mutating methods (POST, PUT, PATCH, DELETE) remain strictly restricted to:
+      - Fee Managers, Clerks, Principals, Admins, and SuperAdmins.
+    """
+    def has_permission(self, request, view):
+        user = getattr(request, 'user', None)
+        if not user or not user.is_authenticated:
+            return False
+
+        if getattr(user, 'is_superuser', False) or getattr(user, 'is_staff', False):
+            return True
+
+        is_fee_or_clerk = (
+            IsFeeManager().has_permission(request, view)
+            or IsClerkOrPrincipal().has_permission(request, view)
+        )
+
+        if request.method in SAFE_METHODS:
+            if is_fee_or_clerk:
+                return True
+            if Isinventory().has_permission(request, view):
+                return True
+            if user.has_perm("sms_app.view_feetype"):
+                return True
+            role = str(getattr(user, "role", "") or "").strip().upper()
+            if role in ["INVENTORY", "INVENTORY MANAGER", "INVENTORY_MANAGER"] or role in CLERK_ROLES:
+                return True
+            if user.groups.filter(name__in=["Inventory Manager", "INVENTORY", "inventory", "inventory manager", "Clerk", "CLERK", "clerk"] + CLERK_GROUPS).exists():
+                return True
+            staff = getattr(user, "staff", None)
+            if staff and str(getattr(staff, "category", "") or "").strip().upper() in (["INVENTORY", "INVENTORY MANAGER"] + CLERK_ROLES):
+                return True
+            return False
+
+        return is_fee_or_clerk
+
 

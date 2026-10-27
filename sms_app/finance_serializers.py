@@ -5,6 +5,7 @@ from rest_framework import serializers
 from decimal import Decimal
 from .models import *
 import calendar
+import json
 import re
 from datetime import date
 from .library_leave_views import get_approved_paid_leave_days
@@ -973,6 +974,16 @@ class StudentFeePaymentSerializer(serializers.ModelSerializer):
     collected_by_username = serializers.CharField(source="collected_by.username", read_only=True)
     verified_by_username = serializers.CharField(source="verified_by.username", read_only=True)
     balance_after_payment = serializers.SerializerMethodField()
+    payment_details = serializers.JSONField(required=False, default=dict)
+
+    def to_internal_value(self, data):
+        data_copy = data.copy() if hasattr(data, "copy") else dict(data)
+        if "payment_details" in data_copy and isinstance(data_copy["payment_details"], str):
+            try:
+                data_copy["payment_details"] = json.loads(data_copy["payment_details"])
+            except Exception:
+                pass
+        return super().to_internal_value(data_copy)
 
     class Meta:
         model = StudentFeePayment
@@ -1018,6 +1029,7 @@ class StudentFeePaymentSerializer(serializers.ModelSerializer):
             "receipt_number",
             "payment_date",
             "note",
+            "payment_details",
             "collected_by",
             "collected_by_username",
             "is_verified",

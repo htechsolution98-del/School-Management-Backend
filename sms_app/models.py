@@ -219,6 +219,8 @@ class Staff(models.Model):
     mobile = models.CharField(max_length=15, null=True, blank=True)
 
     category = models.CharField(max_length=20, default="OTHER")
+    blood_group = models.CharField(max_length=10, blank=True, null=True)
+    emergency_contact = models.CharField(max_length=25, blank=True, null=True)
 
     address = models.TextField(null=True, blank=True)
     date_of_birth = models.DateField(null=True, blank=True)
@@ -632,6 +634,8 @@ class Student(models.Model):
 
     date_of_birth = models.DateField(blank=True, null=True)
     mobile = models.CharField(max_length=12, blank=True, null=True)
+    blood_group = models.CharField(max_length=10, blank=True, null=True)
+    emergency_contact = models.CharField(max_length=25, blank=True, null=True)
 
     # Academic placement
     school_class = models.ForeignKey(
@@ -2115,6 +2119,7 @@ class StudentFeePayment(models.Model):
     receipt_number = models.CharField(max_length=100, null=True, blank=True)
     payment_date = models.DateTimeField(null=True, blank=True)
     note = models.TextField(null=True, blank=True)
+    payment_details = models.JSONField(null=True, blank=True, default=dict)
 
     collected_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -4429,6 +4434,42 @@ class ActivityLog(models.Model):
         return f"[{self.created_at}] {self.user_name or 'User'} ({self.user_role or 'Role'}) - {self.title}"
 
 
+class CashTransaction(models.Model):
+    TYPE_CHOICES = [
+        ("EXPENSE", "Daily Expense"),
+        ("BANK_DEPOSIT", "Bank Deposit"),
+        ("MISC_INCOME", "Miscellaneous Income"),
+    ]
+
+    school = models.ForeignKey(
+        School, on_delete=models.CASCADE, null=True, blank=True, related_name="cash_transactions"
+    )
+    type = models.CharField(max_length=20, choices=TYPE_CHOICES)
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    category = models.CharField(max_length=100, null=True, blank=True)
+    bank_name = models.CharField(max_length=100, null=True, blank=True)
+    reference_number = models.CharField(max_length=100, null=True, blank=True)
+    date = models.DateField(default=timezone.localdate)
+    notes = models.TextField(null=True, blank=True)
+    recorded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="recorded_cash_transactions"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "cash_transaction"
+        ordering = ["-id"]
+
+    def __str__(self):
+        return f"{self.type} - ₹{self.amount} ({self.date})"
+
+
 from .support_models import SupportTicket, TicketMessage
 from .tutorial_models import PageTutorial
+from .id_card_models import IDCardTemplate, IDCardRecord, IDCardLog
+
 

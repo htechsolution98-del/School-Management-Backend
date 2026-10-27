@@ -615,6 +615,7 @@ class StaffListSirializer(serializers.ModelSerializer):
 class TeacherWorkloadSerializer(serializers.ModelSerializer):
     department_name = serializers.CharField(source="department.name", read_only=True, default=None)
     assigned_classes_count = serializers.SerializerMethodField()
+    assigned_periods = serializers.SerializerMethodField()
 
     DAY_FIELDS = [
         "max_periods_mon",
@@ -644,6 +645,7 @@ class TeacherWorkloadSerializer(serializers.ModelSerializer):
             "max_weekly_periods",
             "max_consecutive_periods",
             "assigned_classes_count",
+            "assigned_periods",
             "is_active",
             "created_at",
             "updated_at",
@@ -657,6 +659,7 @@ class TeacherWorkloadSerializer(serializers.ModelSerializer):
             "department",
             "department_name",
             "assigned_classes_count",
+            "assigned_periods",
             "is_active",
             "created_at",
             "updated_at",
@@ -664,6 +667,16 @@ class TeacherWorkloadSerializer(serializers.ModelSerializer):
 
     def get_assigned_classes_count(self, obj):
         try:
+            return obj.assignclass_set.count()
+        except Exception:
+            return 0
+
+    def get_assigned_periods(self, obj):
+        try:
+            from sms_app.models import TimetableEntry
+            t_count = TimetableEntry.objects.filter(teacher_staff=obj).count()
+            if t_count > 0:
+                return t_count
             return obj.assignclass_set.count()
         except Exception:
             return 0

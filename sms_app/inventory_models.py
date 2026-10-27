@@ -10,7 +10,7 @@ from .models import School, AcademicYear, SchoolClass, Student, FeeType
 class ItemCategory(models.Model):
     """Category master for grouping inventory items (e.g. Uniform, Footwear, Stationery)"""
     school = models.ForeignKey(School, on_delete=models.CASCADE, related_name="inventory_categories")
-    name = models.CharField(max_length=150)
+    name = models.CharField(max_length=150, unique=True)
     description = models.TextField(blank=True, null=True)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -23,6 +23,11 @@ class ItemCategory(models.Model):
             models.UniqueConstraint(fields=["school", "name"], name="unique_school_item_category")
         ]
 
+    def save(self, *args, **kwargs):
+        if self.name:
+            self.name = self.name.strip()
+        super().save(*args, **kwargs)
+
     def __str__(self):
         return self.name
 
@@ -30,7 +35,7 @@ class ItemCategory(models.Model):
 class ItemSize(models.Model):
     """Size master for variant items (e.g. S, M, L, XL, UK 4, UK 5, etc.)"""
     school = models.ForeignKey(School, on_delete=models.CASCADE, related_name="inventory_sizes")
-    name = models.CharField(max_length=50)
+    name = models.CharField(max_length=50, unique=True)
     size_type = models.CharField(max_length=50, blank=True, null=True, default="General")
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -42,6 +47,11 @@ class ItemSize(models.Model):
             models.UniqueConstraint(fields=["school", "name", "size_type"], name="unique_school_size_variant")
         ]
 
+    def save(self, *args, **kwargs):
+        if self.name:
+            self.name = self.name.strip()
+        super().save(*args, **kwargs)
+
     def __str__(self):
         return f"{self.name} ({self.size_type})" if self.size_type else self.name
 
@@ -49,8 +59,8 @@ class ItemSize(models.Model):
 class ItemColor(models.Model):
     """Color master for variant items (e.g. White, Navy Blue, Maroon)"""
     school = models.ForeignKey(School, on_delete=models.CASCADE, related_name="inventory_colors")
-    name = models.CharField(max_length=50)
-    hex_code = models.CharField(max_length=10, blank=True, null=True)
+    name = models.CharField(max_length=50, unique=True)
+    hex_code = models.CharField(max_length=10, blank=True, null=True, unique=True)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -61,6 +71,15 @@ class ItemColor(models.Model):
             models.UniqueConstraint(fields=["school", "name"], name="unique_school_color")
         ]
 
+    def save(self, *args, **kwargs):
+        if self.name:
+            self.name = self.name.strip()
+        if self.hex_code:
+            self.hex_code = self.hex_code.strip() or None
+        else:
+            self.hex_code = None
+        super().save(*args, **kwargs)
+
     def __str__(self):
         return self.name
 
@@ -68,13 +87,15 @@ class ItemColor(models.Model):
 class Item(models.Model):
     """Item Master representing physical articles (Uniform, Tie, Shoes, Notebooks)"""
     school = models.ForeignKey(School, on_delete=models.CASCADE, related_name="inventory_items")
-    item_code = models.CharField(max_length=100)
-    item_name = models.CharField(max_length=200)
+    item_code = models.CharField(max_length=100, unique=True)
+    item_name = models.CharField(max_length=200, unique=True)
     category = models.ForeignKey(ItemCategory, on_delete=models.SET_NULL, null=True, blank=True, related_name="items")
     description = models.TextField(blank=True, null=True)
     unit = models.CharField(max_length=50, default="Pcs")  # Pcs, Pair, Set, Box, Meter
     has_size = models.BooleanField(default=False)
     has_color = models.BooleanField(default=False)
+    allowed_sizes = models.ManyToManyField(ItemSize, blank=True, related_name="allowed_items")
+    allowed_colors = models.ManyToManyField(ItemColor, blank=True, related_name="allowed_items")
     is_returnable = models.BooleanField(default=False)
     minimum_stock_level = models.IntegerField(default=5)
     maximum_stock_level = models.IntegerField(null=True, blank=True)
@@ -90,6 +111,13 @@ class Item(models.Model):
         constraints = [
             models.UniqueConstraint(fields=["school", "item_code"], name="unique_school_item_code")
         ]
+
+    def save(self, *args, **kwargs):
+        if self.item_code:
+            self.item_code = self.item_code.strip()
+        if self.item_name:
+            self.item_name = self.item_name.strip()
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"{self.item_name} ({self.item_code})"
@@ -128,12 +156,12 @@ class ItemPricing(models.Model):
 class Supplier(models.Model):
     """Vendors / Suppliers providing inventory items to the school"""
     school = models.ForeignKey(School, on_delete=models.CASCADE, related_name="inventory_suppliers")
-    supplier_name = models.CharField(max_length=200)
+    supplier_name = models.CharField(max_length=200, unique=True)
     contact_person = models.CharField(max_length=150, blank=True, null=True)
-    phone = models.CharField(max_length=20, blank=True, null=True)
-    email = models.EmailField(blank=True, null=True)
+    phone = models.CharField(max_length=20, blank=True, null=True, unique=True)
+    email = models.EmailField(blank=True, null=True, unique=True)
     address = models.TextField(blank=True, null=True)
-    gst_number = models.CharField(max_length=50, blank=True, null=True)
+    gst_number = models.CharField(max_length=50, blank=True, null=True, unique=True)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -141,6 +169,23 @@ class Supplier(models.Model):
     class Meta:
         db_table = "inventory_supplier"
         ordering = ["supplier_name"]
+
+    def save(self, *args, **kwargs):
+        if self.supplier_name:
+            self.supplier_name = self.supplier_name.strip()
+        if self.phone:
+            self.phone = self.phone.strip() or None
+        else:
+            self.phone = None
+        if self.email:
+            self.email = self.email.strip() or None
+        else:
+            self.email = None
+        if self.gst_number:
+            self.gst_number = self.gst_number.strip() or None
+        else:
+            self.gst_number = None
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return self.supplier_name
@@ -213,6 +258,7 @@ class StockTransaction(models.Model):
         ("ADJUSTMENT_OUT", "Adjustment Out"),
         ("DAMAGE", "Damaged Stock"),
         ("LOST", "Lost Stock"),
+        ("REQUISITION", "Requisition Issue"),
     ]
 
     school = models.ForeignKey(School, on_delete=models.CASCADE, related_name="stock_transactions")
@@ -432,3 +478,36 @@ class InventoryAuditLog(models.Model):
 
     def __str__(self):
         return f"Audit: {self.action} on {self.entity_type} #{self.entity_id}"
+
+
+class Requisition(models.Model):
+    """Staff and teacher requisition model for inventory items"""
+    STATUS_CHOICES = [
+        ("Pending", "Pending"),
+        ("Approved", "Approved"),
+        ("Rejected", "Rejected"),
+    ]
+
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name="requisitions")
+    requester = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="requisitions")
+    item = models.ForeignKey(Item, on_delete=models.CASCADE, related_name="requisitions")
+    quantity_requested = models.IntegerField(validators=[MinValueValidator(1)])
+    purpose = models.TextField()
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="Pending")
+    requested_at = models.DateTimeField(auto_now_add=True)
+    action_date = models.DateTimeField(null=True, blank=True)
+    action_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="acted_requisitions"
+    )
+    remarks = models.TextField(blank=True, null=True)
+
+    class Meta:
+        db_table = "inventory_requisition"
+        ordering = ["-requested_at"]
+
+    def __str__(self):
+        return f"Requisition #{self.id}: {self.requester} - {self.item.item_name} ({self.quantity_requested}) [{self.status}]"

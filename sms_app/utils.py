@@ -467,6 +467,71 @@ def validate_and_consume_biometric_proof(token, staff, school, purpose="ATTENDAN
         return True, "Valid"
 
 
+# ============================================================================
+# REPORT & EXPORT FORMATTING UTILITIES
+# ============================================================================
+
+def format_report_timestamp(dt=None):
+    """
+    Format a datetime object into a human-readable report timestamp:
+    e.g., '21-Oct-2026 10:48 AM' (dd-MMM-yyyy hh:mm A).
+    """
+    from django.utils import timezone
+    if dt is None:
+        dt = timezone.now()
+    if timezone.is_aware(dt):
+        dt = timezone.localtime(dt)
+    return dt.strftime("%d-%b-%Y %I:%M %p")
+
+
+def to_title_case(text):
+    """
+    Convert snake_case or lowercase strings to Title Case:
+    e.g. 'total_staff' -> 'Total Staff'
+         'id' -> 'ID'
+         'payroll_gross' -> 'Payroll Gross'
+         'exit date' -> 'Exit Date'
+    """
+    if not text:
+        return ""
+    words = str(text).replace("_", " ").replace("-", " ").strip().split()
+    title_words = []
+    for word in words:
+        lower = word.lower()
+        if lower == "id":
+            title_words.append("ID")
+        elif lower in ("inr", "rte", "otp", "gst", "dob"):
+            title_words.append(lower.upper())
+        else:
+            title_words.append(word.capitalize())
+    return " ".join(title_words)
+
+
+def format_report_metric_names(data):
+    """
+    Convert dictionary keys from snake_case to Title Case for report rendering.
+    """
+    if isinstance(data, dict):
+        return {to_title_case(k): v for k, v in data.items()}
+    return data
+
+
+def format_report_table_headers(headers):
+    """
+    Capitalize column headers for report tables:
+    e.g. ['id', 'name', 'department', 'exit_date'] -> ['ID', 'Name', 'Department', 'Exit Date']
+    """
+    return [to_title_case(h) for h in headers]
+
+
+def format_excel_tab_name(tab_name, max_len=31):
+    """
+    Convert Excel sheet/tab name to Title Case, truncated to max_len (Excel limit is 31).
+    """
+    return to_title_case(tab_name)[:max_len]
+
+
+
 
 
 

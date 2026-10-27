@@ -460,7 +460,8 @@ class AdmissionFormSerializer(serializers.ModelSerializer):
         read_only_fields = ["unique_link"]
 
     # ================= VALIDATION =================
-    def validate(self, data):
+    def validate(self, attrs):
+        data = attrs
         fee_type = data.get("fee_type")
         fee_structures = data.get("fee_structures_input") or []
 
@@ -484,8 +485,11 @@ class AdmissionFormSerializer(serializers.ModelSerializer):
         if data.get("fees_enable"):
             amounts = [data.get("fees")] if fee_type != "individual" else [item.get("fee_amount") for item in fee_structures]
             try:
-                if any(not Decimal(str(amount)).is_finite() or Decimal(str(amount)) <= 0 or Decimal(str(amount)) > Decimal("9999999.99") or Decimal(str(amount)).as_tuple().exponent < -2 for amount in amounts):
-                    raise serializers.ValidationError({"fees": "Enter a positive fee with at most two decimal places"})
+                for amount in amounts:
+                    d = Decimal(str(amount))
+                    exp = d.as_tuple().exponent
+                    if not d.is_finite() or d <= 0 or d > Decimal("9999999.99") or not isinstance(exp, int) or exp < -2:
+                        raise serializers.ValidationError({"fees": "Enter a positive fee with at most two decimal places"})
             except (InvalidOperation, TypeError, ValueError):
                 raise serializers.ValidationError({"fees": "Enter a valid fee amount"})
 
@@ -494,7 +498,7 @@ class AdmissionFormSerializer(serializers.ModelSerializer):
                 "fee_structures_input is required when fee_type is 'individual'"
             )
 
-        return data
+        return attrs
 
     # ================= CREATE =================
     def create(self, validated_data):
@@ -672,7 +676,8 @@ class AdmissionSubmissionSerializer(serializers.ModelSerializer):
 
         return super().to_internal_value(data)
 
-    def validate(self, data):
+    def validate(self, attrs):
+        data = attrs
         form = data["form"]
         field_values = data["field_values"]
         school_class = data.get("school_class")
@@ -806,6 +811,20 @@ class AdmissionSubmissionSerializer(serializers.ModelSerializer):
             admission_number = f"{school.id}{code}-{first_four}-ADM-{admission.id:04d}"
             admission.admission_number = admission_number
             admission.save()
+
+        # Sibling / Family linking: if parent_id was provided
+        parent_id_val = None
+        if "request" in self.context:
+            parent_id_val = self.context["request"].data.get("parent_id")
+        if parent_id_val and str(parent_id_val).isdigit():
+            p_user = User.objects.filter(id=int(parent_id_val), role="parents").first()
+            if not p_user:
+                p_rec = Perents.objects.filter(id=int(parent_id_val)).first()
+                if p_rec:
+                    p_user = p_rec.user
+            if p_user:
+                admission.temp_user = p_user
+                admission.save(update_fields=["temp_user"])
 
         # =====================================================
         # STORE FIELD VALUES
@@ -951,7 +970,8 @@ class AdmissionDocumentSubmissionSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["school"]
 
-    def validate(self, data):
+    def validate(self, attrs):
+        data = attrs
         admission_number = data.get("admission_number")
         documents = data.get("documents") or []
 
@@ -1817,6 +1837,7 @@ class GetStudentSerializer(serializers.ModelSerializer):
     studentverify = GetStudentVerifySerializer(read_only = True)
     extradata = GetStudentExtraDataSerializer(read_only = True)
     class_name = serializers.CharField(source = "school_class.school_class", default="", read_only=True)
+    academic_year_name = serializers.CharField(source = "academic_year.name", default="", read_only=True)
     email = serializers.SerializerMethodField()
     name = serializers.SerializerMethodField()
     father_name = serializers.SerializerMethodField()
@@ -1896,6 +1917,8 @@ class GetStudentSerializer(serializers.ModelSerializer):
             "class_name",
             "division",
             "roll_no",
+            "academic_year",
+            "academic_year_name",
             "is_active",
             "created_at",
             "gr_no",
