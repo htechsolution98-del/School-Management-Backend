@@ -1,8 +1,6 @@
-[environment]
-python = "C:/Users/kp301/AppData/Local/Programs/Python/Python313/python.exe"
-search-paths = [
+python-interpreter-path = "venv/Scripts/python.exe"
+search-path = [
     ".",
-    "C:/Users/kp301/AppData/Local/Programs/Python/Python313/Lib/site-packages",
     "sms_shared_core"
 ]
 

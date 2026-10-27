@@ -437,6 +437,8 @@ urlpatterns = [
      path("api/approve-all-leave/<int:pk>/",ChangeAllLeaveView.as_view()),
      path("api/announcement/",AnnouncementView.as_view()),
      path("api/announcement/<int:id>/", AnnouncementView.as_view()), 
+     path("api/announcement-recipients/", AnnouncementRecipientsView.as_view()),
+     path("announcement-recipients/", AnnouncementRecipientsView.as_view()),
      path("api/events/", HolidayCalendarView.as_view()),
      path("api/events/<int:id>/", HolidayCalendarView.as_view()),
      path("events/", HolidayCalendarView.as_view()),

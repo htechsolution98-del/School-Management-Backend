@@ -1,3 +1,4 @@
+import logging
 from .student_profile_services import AadhaarValidationMixin, DynamicIDValidationMixin, is_aadhaar_field, validate_aadhaar
 import random
 import re
@@ -11,6 +12,7 @@ from .models import *
 from .academic_serializers import ALLOWED_STUDENT_FIELD_MAPPINGS
 from .admission_validation import validate_admission_value, validate_admission_upload
 
+logger = logging.getLogger(__name__)
 User = get_user_model()
 
 
@@ -460,7 +462,7 @@ class AdmissionFormSerializer(serializers.ModelSerializer):
         read_only_fields = ["unique_link"]
 
     # ================= VALIDATION =================
-    def validate(self, attrs):
+    def validate(self, attrs):  # pyrefly: ignore[bad-override-param-name]
         data = attrs
         fee_type = data.get("fee_type")
         fee_structures = data.get("fee_structures_input") or []
@@ -484,12 +486,16 @@ class AdmissionFormSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError({"document_fields_config": "Document requirements must match configured documents"})
         if data.get("fees_enable"):
             amounts = [data.get("fees")] if fee_type != "individual" else [item.get("fee_amount") for item in fee_structures]
+            def _invalid_fee(amount: object) -> bool:
+                d = Decimal(str(amount))
+                if not d.is_finite() or d <= 0 or d > Decimal("9999999.99"):
+                    return True
+                exp = d.as_tuple().exponent
+                return isinstance(exp, int) and exp < -2
+
             try:
-                for amount in amounts:
-                    d = Decimal(str(amount))
-                    exp = d.as_tuple().exponent
-                    if not d.is_finite() or d <= 0 or d > Decimal("9999999.99") or not isinstance(exp, int) or exp < -2:
-                        raise serializers.ValidationError({"fees": "Enter a positive fee with at most two decimal places"})
+                if any(_invalid_fee(amount) for amount in amounts):
+                    raise serializers.ValidationError({"fees": "Enter a positive fee with at most two decimal places"})
             except (InvalidOperation, TypeError, ValueError):
                 raise serializers.ValidationError({"fees": "Enter a valid fee amount"})
 
@@ -502,7 +508,7 @@ class AdmissionFormSerializer(serializers.ModelSerializer):
 
     # ================= CREATE =================
     def create(self, validated_data):
-        with transaction.atomic():
+        with transaction.atomic():  # pyrefly: ignore[bad-context-manager]
 
             document_fields = validated_data.pop("document_fields", [])
             document_config = validated_data.pop("document_fields_config", [])
@@ -676,7 +682,7 @@ class AdmissionSubmissionSerializer(serializers.ModelSerializer):
 
         return super().to_internal_value(data)
 
-    def validate(self, attrs):
+    def validate(self, attrs):  # pyrefly: ignore[bad-override-param-name]
         data = attrs
         form = data["form"]
         field_values = data["field_values"]
@@ -970,7 +976,7 @@ class AdmissionDocumentSubmissionSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["school"]
 
-    def validate(self, attrs):
+    def validate(self, attrs):  # pyrefly: ignore[bad-override-param-name]
         data = attrs
         admission_number = data.get("admission_number")
         documents = data.get("documents") or []
@@ -1213,7 +1219,7 @@ class AdmissionDocumentUpdateSerializer(serializers.ModelSerializer):
 
         request = self.context["request"]
 
-        with transaction.atomic():
+        with transaction.atomic():  # pyrefly: ignore[bad-context-manager]
 
             i = 0
 
@@ -1429,7 +1435,7 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
         gr_no = validated_data.pop("gr_no")
         # g = instance.status
         # print(g)
-        with transaction.atomic():
+        with transaction.atomic():  # pyrefly: ignore[bad-context-manager]
 
             # =========================
             # 2. CREATE STUDENT
@@ -1860,9 +1866,9 @@ class GetStudentSerializer(serializers.ModelSerializer):
             return obj.name
         if hasattr(obj, "admission") and obj.admission:
             fv = obj.admission.field_values.filter(
-                Q(field__map_to_student_field="name") |
-                Q(field__label__icontains="student name") |
-                Q(field__label__icontains="first name")
+                Q(field__map_to_student_field="name")  # pyrefly: ignore[unsupported-operation]
+                | Q(field__label__icontains="student name")
+                | Q(field__label__icontains="first name")
             ).first()
             if fv and fv.value:
                 return fv.value
@@ -2083,7 +2089,7 @@ class StudentGetSerializer(AadhaarValidationMixin, serializers.ModelSerializer):
     def get_photo_url(self, obj):
         if hasattr(obj, "admission") and obj.admission:
             photo_doc = obj.admission.documents.filter(
-                Q(document_field__label__icontains="photo")
+                Q(document_field__label__icontains="photo")  # pyrefly: ignore[unsupported-operation]
                 | Q(document_field__label__icontains="picture")
                 | Q(document_field__label__icontains="image")
                 | Q(document_field__label__icontains="avatar")
@@ -2151,9 +2157,9 @@ class StudentGetSerializer(AadhaarValidationMixin, serializers.ModelSerializer):
         data = super().to_representation(instance)
         if not data.get("name") and hasattr(instance, "admission") and instance.admission:
             fv = instance.admission.field_values.filter(
-                Q(field__map_to_student_field="name")
+                Q(field__map_to_student_field="name")  # pyrefly: ignore[unsupported-operation]
                 | (
-                    Q(field__label__icontains="name")
+                    Q(field__label__icontains="name")  # pyrefly: ignore[unsupported-operation]
                     & ~Q(field__label__icontains="father")
                     & ~Q(field__label__icontains="mother")
                     & ~Q(field__label__icontains="surname")

@@ -611,6 +611,27 @@ class LeaveWorkflowService:
         # Sync with Staff Attendance
         LeaveAttendanceSyncService.sync_approved_leave(leave_req)
 
+        # Send targeted notification to applicant user
+        try:
+            target_user = getattr(leave_req.staff, "user", None)
+            if target_user:
+                from ..models import Announcement
+                from ..school_views import broadcast_announcement
+                leave_type_name = getattr(leave_req.dynamic_leave_type or leave_req.leave_type, "name", "Leave")
+                ann = Announcement.objects.create(
+                    school=school,
+                    title="Leave Request Approved",
+                    description=f"Your leave request for {leave_type_name} ({leave_req.start_date} to {leave_req.end_date}, {leave_req.total_days} days) has been Approved by {approver_user.first_name or approver_user.username}.",
+                    target_user=target_user,
+                    is_everyone=False,
+                    priority="IMPORTANT",
+                    created_by=approver_user,
+                    created_by_role=str(getattr(approver_user, "role", "") or "MANAGEMENT").upper(),
+                )
+                broadcast_announcement(ann, school, approver_user)
+        except Exception as e:
+            print("Failed to notify user of approved leave:", e)
+
         return leave_req
 
     @classmethod
@@ -694,6 +715,28 @@ class LeaveWorkflowService:
         leave_req.save()
 
         leave_req.leave_days.filter(status="PENDING").update(status="REJECTED")
+
+        # Send targeted notification to applicant user
+        try:
+            target_user = getattr(leave_req.staff, "user", None)
+            if target_user:
+                from ..models import Announcement
+                from ..school_views import broadcast_announcement
+                leave_type_name = getattr(leave_req.dynamic_leave_type or leave_req.leave_type, "name", "Leave")
+                ann = Announcement.objects.create(
+                    school=school,
+                    title="Leave Request Rejected",
+                    description=f"Your leave request for {leave_type_name} ({leave_req.start_date} to {leave_req.end_date}) was Rejected. Reason: {reason or 'Not specified'}.",
+                    target_user=target_user,
+                    is_everyone=False,
+                    priority="IMPORTANT",
+                    created_by=approver_user,
+                    created_by_role=str(getattr(approver_user, "role", "") or "MANAGEMENT").upper(),
+                )
+                broadcast_announcement(ann, school, approver_user)
+        except Exception as e:
+            print("Failed to notify user of rejected leave:", e)
+
         return leave_req
 
     @classmethod

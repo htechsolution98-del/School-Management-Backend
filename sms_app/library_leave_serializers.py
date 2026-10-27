@@ -1621,6 +1621,31 @@ class BookManageSerializer(serializers.ModelSerializer):
         if rack and shelf and shelf.rack_id != rack.id:
             raise serializers.ValidationError({"shelf": ["The selected shelf does not belong to the selected rack."]})
 
+        isbn = attrs.get('isbn')
+        if isbn is not None:
+            isbn_str = str(isbn).strip()
+            if isbn_str:
+                clean_isbn = re.sub(r'[-\s]', '', isbn_str).lower()
+                request = self.context.get('request')
+                school = None
+                if request and hasattr(request, 'user'):
+                    staff = Staff.objects.filter(user=request.user).first()
+                    if staff:
+                        school = staff.school
+                if not school and self.instance:
+                    school = self.instance.school
+
+                if school:
+                    qs = Book.objects.filter(school=school).exclude(isbn__isnull=True).exclude(isbn="")
+                    if self.instance:
+                        qs = qs.exclude(id=self.instance.id)
+                    for existing in qs:
+                        ex_clean = re.sub(r'[-\s]', '', existing.isbn or '').lower()
+                        if ex_clean == clean_isbn or (existing.isbn or '').strip().lower() == isbn_str.lower():
+                            raise serializers.ValidationError({
+                                "isbn": [f"A book with ISBN '{isbn_str}' already exists: '{existing.title}' by '{existing.author}' (Book ID #{existing.pk})."]
+                            })
+
         return attrs
 
     def to_representation(self, instance):
@@ -1708,6 +1733,51 @@ class BookIssuedSerializer(serializers.ModelSerializer):
         ret['borrower_type'] = 'student' if instance.student_id else 'staff'
         ret['staff_name'] = instance.staff.name if instance.staff_id else None
         ret['staff_role'] = instance.staff.category if instance.staff_id else None
+
+        if instance.school:
+            request = self.context.get("request") if hasattr(self, "context") and self.context else None
+            logo_url = None
+            if instance.school.logo:
+                try:
+                    raw_url = instance.school.logo.url
+                    logo_url = request.build_absolute_uri(raw_url) if (request and not str(raw_url).startswith("http")) else raw_url
+                except Exception:
+                    logo_url = None
+
+            address_parts = [
+                instance.school.address,
+                instance.school.city,
+                instance.school.state,
+                instance.school.pincode,
+            ]
+            clean_address = ", ".join([str(p).strip() for p in address_parts if p and str(p).strip()])
+
+            ret["school_id"] = instance.school.id
+            ret["school_name"] = to_title_case_py(instance.school.name or "School Library")
+            ret["school_code"] = instance.school.code or ""
+            ret["school_logo"] = logo_url
+            ret["school_email"] = instance.school.email or ""
+            ret["school_phone"] = instance.school.phone or ""
+            ret["school_address"] = clean_address or (instance.school.address or "")
+            ret["school_city"] = instance.school.city or ""
+            ret["school_state"] = instance.school.state or ""
+            ret["school_pincode"] = instance.school.pincode or ""
+            ret["school_country"] = instance.school.country or ""
+            ret["school_index_no"] = instance.school.index_no or ""
+            ret["school_info"] = {
+                "id": instance.school.id,
+                "name": to_title_case_py(instance.school.name or "School Library"),
+                "code": instance.school.code or "",
+                "logo": logo_url,
+                "email": instance.school.email or "",
+                "phone": instance.school.phone or "",
+                "address": clean_address or (instance.school.address or ""),
+                "city": instance.school.city or "",
+                "state": instance.school.state or "",
+                "pincode": instance.school.pincode or "",
+                "country": instance.school.country or "",
+                "index_no": instance.school.index_no or "",
+            }
         return ret
 
 

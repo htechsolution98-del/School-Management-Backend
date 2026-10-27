@@ -79,7 +79,7 @@ class SchoolSubscriptionViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_permissions(self):
-        if self.action in ["list", "retrieve", "extend_trial", "manual_subscription", "toggle_lock", "get_summary"]:
+        if self.action in ["list", "retrieve", "extend_trial", "manual_subscription", "toggle_lock", "get_summary", "generate_invoice"]:
             return [IsAuthenticated(), Is_super_admin()]
         return [IsAuthenticated()]
 
@@ -530,6 +530,113 @@ class SchoolSubscriptionViewSet(viewsets.ModelViewSet):
             "subscription": SchoolSubscriptionSerializer(subscription).data,
         })
 
+    @action(detail=True, methods=["post"], url_path="generate-invoice")
+    def generate_invoice(self, request, pk=None):
+        try:
+            subscription = self.get_object()
+            school = subscription.school
+            today = timezone.now().date()
+
+            billing_cycle = subscription.billing_cycle or "MONTHLY"
+            months_count = 1
+            if billing_cycle == "QUARTERLY":
+                months_count = 3
+            elif billing_cycle == "HALF_YEARLY":
+                months_count = 6
+            elif billing_cycle == "YEARLY":
+                months_count = 12
+
+            billing_model = subscription.billing_model or "FLAT"
+
+            flat_amt = float(subscription.flat_amount or 0.0) if (billing_model == "FLAT" and not subscription.plan) else None
+            student_rate = float(subscription.per_student_rate or 0.0) if (billing_model == "PER_STUDENT" and not subscription.plan) else None
+
+            bill_calc = SubscriptionBillingService.calculate_bill(
+                school=school,
+                plan=subscription.plan,
+                billing_cycle=billing_cycle,
+                months_count=months_count,
+                pricing_model=billing_model,
+                flat_override=flat_amt,
+                per_student_override=student_rate,
+            )
+
+            amount = Decimal(str(bill_calc["final_amount"]))
+
+            start_date = subscription.start_date or subscription.subscription_start_date or today
+            due_date = subscription.due_date or today
+            if due_date <= start_date:
+                period_end = start_date + relativedelta(months=months_count)
+            else:
+                period_end = due_date
+
+            existing_pending = SchoolInvoice.objects.filter(
+                school=school,
+                subscription=subscription,
+                status="PENDING",
+            ).order_by("-created_at").first()
+
+            if existing_pending:
+                invoice = existing_pending
+                invoice.billing_model = billing_model
+                invoice.billing_cycle = billing_cycle
+                invoice.student_count = bill_calc["student_count"]
+                invoice.unit_rate = Decimal(str(bill_calc["unit_rate"]))
+                invoice.subtotal = Decimal(str(bill_calc["subtotal"]))
+                invoice.tax_percentage = Decimal(str(bill_calc["tax_percentage"]))
+                invoice.tax_amount = Decimal(str(bill_calc["tax_amount"]))
+                invoice.discount_amount = Decimal(str(bill_calc["discount_amount"]))
+                invoice.total_amount = amount
+                invoice.billing_period_start = start_date
+                invoice.billing_period_end = period_end
+                invoice.due_date = due_date
+                invoice.notes = f"Subscription Invoice - {subscription.plan.name if subscription.plan else ('Flat Rate' if billing_model == 'FLAT' else 'Per Student')}"
+                invoice.save()
+            else:
+                inv_no = PaymentService.generate_invoice_number(school)
+                invoice = SchoolInvoice.objects.create(
+                    school=school,
+                    subscription=subscription,
+                    invoice_number=inv_no,
+                    billing_model=billing_model,
+                    billing_cycle=billing_cycle,
+                    student_count=bill_calc["student_count"],
+                    unit_rate=Decimal(str(bill_calc["unit_rate"])),
+                    subtotal=Decimal(str(bill_calc["subtotal"])),
+                    tax_percentage=Decimal(str(bill_calc["tax_percentage"])),
+                    tax_amount=Decimal(str(bill_calc["tax_amount"])),
+                    discount_amount=Decimal(str(bill_calc["discount_amount"])),
+                    total_amount=amount,
+                    billing_period_start=start_date,
+                    billing_period_end=period_end,
+                    due_date=due_date,
+                    status="PENDING",
+                    notes=f"Subscription Invoice - {subscription.plan.name if subscription.plan else ('Flat Rate' if billing_model == 'FLAT' else 'Per Student')}",
+                )
+
+                try:
+                    AuditLogService.log(
+                        action="INVOICE_GENERATED",
+                        school=school,
+                        user=request.user,
+                        new_values={"invoice_number": inv_no, "amount": float(amount)},
+                        notes=f"Invoice {inv_no} generated for {school.name}.",
+                    )
+                except Exception:
+                    pass
+
+            return Response({
+                "message": "Invoice generated successfully.",
+                "invoice": SchoolInvoiceSerializer(invoice).data,
+            })
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return Response(
+                {"detail": f"Failed to generate invoice: {str(e)}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
 
 class SchoolInvoiceViewSet(viewsets.ModelViewSet):
     queryset = SchoolInvoice.objects.select_related("school", "subscription").all()
@@ -539,7 +646,14 @@ class SchoolInvoiceViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         qs = super().get_queryset()
-        if getattr(user, "is_superuser", False) or getattr(user, "role", "") in ["superadmin", "super_admin"]:
+        user_role = str(getattr(user, "role", "") or "").lower().strip()
+        is_admin = bool(
+            getattr(user, "is_superuser", False)
+            or getattr(user, "is_staff", False)
+            or user_role in ["superadmin", "super_admin", "super admin"]
+            or (user.is_authenticated and user.groups.filter(name__in=["super_admin", "superadmin", "Super Admin"]).exists())
+        )
+        if is_admin:
             school_id = self.request.query_params.get("school")
             if school_id:
                 qs = qs.filter(school_id=school_id)

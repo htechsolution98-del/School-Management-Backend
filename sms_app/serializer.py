@@ -876,6 +876,10 @@ class CurrentUserProfileSerializer(serializers.ModelSerializer):
     def get_avatar(self, user):
         school = getattr(user, "school", None) or getattr(user, "managed_school", None)
         if not school:
+            staff = Staff.objects.filter(user=user).select_related("school").first()
+            if staff:
+                school = staff.school
+        if not school:
             student = Student.objects.filter(user=user).select_related("school").first()
             if student:
                 school = student.school
@@ -895,6 +899,10 @@ class CurrentUserProfileSerializer(serializers.ModelSerializer):
             return None
         school = getattr(user, "school", None) or getattr(user, "managed_school", None)
         if not school:
+            staff = Staff.objects.filter(user=user).select_related("school").first()
+            if staff:
+                school = staff.school
+        if not school:
             student = Student.objects.filter(user=user).select_related("school").first()
             if not student and getattr(user, "username", None):
                 student = Student.objects.filter(gr_no=user.username).select_related("school").first()
@@ -907,7 +915,19 @@ class CurrentUserProfileSerializer(serializers.ModelSerializer):
 
         if not school:
             return None
-        return {"id": school.id, "name": school.name, "slug": school.slug}
+
+        logo_url = None
+        if school.logo:
+            request = self.context.get("request")
+            url = school.logo.url
+            logo_url = request.build_absolute_uri(url) if request else url
+
+        return {
+            "id": school.id,
+            "name": school.name,
+            "slug": school.slug,
+            "logo": logo_url,
+        }
 
     def get_modules(self, user):
         return list(
@@ -6743,11 +6763,13 @@ class BudgetExpenseSerializer(serializers.ModelSerializer):
         fields = ["created_at", "id","budget","expense_type","amount","description"]
 
 class AnnouncementSerializer(serializers.ModelSerializer):
+    announcement_for = serializers.CharField(max_length=255, required=False, allow_null=True, allow_blank=True)
     created_by_name = serializers.SerializerMethodField()
     is_created_by_me = serializers.SerializerMethodField()
     can_manage = serializers.SerializerMethodField()
     target_class_name = serializers.SerializerMethodField()
     target_student_name = serializers.SerializerMethodField()
+    target_user_name = serializers.SerializerMethodField()
 
     class Meta:
         model = Announcement
@@ -6771,8 +6793,16 @@ class AnnouncementSerializer(serializers.ModelSerializer):
             "target_division",
             "target_student",
             "target_student_name",
+            "target_user",
+            "target_user_name",
         ]
         read_only_fields = ["school", "created_at", "created_by", "created_by_role"]
+
+    def get_target_user_name(self, obj):
+        if obj.target_user:
+            name = f"{obj.target_user.first_name} {obj.target_user.last_name}".strip()
+            return name or obj.target_user.username
+        return None
 
     def get_is_created_by_me(self, obj):
         request = self.context.get("request")

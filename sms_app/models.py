@@ -3800,6 +3800,13 @@ class BookCopy(models.Model):
     class Meta:
         db_table = "book_copy"
         unique_together = ('school', 'accession_no')
+        constraints = [
+            models.UniqueConstraint(
+                fields=['school', 'barcode'],
+                condition=models.Q(barcode__isnull=False) & ~models.Q(barcode=''),
+                name='unique_school_book_copy_barcode'
+            )
+        ]
 
 
 class LateBookFees(models.Model):
@@ -3852,6 +3859,7 @@ class BookIssued(models.Model):
 
     class Meta:
         db_table = "book_issued"
+        ordering = ["-id"]
         constraints = [models.CheckConstraint(
             condition=(models.Q(student__isnull=False, staff__isnull=True) | models.Q(student__isnull=True, staff__isnull=False)),
             name='library_loan_exactly_one_borrower',
@@ -3906,9 +3914,7 @@ class Announcement(models.Model):
     school=models.ForeignKey(School, on_delete=models.CASCADE)
     title=models.CharField(max_length=255)
     description=models.TextField()
-    announcement_for=models.CharField(max_length=50,choices=SENT_CHOICES, null=True,
-    blank=True,
-    default=None)
+    announcement_for=models.CharField(max_length=255, null=True, blank=True, default=None)
     is_everyone=models.BooleanField(default=False)
     priority=models.CharField(max_length=20, choices=PRIORITY_CHOICES, default="NORMAL")
     created_at = models.DateTimeField(auto_now_add=True)
@@ -3918,6 +3924,7 @@ class Announcement(models.Model):
     target_class = models.ForeignKey(SchoolClass, on_delete=models.SET_NULL, null=True, blank=True, related_name="class_announcements")
     target_division = models.CharField(max_length=50, null=True, blank=True)
     target_student = models.ForeignKey(Student, on_delete=models.SET_NULL, null=True, blank=True, related_name="targeted_announcements")
+    target_user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="targeted_user_announcements")
 
     
     class Meta:

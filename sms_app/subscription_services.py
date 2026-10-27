@@ -50,6 +50,7 @@ class SubscriptionBillingService:
         discount_amount: float = 0.0,
         flat_override: Optional[float] = None,
         per_student_override: Optional[float] = None,
+        pricing_model: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Calculates subscription billing details with support for multi-month stacking.
@@ -64,7 +65,7 @@ class SubscriptionBillingService:
             else cls.get_active_student_count(school)
         )
 
-        pricing_model = plan.pricing_model if plan else "FLAT"
+        pricing_model = pricing_model or (plan.pricing_model if plan else "FLAT")
 
         # Resolve effective months count
         effective_months = max(1, int(months_count or 1))
