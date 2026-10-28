@@ -1320,7 +1320,10 @@ class AcademicYearViewSet(ModelViewSet):
     http_method_names = ["get"]
 
     def get_queryset(self):
-        return AcademicYear.objects.filter(school=self.request.user.school)
+        user_school = getattr(self.request.user, 'school', None)
+        if user_school:
+            return AcademicYear.objects.filter(school=user_school).select_related('school')
+        return AcademicYear.objects.none()
 
     def perform_create(self, serializer):
         serializer.save(school=self.request.user.school)

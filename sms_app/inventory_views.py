@@ -1,17 +1,24 @@
 from rest_framework import viewsets, status
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.exceptions import PermissionDenied, ValidationError as DRFValidationError, ValidationError
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, SAFE_METHODS
 from django.db import transaction, IntegrityError
 from django.core.exceptions import ValidationError as DjangoValidationError
-from django.db.models import Sum, Count, Q, F, DecimalField, ExpressionWrapper
+from django.db.models import Sum, Count, Q, F, DecimalField, ExpressionWrapper, Prefetch, Value
+from django.db.models.functions import Coalesce
 from django.utils import timezone
 from django.utils.dateparse import parse_date
 from django.http import HttpResponse
 from decimal import Decimal
 import json
 from .inventory_reports import export_inventory_report_excel, export_inventory_report_pdf
+
+class StandardResultsSetPagination(PageNumberPagination):
+    page_size = 20
+    page_size_query_param = 'page_size'
+    max_page_size = 100
 
 
 
@@ -137,7 +144,7 @@ from .inventory_models import (
 from .inventory_serializers import (
     ItemCategorySerializer, ItemSizeSerializer, ItemColorSerializer,
     ItemPricingSerializer, ItemSerializer, SupplierSerializer,
-    PurchaseSerializer, PurchaseItemSerializer, StockTransactionSerializer,
+    PurchaseSerializer, PurchaseListSerializer, PurchaseItemSerializer, StockTransactionSerializer,
     StudentItemEntitlementSerializer, StudentItemIssueSerializer,
     ReplacementRequestSerializer, StudentItemReturnSerializer,
     StockAdjustmentSerializer, InventoryAuditLogSerializer, RequisitionSerializer
@@ -234,8 +241,18 @@ class BaseSchoolViewSet(viewsets.ModelViewSet):
 
 
 class ItemCategoryViewSet(BaseSchoolViewSet):
-    queryset = ItemCategory.objects.all().prefetch_related('items')
+    queryset = ItemCategory.objects.all()
     serializer_class = ItemCategorySerializer
+
+    def get_queryset(self):
+        school = self.get_school()
+        return ItemCategory.objects.filter(school=school).prefetch_related(
+            Prefetch(
+                'items',
+                queryset=Item.objects.filter(is_active=True).only('id', 'item_name', 'item_code', 'category_id'),
+                to_attr='active_items'
+            )
+        )
 
     def get_permissions(self):
         if self.request.method in SAFE_METHODS:
@@ -286,8 +303,18 @@ class ItemCategoryViewSet(BaseSchoolViewSet):
 
 
 class ItemSizeViewSet(BaseSchoolViewSet):
-    queryset = ItemSize.objects.all().prefetch_related('allowed_items')
+    queryset = ItemSize.objects.all()
     serializer_class = ItemSizeSerializer
+
+    def get_queryset(self):
+        school = self.get_school()
+        return ItemSize.objects.filter(school=school).prefetch_related(
+            Prefetch(
+                'allowed_items',
+                queryset=Item.objects.filter(is_active=True).only('id', 'item_name', 'item_code'),
+                to_attr='active_allowed_items'
+            )
+        )
 
     def get_permissions(self):
         if self.request.method in SAFE_METHODS:
@@ -342,8 +369,18 @@ class ItemSizeViewSet(BaseSchoolViewSet):
 
 
 class ItemColorViewSet(BaseSchoolViewSet):
-    queryset = ItemColor.objects.all().prefetch_related('allowed_items')
+    queryset = ItemColor.objects.all()
     serializer_class = ItemColorSerializer
+
+    def get_queryset(self):
+        school = self.get_school()
+        return ItemColor.objects.filter(school=school).prefetch_related(
+            Prefetch(
+                'allowed_items',
+                queryset=Item.objects.filter(is_active=True).only('id', 'item_name', 'item_code'),
+                to_attr='active_allowed_items'
+            )
+        )
 
     def get_permissions(self):
         if self.request.method in SAFE_METHODS:
@@ -470,7 +507,16 @@ class ItemViewSet(BaseSchoolViewSet):
         return [Isinventory()]
 
     def get_queryset(self):
-        qs = super().get_queryset().prefetch_related('allowed_sizes', 'allowed_colors')
+        school = self.get_school()
+        qs = Item.objects.filter(school=school).select_related('category').prefetch_related(
+            Prefetch('allowed_sizes', queryset=ItemSize.objects.all().only('id', 'name', 'size_type', 'is_active')),
+            Prefetch('allowed_colors', queryset=ItemColor.objects.all().only('id', 'name', 'hex_code', 'is_active'))
+        ).annotate(
+            annotated_stock=Coalesce(
+                Sum('stock_transactions__quantity'),
+                Value(0)
+            )
+        )
         category_id = self.request.query_params.get('category')
         is_active = self.request.query_params.get('is_active')
         search = self.request.query_params.get('search')
@@ -600,23 +646,59 @@ class SupplierViewSet(BaseSchoolViewSet):
     queryset = Supplier.objects.all()
     serializer_class = SupplierSerializer
 
+    def get_queryset(self):
+        school = self.get_school()
+        return Supplier.objects.filter(school=school).annotate(
+            annotated_purchases_count=Count('purchases', distinct=True),
+            annotated_purchases_amount=Coalesce(
+                Sum('purchases__grand_total', filter=Q(purchases__status='CONFIRMED')),
+                Value(Decimal('0.00')),
+                output_field=DecimalField(max_digits=12, decimal_places=2)
+            )
+        ).order_by('-id')
+
 
 class PurchaseViewSet(BaseSchoolViewSet):
     queryset = Purchase.objects.all()
     serializer_class = PurchaseSerializer
+    pagination_class = StandardResultsSetPagination
     http_method_names = ['get', 'post', 'head', 'options']
 
+    def get_serializer_class(self):
+        if self.action == 'list':
+            return PurchaseListSerializer
+        return PurchaseSerializer
+
     def get_queryset(self):
-        qs = super().get_queryset().select_related('supplier', 'academic_year').prefetch_related('items')
+        school = self.get_school()
+        qs = Purchase.objects.filter(school=school).select_related(
+            'supplier', 'academic_year', 'created_by'
+        ).annotate(
+            annotated_items_count=Count('items', distinct=True)
+        )
+        if self.action != 'list':
+            qs = qs.prefetch_related(
+                Prefetch(
+                    'items',
+                    queryset=PurchaseItem.objects.select_related('item', 'size', 'color')
+                )
+            )
         from_date = self.request.query_params.get('from_date')
         to_date = self.request.query_params.get('to_date')
         status_filter = self.request.query_params.get('status')
+        search = self.request.query_params.get('search')
         if from_date:
             qs = qs.filter(purchase_date__gte=from_date)
         if to_date:
             qs = qs.filter(purchase_date__lte=to_date)
         if status_filter:
             qs = qs.filter(status=status_filter)
+        if search:
+            search = search.strip()
+            qs = qs.filter(
+                Q(invoice_number__icontains=search) |
+                Q(supplier__supplier_name__icontains=search)
+            )
         return qs
 
     @transaction.atomic
@@ -866,6 +948,7 @@ class StudentItemIssueViewSet(BaseSchoolViewSet):
         return qs
 
 
+    @transaction.atomic
     def create(self, request, *args, **kwargs):
         try:
             school = self.get_school()
@@ -918,6 +1001,7 @@ class StudentItemIssueViewSet(BaseSchoolViewSet):
             return format_error_response(exc)
 
     @action(detail=False, methods=['post'], url_path='bulk-issue')
+    @transaction.atomic
     def bulk_issue(self, request):
         try:
             school = self.get_school()

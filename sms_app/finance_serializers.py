@@ -618,6 +618,13 @@ class StudentFeeSerializer(serializers.ModelSerializer):
         source="student.school_class_id", read_only=True
     )
     school_class_name = serializers.SerializerMethodField()
+    academic_year_name = serializers.CharField(
+        source="academic_year.name", read_only=True, default=None, allow_null=True
+    )
+    student_division = serializers.CharField(
+        source="student.division", read_only=True, default=None, allow_null=True
+    )
+    student_class_display = serializers.SerializerMethodField()
     due_date = serializers.DateField(required=False, allow_null=True)
     payable_amount = serializers.DecimalField(
         max_digits=10, decimal_places=2, read_only=True
@@ -648,12 +655,15 @@ class StudentFeeSerializer(serializers.ModelSerializer):
             "id",
             "school",
             "academic_year",
+            "academic_year_name",
             "student",
             "student_name",
             "is_rte_student",
             "is_rte_applicable",
             "school_class",
             "school_class_name",
+            "student_division",
+            "student_class_display",
             "feetype",
             "feetype_name",
             "fee_billing_cycle",
@@ -688,11 +698,14 @@ class StudentFeeSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = [
             "school",
+            "academic_year_name",
             "student_name",
             "is_rte_student",
             "is_rte_applicable",
             "school_class",
             "school_class_name",
+            "student_division",
+            "student_class_display",
             "feetype_name",
             "fee_billing_cycle",
             "payable_amount",
@@ -714,6 +727,32 @@ class StudentFeeSerializer(serializers.ModelSerializer):
     def get_school_class_name(self, obj):
         if obj.student and obj.student.school_class:
             return obj.student.school_class.school_class
+        return None
+
+    def get_student_class_display(self, obj):
+        if not obj.student:
+            return None
+        cls_name = (
+            obj.student.school_class.school_class
+            if obj.student and obj.student.school_class
+            else ""
+        )
+        division = obj.student.division or ""
+        if cls_name and division:
+            cls_prefix = (
+                cls_name
+                if cls_name.lower().startswith("class")
+                else f"Class {cls_name}"
+            )
+            return f"{cls_prefix} - {division} Section"
+        elif cls_name:
+            return (
+                cls_name
+                if cls_name.lower().startswith("class")
+                else f"Class {cls_name}"
+            )
+        elif division:
+            return f"{division} Section"
         return None
 
     def get_payments(self, obj):
