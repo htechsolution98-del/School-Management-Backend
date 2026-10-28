@@ -3270,20 +3270,23 @@ class HomeworkSubmissionViewSet(ModelViewSet):
     queryset = HomeworkSubmissions.objects.all()
 
     def get_permissions(self):
+        user = getattr(self.request, "user", None)
+        if not user or not user.is_authenticated:
+            return [IsAuthenticated()]
         if self.action in ["list", "retrieve"]:
-            user = self.request.user
             if hasattr(user, "staff") or Staff.objects.filter(user=user).exists():
                 return [Isteacher()]
             return [IsAuthenticated()]
         elif self.action in ["update", "partial_update"]:
-            user = self.request.user
             if hasattr(user, "staff") or Staff.objects.filter(user=user).exists():
                 return [Isteacher()]
             return [Isstudent()]
         return [Isstudent()]
 
     def get_queryset(self):
-        user = self.request.user
+        user = getattr(self.request, "user", None)
+        if not user or not user.is_authenticated:
+            return HomeworkSubmissions.objects.none()
         homework_id = self.request.query_params.get("homework")
 
         student = Student.objects.filter(user=user).first()

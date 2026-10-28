@@ -3930,6 +3930,19 @@ class Announcement(models.Model):
     class Meta:
          db_table = "announcement"
 
+
+class AnnouncementRead(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="read_announcements")
+    announcement = models.ForeignKey(Announcement, on_delete=models.CASCADE, related_name="reads")
+    read_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "announcement_read"
+        unique_together = ("user", "announcement")
+
+    def __str__(self):
+        return f"User {self.user_id} read Announcement {self.announcement_id}"
+
 class RTEDocument(models.Model):
     student = models.ForeignKey(Student, on_delete=models.CASCADE, related_name="rte_documents", null=True, blank=True)
     admission = models.ForeignKey(Admission, on_delete=models.CASCADE, related_name="rte_documents", null=True, blank=True)

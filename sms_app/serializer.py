@@ -6770,6 +6770,7 @@ class AnnouncementSerializer(serializers.ModelSerializer):
     target_class_name = serializers.SerializerMethodField()
     target_student_name = serializers.SerializerMethodField()
     target_user_name = serializers.SerializerMethodField()
+    is_read = serializers.SerializerMethodField()
 
     class Meta:
         model = Announcement
@@ -6795,8 +6796,19 @@ class AnnouncementSerializer(serializers.ModelSerializer):
             "target_student_name",
             "target_user",
             "target_user_name",
+            "is_read",
         ]
         read_only_fields = ["school", "created_at", "created_by", "created_by_role"]
+
+    def get_is_read(self, obj):
+        request = self.context.get("request")
+        if not request or not request.user or not request.user.is_authenticated:
+            return False
+        read_ids = getattr(request, "_read_announcement_ids", None)
+        if read_ids is not None:
+            return obj.id in read_ids
+        from .models import AnnouncementRead
+        return AnnouncementRead.objects.filter(user=request.user, announcement=obj).exists()
 
     def get_target_user_name(self, obj):
         if obj.target_user:
