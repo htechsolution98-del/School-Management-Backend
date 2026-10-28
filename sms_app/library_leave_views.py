@@ -20,6 +20,12 @@ from rest_framework.decorators import action
 from uuid import uuid4
 from django.db.models import Count, Q, Sum
 from django.db.models.functions import TruncMonth
+from sms_app.library_cache import (
+    get_library_cached_data,
+    set_library_cached_data,
+    invalidate_library_school_cache,
+    CachedLibraryViewSetMixin,
+)
 
 
 
@@ -62,7 +68,10 @@ class IsLibrarian(BasePermission):
         staff = Staff.objects.filter(user=user).first()
         if staff:
             cat = str(getattr(staff, "category", "") or "").strip().upper()
-            if cat in ["LIBRARIAN", "PRINCIPAL", "ADMIN"]:
+            des = str(getattr(staff, "designation", "") or "").strip().upper()
+            if cat in ["LIBRARIAN", "PRINCIPAL", "ADMIN"] or des in ["LIBRARIAN", "PRINCIPAL", "ADMIN"]:
+                return True
+            if "LIBRARIAN" in des or "LIBRARIAN" in cat:
                 return True
             if role == "LIBRARIAN":
                 return True
@@ -2269,7 +2278,8 @@ def _get_or_create_library_setting(school):
     return setting
 
 
-class LibrarySettingViewSet(ModelViewSet):
+class LibrarySettingViewSet(CachedLibraryViewSetMixin, ModelViewSet):
+    cache_scope = "settings"
     serializer_class = LibrarySettingSerializer
     permission_classes = [IsAuthenticated, IsLibrarian]
 
@@ -2284,6 +2294,12 @@ class LibrarySettingViewSet(ModelViewSet):
         staff = Staff.objects.filter(user=request.user).first()
         if not staff:
             raise PermissionDenied("You are not registered as staff.")
+        
+        if request.method == "GET":
+            cached = get_library_cached_data(staff.school.id, "my_setting")
+            if cached is not None:
+                return Response(cached)
+
         setting = _get_or_create_library_setting(staff.school)
 
         if request.method in ["POST", "PUT", "PATCH"]:
@@ -2299,13 +2315,16 @@ class LibrarySettingViewSet(ModelViewSet):
                     "grace_period_days": serializer.validated_data.get("grace_period_days", setting.grace_period_days),
                 }
             )
+            invalidate_library_school_cache(staff.school.id)
             return Response(serializer.data, status=status.HTTP_200_OK)
 
         serializer = self.get_serializer(setting)
+        set_library_cached_data(staff.school.id, "my_setting", serializer.data)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
-class BookCategoryViewSet(ModelViewSet):
+class BookCategoryViewSet(CachedLibraryViewSetMixin, ModelViewSet):
+    cache_scope = "categories"
     serializer_class = BookCategorySerializer
     permission_classes = [IsAuthenticated, IsLibrarian]
 
@@ -2374,7 +2393,8 @@ class BookCategoryViewSet(ModelViewSet):
         }, status=status.HTTP_200_OK)
 
 
-class AuthorViewSet(ModelViewSet):
+class AuthorViewSet(CachedLibraryViewSetMixin, ModelViewSet):
+    cache_scope = "authors"
     serializer_class = AuthorSerializer
     permission_classes = [IsAuthenticated, IsLibrarian]
 
@@ -2443,7 +2463,8 @@ class AuthorViewSet(ModelViewSet):
         }, status=status.HTTP_200_OK)
 
 
-class PublisherViewSet(ModelViewSet):
+class PublisherViewSet(CachedLibraryViewSetMixin, ModelViewSet):
+    cache_scope = "publishers"
     serializer_class = PublisherSerializer
     permission_classes = [IsAuthenticated, IsLibrarian]
 
@@ -2512,7 +2533,8 @@ class PublisherViewSet(ModelViewSet):
         }, status=status.HTTP_200_OK)
 
 
-class RackViewSet(ModelViewSet):
+class RackViewSet(CachedLibraryViewSetMixin, ModelViewSet):
+    cache_scope = "racks"
     serializer_class = RackSerializer
     permission_classes = [IsAuthenticated, IsLibrarian]
 
@@ -2599,7 +2621,8 @@ class RackViewSet(ModelViewSet):
         }, status=status.HTTP_200_OK)
 
 
-class ShelfViewSet(ModelViewSet):
+class ShelfViewSet(CachedLibraryViewSetMixin, ModelViewSet):
+    cache_scope = "shelves"
     serializer_class = ShelfSerializer
     permission_classes = [IsAuthenticated, IsLibrarian]
 
@@ -2750,7 +2773,8 @@ def create_unique_book_copy(
     return copy
 
 
-class BookCopyViewSet(ModelViewSet):
+class BookCopyViewSet(CachedLibraryViewSetMixin, ModelViewSet):
+    cache_scope = "copies"
     serializer_class = BookCopySerializer
     permission_classes = [IsAuthenticated, IsLibrarian]
 
@@ -2876,7 +2900,8 @@ class BookCopyViewSet(ModelViewSet):
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
-class BookManageView(ModelViewSet):
+class BookManageView(CachedLibraryViewSetMixin, ModelViewSet):
+    cache_scope = "books"
     serializer_class = BookManageSerializer
     permission_classes = [IsAuthenticated, IsLibrarian]
 
@@ -3071,7 +3096,8 @@ class LateBookFeesViews(ModelViewSet):
         serializer.save(school=staff.school)
 
 
-class BookIssuedView(ModelViewSet):
+class BookIssuedView(CachedLibraryViewSetMixin, ModelViewSet):
+    cache_scope = "loans"
     serializer_class = BookIssuedSerializer
     permission_classes = [IsAuthenticated, IsLibrarian]
 
@@ -3756,7 +3782,8 @@ def _finalize_return(issued: BookIssued, condition="GOOD", remarks="", custom_da
             waiting_reservation.save()
 
 
-class BookReservationViewSet(ModelViewSet):
+class BookReservationViewSet(CachedLibraryViewSetMixin, ModelViewSet):
+    cache_scope = "reservations"
     serializer_class = BookReservationSerializer
     permission_classes = [IsAuthenticated]
 
@@ -3924,25 +3951,198 @@ class ReportsView(ViewSet):
     """
     permission_classes = [IsAuthenticated, IsLibrarian]
  
+    @action(detail=False, methods=["get"], url_path="dashboard-summary")
+    def dashboard_summary(self, request):
+        """Single high-speed aggregated summary endpoint for the Librarian Dashboard."""
+        staff = Staff.objects.filter(user=request.user).first()
+        if staff is None:
+            raise PermissionDenied("You are not registered as staff for any school.")
+
+        cached = get_library_cached_data(staff.school.id, "dashboard_summary")
+        if cached is not None:
+            return Response(cached)
+
+        now = timezone.now()
+        school = staff.school
+
+        # 1. Titles & Physical Copies
+        total_titles = Book.objects.filter(school=school).count()
+        copies_qs = BookCopy.objects.filter(school=school, is_active=True)
+        copies_status = copies_qs.values("status").annotate(count=Count("id"))
+        status_map = {row["status"]: row["count"] for row in copies_status}
+        total_physical_copies = sum(status_map.values())
+        available_copies = status_map.get("AVAILABLE", 0)
+
+        # 2. Loans & Overdues
+        issued_loans_qs = BookIssued.objects.filter(school=school, status="ISSUED")
+        active_loans_count = issued_loans_qs.count()
+
+        fee_policy = LateBookFees.objects.filter(school=school).first()
+        grace_days = fee_policy.grace_period_days if fee_policy else 0
+
+        overdue_count = 0
+        overdue_loans_sample = []
+        for loan in issued_loans_qs.select_related("book", "student", "staff").only(
+            "id", "due_date", "book__title", "student__name", "student__surname", "student__gr_no", "staff__name"
+        ):
+            grace_deadline = loan.due_date + timezone.timedelta(days=grace_days)
+            if now > grace_deadline:
+                overdue_count += 1
+                if len(overdue_loans_sample) < 4:
+                    overdue_loans_sample.append({
+                        "id": loan.id,
+                        "book_title": loan.book.title if loan.book else "Untitled",
+                        "student_name": f"{loan.student.name} {loan.student.surname or ''}".strip() if loan.student else None,
+                        "staff_name": loan.staff.name if loan.staff else None,
+                        "student_gr_no": loan.student.gr_no if loan.student else "N/A",
+                        "due_date": loan.due_date.strftime("%Y-%m-%d") if loan.due_date else "",
+                    })
+
+        # 3. Reservations
+        reservations_qs = BookReservation.objects.filter(school=school)
+        waiting_reservations_count = reservations_qs.filter(status="WAITING").count()
+        available_holds_qs = reservations_qs.filter(status="AVAILABLE").select_related("book", "student")
+        available_holds_count = available_holds_qs.count()
+        available_holds_sample = [
+            {
+                "id": r.id,
+                "book_title": r.book.title if r.book else "Untitled",
+                "student_name": f"{r.student.name} {r.student.surname or ''}".strip() if r.student else "Student",
+            }
+            for r in available_holds_qs[:4]
+        ]
+
+        # 4. Lost & Damaged
+        damaged_count = status_map.get("DAMAGED", 0)
+        lost_count = status_map.get("LOST", 0)
+        lost_damaged_count = damaged_count + lost_count
+
+        # 5. Dues & Fines
+        pending_fines = BookIssued.objects.filter(school=school, is_fine_paid=False, total_fine__gt=0)
+        total_pending_fine = sum(max(Decimal("0.00"), f.total_fine - f.fine_paid_amount) for f in pending_fines.only("total_fine", "fine_paid_amount"))
+        collected_fines = BookIssued.objects.filter(school=school).aggregate(total=Sum("fine_paid_amount"))["total"] or Decimal("0.00")
+
+        # 6. Clearance Pending count
+        clearance_count = BookIssued.objects.filter(
+            school=school, student__isnull=False
+        ).filter(
+            Q(status="ISSUED") | Q(is_fine_paid=False, total_fine__gt=0)
+        ).values("student_id").distinct().count()
+
+        # 7. Recent Transactions (last 5)
+        recent_qs = BookIssued.objects.filter(school=school).select_related("book", "student", "staff").order_by("-id")[:5]
+        recent_transactions = [
+            {
+                "id": l.id,
+                "book_title": l.book.title if l.book else "Untitled",
+                "borrower_name": (f"{l.student.name} {l.student.surname or ''}".strip() if l.student else (l.staff.name if l.staff else "Unknown")),
+                "student_name": f"{l.student.name} {l.student.surname or ''}".strip() if l.student else None,
+                "staff_name": l.staff.name if l.staff else None,
+                "student_gr_no": l.student.gr_no if l.student else "N/A",
+                "borrower_type": "student" if l.student else "staff",
+                "status": l.status,
+                "book_issued_date": l.book_issued_date.strftime("%Y-%m-%d") if l.book_issued_date else "",
+                "due_date": l.due_date.strftime("%Y-%m-%d") if l.due_date else "",
+                "actual_return_date": l.actual_return_date.strftime("%Y-%m-%d") if l.actual_return_date else None,
+                "fine_paid_amount": str(l.fine_paid_amount),
+                "total_fine": str(l.total_fine),
+                "is_fine_paid": l.is_fine_paid,
+            }
+            for l in recent_qs
+        ]
+
+        # 8. Most Borrowed (top 5)
+        most_borrowed_qs = (
+            BookIssued.objects.filter(school=school)
+            .values("book__id", "book__title", "book__author")
+            .annotate(times_issued=Count("id"))
+            .order_by("-times_issued")[:5]
+        )
+        most_borrowed_sample = [
+            {
+                "book_id": row["book__id"],
+                "title": row["book__title"] or "Untitled",
+                "author": row["book__author"] or "Unknown",
+                "times_issued": row["times_issued"],
+            }
+            for row in most_borrowed_qs
+        ]
+
+        # 9. Category Trends (top 5)
+        category_trends_qs = (
+            Book.objects.filter(school=school)
+            .values("category")
+            .annotate(total_books=Count("id"))
+            .order_by("-total_books")[:5]
+        )
+        category_trends_sample = [
+            {
+                "category": row["category"] or "General",
+                "total_books": row["total_books"],
+            }
+            for row in category_trends_qs
+        ]
+
+        # 10. Stock audit overview
+        total_copies_sum = BookCopy.objects.filter(school=school, is_active=True).aggregate(
+            total_val=Sum("purchase_price")
+        )["total_val"] or Decimal("0.00")
+        inventory_audit_overview = {
+            "total_copies": total_physical_copies,
+            "available": available_copies,
+            "under_repair": status_map.get("UNDER_REPAIR", 0),
+            "lost": lost_count,
+            "damaged": damaged_count,
+            "total_value": str(total_copies_sum),
+        }
+
+        data = {
+            "titles": total_titles,
+            "total_physical_copies": total_physical_copies,
+            "available_copies": available_copies,
+            "active_loans_count": active_loans_count,
+            "overdue_count": overdue_count,
+            "overdue_loans_sample": overdue_loans_sample,
+            "waiting_reservations_count": waiting_reservations_count,
+            "available_holds_count": available_holds_count,
+            "available_holds_sample": available_holds_sample,
+            "lost_damaged_count": lost_damaged_count,
+            "total_fines_due": str(total_pending_fine),
+            "total_fines_settled": str(collected_fines),
+            "pending_clearance_count": clearance_count,
+            "recent_transactions": recent_transactions,
+            "most_borrowed_sample": most_borrowed_sample,
+            "category_trends_sample": category_trends_sample,
+            "inventory_audit_overview": inventory_audit_overview,
+        }
+
+        set_library_cached_data(staff.school.id, "dashboard_summary", data, timeout=600)
+        return Response(data)
+
     @action(detail=False, methods=["get"])
     def most_borrowed(self, request):
         """Ranks books by total times issued (all-time, ISSUED + RETURNED)."""
         staff = Staff.objects.filter(user=request.user).first()
         if staff is None:
             raise PermissionDenied("You are not registered as staff for any school.")
- 
+
+        limit_param = request.query_params.get("limit", "10")
+        cached = get_library_cached_data(staff.school.id, "report_most_borrowed", f"limit_{limit_param}")
+        if cached is not None:
+            return Response(cached)
+
         try:
-            limit = int(request.query_params.get("limit", 10))
+            limit = int(limit_param)
         except (TypeError, ValueError):
             limit = 10
         limit = max(1, min(limit, 100))  # sane bounds against abuse
- 
+
         qs = (
             Book.objects.filter(school=staff.school)
             .annotate(times_issued=Count("bookissued"))
             .order_by("-times_issued", "title")[:limit]
         )
- 
+
         data = [
             {
                 "book_id": b.id,
@@ -3955,33 +4155,45 @@ class ReportsView(ViewSet):
             }
             for b in qs
         ]
-        return Response({"results": data})
- 
+        res = {"results": data}
+        set_library_cached_data(staff.school.id, "report_most_borrowed", res, f"limit_{limit_param}", timeout=600)
+        return Response(res)
+
     @action(detail=False, methods=["get"])
     def category_trends(self, request):
         """Total issues per category, most popular first."""
         staff = Staff.objects.filter(user=request.user).first()
         if staff is None:
             raise PermissionDenied("You are not registered as staff for any school.")
- 
+
+        cached = get_library_cached_data(staff.school.id, "report_category_trends")
+        if cached is not None:
+            return Response(cached)
+
         qs = (
             BookIssued.objects.filter(school=staff.school)
             .values("book__category")
             .annotate(times_issued=Count("id"))
             .order_by("-times_issued")
         )
- 
+
         data = [
             {"category": row["book__category"], "times_issued": row["times_issued"]}
             for row in qs
         ]
-        return Response({"results": data})
+        res = {"results": data}
+        set_library_cached_data(staff.school.id, "report_category_trends", res, timeout=600)
+        return Response(res)
  
     @action(detail=False, methods=["get"])
     def overdue_and_late(self, request):
         staff = Staff.objects.filter(user=request.user).first()
         if staff is None:
             raise PermissionDenied("You are not registered as staff for any school.")
+
+        cached = get_library_cached_data(staff.school.id, "report_overdue_and_late")
+        if cached is not None:
+            return Response(cached)
 
         now = timezone.now()
         setting = _get_or_create_library_setting(staff.school)
@@ -4036,7 +4248,7 @@ class ReportsView(ViewSet):
         total_late = returned_qs.filter(is_late=True).count()
         late_rate_percent = round((total_late / total_returned) * 100, 1) if total_returned else 0.0
 
-        return Response({
+        res = {
             "currently_overdue": overdue_list,
             "currently_overdue_count": len(overdue_list),
             "per_day_rate": float(per_day_fee),
@@ -4046,7 +4258,9 @@ class ReportsView(ViewSet):
                 "total_late_returns": total_late,
                 "late_rate_percent": late_rate_percent,
             },
-        })
+        }
+        set_library_cached_data(staff.school.id, "report_overdue_and_late", res, timeout=600)
+        return Response(res)
  
     @action(detail=False, methods=["get"])
     def fee_collection(self, request):
@@ -4163,7 +4377,7 @@ class ReportsView(ViewSet):
             for row in monthly
         ]
 
-        return Response({
+        res = {
             "total_fees_collected": str(total_fees_collected),
             "total_late_collected": str(total_late_collected),
             "total_damage_collected": str(total_damage_collected),
@@ -4172,7 +4386,9 @@ class ReportsView(ViewSet):
             "pending_dues": pending_dues_list,
             "damage_records": damage_records_list,
             "monthly_breakdown": monthly_data,
-        })
+        }
+        set_library_cached_data(staff.school.id, "report_fee_collection", res, timeout=600)
+        return Response(res)
  
     @action(detail=False, methods=["get"])
     def student_activity(self, request):
@@ -4180,13 +4396,18 @@ class ReportsView(ViewSet):
         staff = Staff.objects.filter(user=request.user).first()
         if staff is None:
             raise PermissionDenied("You are not registered as staff for any school.")
- 
+
+        limit_param = request.query_params.get("limit", "20")
+        cached = get_library_cached_data(staff.school.id, "report_student_activity", f"limit_{limit_param}")
+        if cached is not None:
+            return Response(cached)
+
         try:
-            limit = int(request.query_params.get("limit", 20))
+            limit = int(limit_param)
         except (TypeError, ValueError):
             limit = 20
         limit = max(1, min(limit, 200))
- 
+
         qs = (
             BookIssued.objects.filter(school=staff.school, student__isnull=False)
             .values("student_id", "student__name")
@@ -4197,7 +4418,7 @@ class ReportsView(ViewSet):
             )
             .order_by("-total_loans")[:limit]
         )
- 
+
         data = [
             {
                 "student_id": row["student_id"],
@@ -4208,7 +4429,9 @@ class ReportsView(ViewSet):
             }
             for row in qs
         ]
-        return Response({"results": data})
+        res = {"results": data}
+        set_library_cached_data(staff.school.id, "report_student_activity", res, f"limit_{limit_param}", timeout=600)
+        return Response(res)
 
     @action(detail=False, methods=["get"], url_path="inventory-audit")
     def inventory_audit(self, request):
@@ -4216,6 +4439,10 @@ class ReportsView(ViewSet):
         staff = Staff.objects.filter(user=request.user).first()
         if staff is None:
             raise PermissionDenied("You are not registered as staff for any school.")
+
+        cached = get_library_cached_data(staff.school.id, "report_inventory_audit")
+        if cached is not None:
+            return Response(cached)
 
         total_titles = Book.objects.filter(school=staff.school).count()
         copies = BookCopy.objects.filter(school=staff.school)
@@ -4238,7 +4465,7 @@ class ReportsView(ViewSet):
         total_pending_fine = sum(max(Decimal("0.00"), f.total_fine - f.fine_paid_amount) for f in pending_fines)
         collected_fines = BookIssued.objects.filter(school=staff.school).aggregate(total=Sum("fine_paid_amount"))["total"] or Decimal("0.00")
 
-        return Response({
+        res = {
             "total_titles": total_titles,
             "total_physical_copies": active_copies.count(),
             "available_copies": status_map.get("AVAILABLE", 0),
@@ -4252,7 +4479,9 @@ class ReportsView(ViewSet):
             "total_pending_fines": str(total_pending_fine),
             "total_collected_fines": str(collected_fines),
             "borrowers_with_pending_fines_count": pending_fines.values("student_id", "staff_id").distinct().count(),
-        })
+        }
+        set_library_cached_data(staff.school.id, "report_inventory_audit", res, timeout=600)
+        return Response(res)
 
 
 class LibraryClearanceView(ViewSet):
@@ -4274,6 +4503,10 @@ class LibraryClearanceView(ViewSet):
             if not student:
                 raise NotFound("Student not found.")
         elif staff and not student_id:
+            cached = get_library_cached_data(staff.school.id, "library_clearance_all")
+            if cached is not None:
+                return Response(cached)
+
             # Overview of all students who currently have pending library dues or unreturned books
             active_issues = BookIssued.objects.filter(school=staff.school, status="ISSUED", student__isnull=False).select_related("student", "book")
             unpaid_fines = BookIssued.objects.filter(school=staff.school, is_fine_paid=False, total_fine__gt=0, student__isnull=False).select_related("student", "book")
@@ -4316,10 +4549,12 @@ class LibraryClearanceView(ViewSet):
             for item in data:
                 item["pending_fine_total"] = str(item["pending_fine_total"])
 
-            return Response({
+            res = {
                 "pending_clearance_students_count": len(data),
                 "results": data
-            })
+            }
+            set_library_cached_data(staff.school.id, "library_clearance_all", res, timeout=600)
+            return Response(res)
         else:
             raise ValidationError("student_id query parameter is required.")
 
