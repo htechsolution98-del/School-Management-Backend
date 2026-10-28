@@ -105,14 +105,20 @@ TEMPLATES = [
 
 
 import urllib.parse
+import socket
 
-REDIS_URL = os.getenv("REDIS_URL")
+REDIS_URL = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/1")
 use_redis = False
 if REDIS_URL:
     try:
         parsed_redis = urllib.parse.urlparse(REDIS_URL)
-        if parsed_redis.port and isinstance(parsed_redis.port, int):
+        host = parsed_redis.hostname or "127.0.0.1"
+        port = parsed_redis.port or 6379
+        s = socket.socket()
+        s.settimeout(0.3)
+        if s.connect_ex((host, port)) == 0:
             use_redis = True
+        s.close()
     except Exception:
         use_redis = False
 
@@ -125,19 +131,31 @@ if use_redis:
             },
         },
     }
+    CACHES = {
+        "default": {
+            "BACKEND": "django_redis.cache.RedisCache",
+            "LOCATION": REDIS_URL,
+            "OPTIONS": {
+                "CLIENT_CLASS": "django_redis.client.DefaultClient",
+                "IGNORE_EXCEPTIONS": True,
+            },
+            "TIMEOUT": 300,
+            "KEY_PREFIX": "sms_cache",
+        }
+    }
 else:
     CHANNEL_LAYERS = {
         "default": {
             "BACKEND": "channels.layers.InMemoryChannelLayer"
         }
     }
-    
-CACHES = {
-    "default": {
-        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
-        "LOCATION": "unique-snowflake",
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "sms-local-mem-cache",
+            "TIMEOUT": 300,
+        }
     }
-}
 
 from datetime import timedelta
 

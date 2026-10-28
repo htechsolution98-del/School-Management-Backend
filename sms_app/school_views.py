@@ -848,6 +848,12 @@ class AnnouncementView(APIView):
         if not school:
             return Response([], status=status.HTTP_200_OK)
 
+        user = request.user
+        if user and user.is_authenticated:
+            request._read_announcement_ids = set(
+                AnnouncementRead.objects.filter(user=user).values_list("announcement_id", flat=True)
+            )
+
         if id:
             try:
                 announcement = Announcement.objects.get(
@@ -863,7 +869,6 @@ class AnnouncementView(APIView):
             serializer = AnnouncementSerializer(announcement, context={"request": request})
             return Response(serializer.data)
 
-        user = request.user
         role = str(getattr(user, "role", "") or "").strip().upper()
 
         # Management roles see all school announcements, plus direct notifications targeted to them
@@ -1308,6 +1313,51 @@ class AnnouncementRecipientsView(APIView):
                     })
 
         return Response(results)
+
+
+class AnnouncementReadIdsView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        read_ids = list(
+            AnnouncementRead.objects.filter(user=user).values_list("announcement_id", flat=True)
+        )
+        return Response({"read_ids": read_ids}, status=status.HTTP_200_OK)
+
+
+class AnnouncementMarkReadView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, id=None):
+        user = request.user
+        school = getattr(user, "school", None)
+
+        announcement_id = id or request.data.get("id") or request.data.get("announcement_id")
+        ids = request.data.get("ids", [])
+        mark_all = request.data.get("all", False)
+
+        if mark_all:
+            announcements_qs = Announcement.objects.filter(school=school) if school else Announcement.objects.all()
+            announcement_ids = list(announcements_qs.values_list("id", flat=True))
+            reads = [AnnouncementRead(user=user, announcement_id=aid) for aid in announcement_ids]
+            AnnouncementRead.objects.bulk_create(reads, ignore_conflicts=True)
+            return Response({"message": f"Marked {len(announcement_ids)} announcements as read.", "read_ids": announcement_ids}, status=status.HTTP_200_OK)
+
+        target_ids = []
+        if announcement_id:
+            target_ids.append(announcement_id)
+        if isinstance(ids, list):
+            target_ids.extend(ids)
+
+        target_ids = list(set([int(tid) for tid in target_ids if tid is not None and str(tid).isdigit()]))
+        if not target_ids:
+            return Response({"error": "No valid announcement ID provided."}, status=status.HTTP_400_BAD_REQUEST)
+
+        reads = [AnnouncementRead(user=user, announcement_id=tid) for tid in target_ids]
+        AnnouncementRead.objects.bulk_create(reads, ignore_conflicts=True)
+
+        return Response({"message": "Marked as read successfully.", "read_ids": target_ids}, status=status.HTTP_200_OK)
 
 
 class HolidayCalendarView(APIView):
