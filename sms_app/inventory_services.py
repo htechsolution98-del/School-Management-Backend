@@ -220,6 +220,56 @@ class InventoryService:
                 entitlement.status = 'PARTIALLY_ISSUED'
             entitlement.save()
 
+        # 6. Automatic Fee Ledger Integration for SEPARATE_CHARGE items
+        if effective_charging_type == 'SEPARATE_CHARGE':
+            total_fee_amount = charged_amount if (charged_amount is not None and charged_amount > Decimal('0.00')) else (unit_selling_price * quantity)
+            if total_fee_amount > Decimal('0.00'):
+                from .models import FeeType, StudentFee, FeeWiseClass
+
+                # Check if item pricing specified an included_fee_type or look for an existing Inventory FeeType
+                feetype = None
+                if active_pricing and active_pricing.included_fee_type:
+                    feetype = active_pricing.included_fee_type
+                else:
+                    feetype = FeeType.objects.filter(school=school, name__iexact="Inventory Fee").first()
+                    if not feetype:
+                        feetype = FeeType.objects.filter(school=school, name__icontains="Inventory").first()
+                    if not feetype:
+                        feetype = FeeType.objects.create(
+                            school=school,
+                            name="Inventory Fee",
+                            billing_cycle="single",
+                            is_rte_applicable=True
+                        )
+
+                fee_wise_class = None
+                if student.school_class_id and feetype:
+                    fee_wise_class = FeeWiseClass.objects.filter(
+                        school=school, feetype=feetype, school_class_id=student.school_class_id
+                    ).first()
+
+                description = f"Inventory Issue: {item.item_name}"
+                if size and getattr(size, 'size_name', None):
+                    description += f" (Size {size.size_name})"
+                if color and getattr(color, 'color_name', None):
+                    description += f" (Color {color.color_name})"
+
+                StudentFee.objects.create(
+                    school=school,
+                    academic_year=academic_year,
+                    student=student,
+                    feetype=feetype,
+                    fee_wise_class=fee_wise_class,
+                    amount=total_fee_amount,
+                    discount_amount=Decimal('0.00'),
+                    discount_reference=description[:255],
+                    discount_note=description,
+                    billing_period=f"INV-{issue_record.id}"[:20],
+                    transaction_id=f"INV-ISSUE-{issue_record.id}"[:255],
+                    status="pending",
+                    due_date=timezone.now().date()
+                )
+
         return issue_record
 
     @classmethod

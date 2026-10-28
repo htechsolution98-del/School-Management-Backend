@@ -14,6 +14,75 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 
 
+def resolve_school_logo_image(school, max_height=50.0, max_width=75.0):
+    """
+    Dynamically loads the school logo image for ReportLab.
+    Supports FieldFile storage (Cloudinary, local, S3), local file paths, and remote URLs.
+    Preserves aspect ratio and constrains to max_height (default 50px).
+    Returns (RLImage, width_points, height_points) or (None, 0, 0).
+    """
+    if not school or not getattr(school, 'logo', None):
+        return None, 0, 0
+
+    img_bytes = None
+    # 1. Try reading from Django FieldFile storage (Cloudinary, S3, filesystem)
+    try:
+        if hasattr(school.logo, 'read'):
+            school.logo.open()
+            img_bytes = school.logo.read()
+    except Exception:
+        img_bytes = None
+
+    # 2. Try reading from local file path if available
+    if not img_bytes:
+        try:
+            if hasattr(school.logo, 'path'):
+                try:
+                    p = school.logo.path
+                    if p and os.path.exists(p):
+                        with open(p, 'rb') as f:
+                            img_bytes = f.read()
+                except (NotImplementedError, AttributeError):
+                    pass
+        except Exception:
+            img_bytes = None
+
+    # 3. Try reading from URL if remote URL (e.g. Cloudinary HTTPS link)
+    if not img_bytes:
+        try:
+            url = getattr(school.logo, 'url', None)
+            if url and str(url).startswith('http'):
+                import urllib.request
+                req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    img_bytes = resp.read()
+        except Exception:
+            img_bytes = None
+
+    if not img_bytes:
+        return None, 0, 0
+
+    try:
+        from PIL import Image as PILImage
+        pil_img = PILImage.open(io.BytesIO(img_bytes))
+        orig_w, orig_h = pil_img.size
+        if orig_w <= 0 or orig_h <= 0:
+            return None, 0, 0
+
+        aspect = float(orig_w) / float(orig_h)
+        target_h = float(max_height)
+        target_w = target_h * aspect
+        if target_w > max_width:
+            target_w = float(max_width)
+            target_h = target_w / aspect
+
+        img_buf = io.BytesIO(img_bytes)
+        rl_img = RLImage(img_buf, width=target_w, height=target_h)
+        return rl_img, target_w, target_h
+    except Exception:
+        return None, 0, 0
+
+
 def generate_purchase_invoice_pdf(purchase):
     """
     Generate a professional Purchase Invoice / Receipt PDF using ReportLab.
@@ -146,8 +215,15 @@ def generate_purchase_invoice_pdf(purchase):
     )
 
     story: list[Flowable] = []
-    school = purchase.school
-    supplier = purchase.supplier
+    try:
+        school = purchase.school
+    except Exception:
+        school = None
+
+    try:
+        supplier = purchase.supplier
+    except Exception:
+        supplier = None
 
     # -------------------------------------------------------------
     # 1. HEADER: School Logo & Info (Left) + Invoice Title & No (Right)
@@ -181,33 +257,33 @@ def generate_purchase_invoice_pdf(purchase):
     if contact_str:
         school_info_elements.append(Paragraph(contact_str, school_meta_style))
 
-    # Resolve School Logo if exists
-    logo_img = None
-    if school and getattr(school, 'logo', None):
-        try:
-            logo_path = school.logo.path if hasattr(school.logo, 'path') else None
-            if logo_path and os.path.exists(logo_path):
-                logo_img = RLImage(logo_path, width=18 * mm, height=18 * mm)
-            elif hasattr(school.logo, 'file'):
-                logo_img = RLImage(school.logo.file, width=18 * mm, height=18 * mm)
-        except Exception:
-            logo_img = None
+    # Resolve School Logo if exists (aspect ratio preserved, max height 50px)
+    logo_img, logo_w_pt, logo_h_pt = resolve_school_logo_image(school, max_height=50.0, max_width=75.0)
 
     if logo_img:
+        logo_col_w = max(22.0, (logo_w_pt * 25.4 / 72.0) + 3.0) * mm
+        info_col_w = 105 * mm - logo_col_w
         left_header_data = [[logo_img, school_info_elements]]
-        left_header_col_widths = [22 * mm, 80 * mm]
+        left_header_col_widths = [logo_col_w, info_col_w]
+        left_header_table = Table(left_header_data, colWidths=left_header_col_widths)
+        left_header_table.setStyle(TableStyle([
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('LEFTPADDING', (0, 0), (0, 0), 0),
+            ('RIGHTPADDING', (0, 0), (0, 0), 3 * mm),
+            ('TOPPADDING', (0, 0), (-1, -1), 0),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+        ]))
     else:
         left_header_data = [[school_info_elements]]
-        left_header_col_widths = [102 * mm]
-
-    left_header_table = Table(left_header_data, colWidths=left_header_col_widths)
-    left_header_table.setStyle(TableStyle([
-        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-        ('LEFTPADDING', (0, 0), (-1, -1), 0),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 2),
-        ('TOPPADDING', (0, 0), (-1, -1), 0),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
-    ]))
+        left_header_col_widths = [105 * mm]
+        left_header_table = Table(left_header_data, colWidths=left_header_col_widths)
+        left_header_table.setStyle(TableStyle([
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 0),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+            ('TOPPADDING', (0, 0), (-1, -1), 0),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+        ]))
 
     # Right side: Invoice meta
     status_label = purchase.status or "CONFIRMED"
@@ -328,8 +404,8 @@ def generate_purchase_invoice_pdf(purchase):
             Paragraph(item_cell, td_style),
             Paragraph(variant_str, td_style),
             Paragraph(str(line.quantity), td_center_style),
-            Paragraph(f"&#8377;{unit_cost_val:,.2f}", td_right_style),
-            Paragraph(f"&#8377;{total_val:,.2f}", td_right_style),
+            Paragraph(f"Rs. {unit_cost_val:,.2f}", td_right_style),
+            Paragraph(f"Rs. {total_val:,.2f}", td_right_style),
         ]
         table_data.append(row)
 
@@ -339,8 +415,8 @@ def generate_purchase_invoice_pdf(purchase):
             Paragraph("No line items recorded on this purchase invoice.", td_style),
             Paragraph("-", td_style),
             Paragraph("0", td_center_style),
-            Paragraph("&#8377;0.00", td_right_style),
-            Paragraph("&#8377;0.00", td_right_style),
+            Paragraph("Rs. 0.00", td_right_style),
+            Paragraph("Rs. 0.00", td_right_style),
         ])
 
     items_table = Table(
@@ -377,15 +453,15 @@ def generate_purchase_invoice_pdf(purchase):
     grand_total_val = Decimal(str(purchase.grand_total or subtotal_val - discount_val + tax_val))
 
     totals_rows = [
-        [Paragraph("Subtotal:", td_right_style), Paragraph(f"&#8377;{subtotal_val:,.2f}", td_right_style)],
+        [Paragraph("Subtotal:", td_right_style), Paragraph(f"Rs. {subtotal_val:,.2f}", td_right_style)],
     ]
     if discount_val > 0:
-        totals_rows.append([Paragraph("Discount:", td_right_style), Paragraph(f"- &#8377;{discount_val:,.2f}", td_right_style)])
+        totals_rows.append([Paragraph("Discount:", td_right_style), Paragraph(f"- Rs. {discount_val:,.2f}", td_right_style)])
     if tax_val > 0:
-        totals_rows.append([Paragraph("Taxes (GST):", td_right_style), Paragraph(f"+ &#8377;{tax_val:,.2f}", td_right_style)])
+        totals_rows.append([Paragraph("Taxes (GST):", td_right_style), Paragraph(f"+ Rs. {tax_val:,.2f}", td_right_style)])
 
     grand_total_label = Paragraph("<font size='10' color='#1E293B'><b>Grand Total:</b></font>", td_right_style)
-    grand_total_val_p = Paragraph(f"<font size='11' color='#4338CA'><b>&#8377;{grand_total_val:,.2f}</b></font>", td_right_style)
+    grand_total_val_p = Paragraph(f"<font size='11' color='#4338CA'><b>Rs. {grand_total_val:,.2f}</b></font>", td_right_style)
     totals_rows.append([grand_total_label, grand_total_val_p])
 
     totals_table = Table(totals_rows, colWidths=[38 * mm, 34 * mm])

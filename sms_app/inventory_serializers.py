@@ -41,9 +41,14 @@ class ItemCategorySerializer(serializers.ModelSerializer):
         return name
 
     def get_items_count(self, obj):
+        if hasattr(obj, 'active_items'):
+            return len(obj.active_items)
         return obj.items.filter(is_active=True).count()
 
     def get_attached_items_list(self, obj):
+        items = getattr(obj, 'active_items', None)
+        if items is None:
+            items = obj.items.filter(is_active=True)
         return [
             {
                 "id": item.id,
@@ -51,7 +56,7 @@ class ItemCategorySerializer(serializers.ModelSerializer):
                 "item_name": item.item_name,
                 "item_code": item.item_code,
             }
-            for item in obj.items.filter(is_active=True)
+            for item in items
         ]
 
 
@@ -92,9 +97,14 @@ class ItemSizeSerializer(serializers.ModelSerializer):
         return attrs
 
     def get_items_count(self, obj):
+        if hasattr(obj, 'active_allowed_items'):
+            return len(obj.active_allowed_items)
         return obj.allowed_items.filter(is_active=True).count()
 
     def get_attached_items_list(self, obj):
+        items = getattr(obj, 'active_allowed_items', None)
+        if items is None:
+            items = obj.allowed_items.filter(is_active=True)
         return [
             {
                 "id": item.id,
@@ -102,7 +112,7 @@ class ItemSizeSerializer(serializers.ModelSerializer):
                 "item_name": item.item_name,
                 "item_code": item.item_code,
             }
-            for item in obj.allowed_items.filter(is_active=True)
+            for item in items
         ]
 
 
@@ -169,9 +179,14 @@ class ItemColorSerializer(serializers.ModelSerializer):
         return attrs
 
     def get_items_count(self, obj):
+        if hasattr(obj, 'active_allowed_items'):
+            return len(obj.active_allowed_items)
         return obj.allowed_items.filter(is_active=True).count()
 
     def get_attached_items_list(self, obj):
+        items = getattr(obj, 'active_allowed_items', None)
+        if items is None:
+            items = obj.allowed_items.filter(is_active=True)
         return [
             {
                 "id": item.id,
@@ -179,7 +194,7 @@ class ItemColorSerializer(serializers.ModelSerializer):
                 "item_name": item.item_name,
                 "item_code": item.item_code,
             }
-            for item in obj.allowed_items.filter(is_active=True)
+            for item in items
         ]
 
 
@@ -404,6 +419,8 @@ class ItemSerializer(serializers.ModelSerializer):
         return attrs
 
     def get_current_stock(self, obj):
+        if hasattr(obj, 'annotated_stock'):
+            return max(0, obj.annotated_stock or 0)
         total = obj.stock_transactions.aggregate(total_qty=Sum('quantity'))['total_qty'] or 0
         return max(0, total)
 
@@ -583,10 +600,14 @@ class SupplierSerializer(serializers.ModelSerializer):
         return attrs
 
     def get_total_purchases_count(self, obj):
+        if hasattr(obj, 'annotated_purchases_count'):
+            return obj.annotated_purchases_count
         return obj.purchases.count()
 
     def get_total_purchases_amount(self, obj):
-        return obj.purchases.filter(status='CONFIRMED').aggregate(total=Sum('grand_total'))['total'] or 0.00
+        if hasattr(obj, 'annotated_purchases_amount'):
+            return obj.annotated_purchases_amount or Decimal('0.00')
+        return obj.purchases.filter(status='CONFIRMED').aggregate(total=Sum('grand_total'))['total'] or Decimal('0.00')
 
 
 class PurchaseItemSerializer(serializers.ModelSerializer):
@@ -798,6 +819,28 @@ class PurchaseSerializer(serializers.ModelSerializer):
         purchase.grand_total = grand_total
         purchase.save(update_fields=['subtotal', 'discount', 'tax', 'grand_total', 'updated_at'])
         return purchase
+
+
+class PurchaseListSerializer(serializers.ModelSerializer):
+    supplier_name = serializers.CharField(source='supplier.supplier_name', read_only=True)
+    academic_year_name = serializers.CharField(source='academic_year.name', read_only=True)
+    items_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Purchase
+        fields = [
+            'id', 'invoice_number', 'supplier', 'supplier_name',
+            'academic_year', 'academic_year_name', 'purchase_date',
+            'subtotal', 'discount', 'tax', 'grand_total',
+            'payment_status', 'status', 'notes', 'items_count',
+            'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def get_items_count(self, obj):
+        if hasattr(obj, 'annotated_items_count'):
+            return obj.annotated_items_count
+        return obj.items.count()
 
 
 class StockTransactionSerializer(serializers.ModelSerializer):
