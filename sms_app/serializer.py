@@ -927,6 +927,12 @@ class CurrentUserProfileSerializer(serializers.ModelSerializer):
             "name": school.name,
             "slug": school.slug,
             "logo": logo_url,
+            "address": getattr(school, "address", None),
+            "city": getattr(school, "city", None),
+            "state": getattr(school, "state", None),
+            "pincode": getattr(school, "pincode", None),
+            "phone": getattr(school, "phone", None),
+            "email": getattr(school, "email", None),
         }
 
     def get_modules(self, user):
