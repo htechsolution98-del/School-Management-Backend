@@ -411,6 +411,204 @@ class InventoryService:
 
     @classmethod
     @transaction.atomic
+    def process_return_replace(cls, issue: StudentItemIssue, action_type: str, condition: str,
+                               quantity: int = 1, remarks: str = '',
+                               replacement_size=None, replacement_color=None,
+                               user=None):
+        """
+        Unified workflow for Returns & Replacements with condition-based routing and Fee sync.
+        - action_type: 'RETURN' or 'REPLACEMENT'
+        - condition: 'GOOD' (Good/Re-usable) or 'DAMAGED' (Damaged/Defective)
+        - quantity: number of units returned (default 1)
+        """
+        from django.db.models import F
+        issue = StudentItemIssue.objects.select_for_update().get(pk=issue.pk)
+        current_status = getattr(issue, 'status', 'ISSUED') or 'ISSUED'
+        if current_status not in ['ISSUED', 'pending']:
+            raise ValidationError(f"This item has already been marked as {current_status}.")
+
+        quantity = int(quantity or 1)
+        if quantity <= 0:
+            raise ValidationError("Quantity must be greater than zero.")
+        if quantity > issue.quantity:
+            raise ValidationError(f"Return quantity ({quantity}) cannot exceed issued quantity ({issue.quantity}).")
+
+        action_type = action_type.upper().strip()
+        if action_type not in ['RETURN', 'REPLACEMENT']:
+            raise ValidationError("Action type must be either 'RETURN' or 'REPLACEMENT'.")
+
+        condition = condition.upper().strip()
+        if condition not in ['GOOD', 'DAMAGED']:
+            raise ValidationError("Item condition must be either 'GOOD' or 'DAMAGED'.")
+
+        # 1. Condition-Based Stock Routing for the returned unit
+        return_obj = StudentItemReturn.objects.create(
+            school=issue.school,
+            student=issue.student,
+            item=issue.item,
+            size=issue.size,
+            color=issue.color,
+            quantity=quantity,
+            return_date=timezone.now().date(),
+            condition='GOOD' if condition == 'GOOD' else 'DAMAGED',
+            reason=f"{action_type.title()} ({'Good / Re-usable' if condition == 'GOOD' else 'Damaged / Defective'})",
+            remarks=remarks,
+            received_by=user
+        )
+
+        if condition == 'GOOD':
+            # Increment Main Stock (+quantity) for that variant
+            txn_return = StockTransaction.objects.create(
+                school=issue.school,
+                item=issue.item,
+                academic_year=issue.academic_year,
+                size=issue.size,
+                color=issue.color,
+                transaction_type='RETURN',
+                quantity=quantity,
+                unit_purchase_cost=issue.unit_purchase_cost,
+                unit_selling_price=issue.unit_selling_price,
+                reference_type='StudentItemReturn',
+                reference_id=str(return_obj.id),
+                transaction_date=timezone.now().date(),
+                remarks=f"Return in Good Condition from {issue.student.name} {issue.student.surname}. (Issue #{issue.id}). {remarks}".strip(),
+                created_by=user
+            )
+            cls.log_stock_transaction(txn_return, user)
+        else:
+            # Condition is DAMAGED / Defective:
+            # Do NOT increment Main Stock!
+            # Instead, log to virtual Scrap/Damaged ledger and increment damaged_stock counter
+            Item.objects.filter(pk=issue.item_id).update(damaged_stock=F('damaged_stock') + quantity)
+
+            txn_damage = StockTransaction.objects.create(
+                school=issue.school,
+                item=issue.item,
+                academic_year=issue.academic_year,
+                size=issue.size,
+                color=issue.color,
+                transaction_type='DAMAGE',
+                quantity=0,  # 0 ensures Main Available Stock is not incremented
+                reference_type='ScrapDamagedLedger',
+                reference_id=str(return_obj.id),
+                transaction_date=timezone.now().date(),
+                remarks=f"Scrap/Damaged item from {issue.student.name} {issue.student.surname}. (Issue #{issue.id}). Non-reissuable. {remarks}".strip(),
+                created_by=user
+            )
+            cls.log_stock_transaction(txn_damage, user)
+
+        # 2. Handle Action Type
+        replacement_issue = None
+        reversed_fee_id = None
+
+        if action_type == 'REPLACEMENT':
+            # Deduct another unit from Main Stock (-quantity) for replacement given to student
+            rep_item = issue.item
+            rep_size = replacement_size if replacement_size is not None else issue.size
+            rep_color = replacement_color if replacement_color is not None else issue.color
+
+            avail_stock = cls.get_item_stock(rep_item.id, rep_size.id if rep_size else None, rep_color.id if rep_color else None)
+            if avail_stock < quantity:
+                raise ValidationError(
+                    f"Insufficient stock for replacement '{rep_item.item_name}'. Available: {avail_stock}, Required: {quantity}."
+                )
+
+            replacement_issue = cls.issue_item_single(
+                school=issue.school,
+                academic_year=issue.academic_year,
+                student=issue.student,
+                item=rep_item,
+                quantity=quantity,
+                size=rep_size,
+                color=rep_color,
+                charging_type='FREE',  # Replacement given to student without duplicate charge
+                charged_amount=Decimal('0.00'),
+                issue_reason='REPLACEMENT',
+                remarks=f"Replacement for Issue #{issue.id} ({condition.lower()} condition return). {remarks}".strip(),
+                user=user
+            )
+
+            # Update original issue ledger status
+            issue.status = 'REPLACED'
+            status_note = f"[REPLACED on {timezone.now().date()}] Condition: {condition}. Replacement Issue #{replacement_issue.id}."
+            if remarks:
+                status_note += f" Remarks: {remarks}"
+            issue.remarks = f"{issue.remarks or ''}\n{status_note}".strip()
+            issue.save()
+
+        elif action_type == 'RETURN':
+            # Return Only: Do NOT deduct new stock.
+            # If item had Separate Charge policy, automatically trigger cancellation/refund in Fees module
+            if issue.charging_type == 'SEPARATE_CHARGE':
+                from .models import StudentFee
+                matching_fees = StudentFee.objects.filter(
+                    school=issue.school,
+                    student=issue.student
+                ).filter(
+                    Q(transaction_id=f"INV-ISSUE-{issue.id}") |
+                    Q(billing_period=f"INV-{issue.id}") |
+                    Q(discount_reference__icontains=f"INV-{issue.id}") |
+                    Q(discount_reference__icontains=issue.item.item_name) |
+                    Q(discount_note__icontains=f"INV-{issue.id}") |
+                    Q(discount_note__icontains=issue.item.item_name)
+                ).exclude(status='cancelled')
+
+                for fee in matching_fees:
+                    paid = fee.paid_amount
+                    if paid > Decimal('0.00'):
+                        # If payment was recorded, apply 100% discount / cancellation refund
+                        fee.discount_amount = fee.amount
+                        fee.status = 'cancelled'
+                        fee.discount_note = f"[REFUNDED & CANCELLED] Item returned ({condition}). {fee.discount_note or ''}".strip()
+                        fee.save()
+                    else:
+                        # Unpaid fee: cancel liability
+                        fee.status = 'cancelled'
+                        fee.discount_note = f"[CANCELLED] Item returned ({condition}). {fee.discount_note or ''}".strip()
+                        fee.save()
+                    reversed_fee_id = fee.id
+
+            # Update original issue ledger status
+            issue.status = 'RETURNED'
+            status_note = f"[RETURNED on {timezone.now().date()}] Condition: {condition}."
+            if remarks:
+                status_note += f" Remarks: {remarks}"
+            if reversed_fee_id:
+                status_note += f" Fee #{reversed_fee_id} reversed."
+            issue.remarks = f"{issue.remarks or ''}\n{status_note}".strip()
+            issue.save()
+
+        # 3. Audit Trail
+        InventoryAuditLog.objects.create(
+            school=issue.school,
+            user=user,
+            action='RETURN_REPLACE',
+            entity_type='StudentItemIssue',
+            entity_id=str(issue.id),
+            new_values={
+                'issue_id': issue.id,
+                'action_type': action_type,
+                'condition': condition,
+                'status': issue.status,
+                'quantity': quantity,
+                'remarks': remarks,
+                'return_id': return_obj.id,
+                'reversed_fee_id': reversed_fee_id,
+                'replacement_issue_id': replacement_issue.id if replacement_issue else None,
+            }
+        )
+
+        return {
+            'issue': issue,
+            'return_record': return_obj,
+            'action_type': action_type,
+            'condition': condition,
+            'reversed_fee_id': reversed_fee_id,
+            'replacement_issue': replacement_issue,
+        }
+
+    @classmethod
+    @transaction.atomic
     def process_adjustment(cls, adjustment: StockAdjustment, user=None):
         """Record manual adjustment and create ledger transaction"""
         if adjustment.quantity <= 0:

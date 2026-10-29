@@ -451,7 +451,12 @@ class ItemPricingViewSet(BaseSchoolViewSet):
     serializer_class = ItemPricingSerializer
 
     def get_queryset(self):
-        qs = super().get_queryset()
+        qs = super().get_queryset().select_related(
+            'item',
+            'academic_year',
+            'school_class',
+            'included_fee_type'
+        )
         item_id = self.request.query_params.get('item')
         academic_year_id = self.request.query_params.get('academic_year')
         if item_id:
@@ -510,7 +515,13 @@ class ItemViewSet(BaseSchoolViewSet):
         school = self.get_school()
         qs = Item.objects.filter(school=school).select_related('category').prefetch_related(
             Prefetch('allowed_sizes', queryset=ItemSize.objects.all().only('id', 'name', 'size_type', 'is_active')),
-            Prefetch('allowed_colors', queryset=ItemColor.objects.all().only('id', 'name', 'hex_code', 'is_active'))
+            Prefetch('allowed_colors', queryset=ItemColor.objects.all().only('id', 'name', 'hex_code', 'is_active')),
+            Prefetch(
+                'pricings',
+                queryset=ItemPricing.objects.filter(is_active=True).select_related(
+                    'academic_year', 'school_class', 'included_fee_type'
+                ).order_by('-academic_year__id')
+            )
         ).annotate(
             annotated_stock=Coalesce(
                 Sum('stock_transactions__quantity'),
@@ -745,7 +756,13 @@ class StockTransactionViewSet(BaseSchoolViewSet):
         }, status=status.HTTP_405_METHOD_NOT_ALLOWED)
 
     def get_queryset(self):
-        qs = super().get_queryset()
+        qs = super().get_queryset().select_related(
+            'item__category',
+            'size',
+            'color',
+            'academic_year',
+            'created_by'
+        )
         item_id = self.request.query_params.get('item')
         transaction_type = self.request.query_params.get('transaction_type')
         from_date = self.request.query_params.get('from_date')
@@ -924,8 +941,9 @@ class StudentItemIssueViewSet(BaseSchoolViewSet):
         qs = super().get_queryset().select_related(
             'student', 'student__school_class', 'item', 'size', 'color', 'academic_year'
         )
-        student_id = self.request.query_params.get('student')
+        student_id = self.request.query_params.get('student') or self.request.query_params.get('student_id')
         item_id = self.request.query_params.get('item')
+        academic_year_id = self.request.query_params.get('academic_year') or self.request.query_params.get('academic_year_id')
         from_date = self.request.query_params.get('from_date')
         to_date = self.request.query_params.get('to_date')
         search = self.request.query_params.get('search')
@@ -934,6 +952,8 @@ class StudentItemIssueViewSet(BaseSchoolViewSet):
             qs = qs.filter(student_id=student_id)
         if item_id:
             qs = qs.filter(item_id=item_id)
+        if academic_year_id:
+            qs = qs.filter(academic_year_id=academic_year_id)
         if from_date:
             qs = qs.filter(issue_date__gte=from_date)
         if to_date:
@@ -1045,11 +1065,63 @@ class StudentItemIssueViewSet(BaseSchoolViewSet):
         except Exception as exc:
             return format_error_response(exc)
 
+    @action(detail=True, methods=['post'], url_path='return-replace')
+    @transaction.atomic
+    def return_replace(self, request, pk=None):
+        try:
+            issue = self.get_object()
+            action_type = request.data.get('action_type')
+            condition = request.data.get('condition', 'GOOD')
+            try:
+                quantity = int(request.data.get('quantity', 1))
+            except (ValueError, TypeError):
+                quantity = 1
+            remarks = request.data.get('remarks', '')
+            replacement_size_id = request.data.get('replacement_size')
+            replacement_color_id = request.data.get('replacement_color')
+
+            replacement_size = None
+            if replacement_size_id:
+                replacement_size = ItemSize.objects.filter(id=replacement_size_id, school=issue.school).first()
+
+            replacement_color = None
+            if replacement_color_id:
+                replacement_color = ItemColor.objects.filter(id=replacement_color_id, school=issue.school).first()
+
+            res = InventoryService.process_return_replace(
+                issue=issue,
+                action_type=action_type,
+                condition=condition,
+                quantity=quantity,
+                remarks=remarks,
+                replacement_size=replacement_size,
+                replacement_color=replacement_color,
+                user=request.user
+            )
+
+            return Response({
+                'success': True,
+                'message': f"Successfully processed {res['action_type'].lower()} for {issue.item.item_name}.",
+                'issue_id': issue.id,
+                'action_type': res['action_type'],
+                'condition': res['condition'],
+                'status': res['issue'].status,
+                'reversed_fee_id': res['reversed_fee_id'],
+                'replacement_issue_id': res['replacement_issue'].id if res['replacement_issue'] else None
+            }, status=status.HTTP_200_OK)
+        except Exception as exc:
+            return format_error_response(exc)
+
 
 class ReplacementRequestViewSet(BaseSchoolViewSet):
     queryset = ReplacementRequest.objects.all()
     serializer_class = ReplacementRequestSerializer
     http_method_names = ['get', 'post', 'head', 'options']
+
+    def get_queryset(self):
+        return super().get_queryset().select_related(
+            'student', 'item', 'requested_size', 'requested_color', 'academic_year'
+        )
 
     @action(detail=True, methods=['post'], url_path='approve')
     def approve_request(self, request, pk=None):
@@ -1103,6 +1175,11 @@ class StudentItemReturnViewSet(BaseSchoolViewSet):
     serializer_class = StudentItemReturnSerializer
     http_method_names = ['get', 'post', 'head', 'options']
 
+    def get_queryset(self):
+        return super().get_queryset().select_related(
+            'student', 'item', 'size', 'color', 'received_by'
+        )
+
     @transaction.atomic
     def perform_create(self, serializer):
         school = self.get_school()
@@ -1116,6 +1193,11 @@ class StockAdjustmentViewSet(BaseSchoolViewSet):
     queryset = StockAdjustment.objects.all()
     serializer_class = StockAdjustmentSerializer
     http_method_names = ['get', 'post', 'head', 'options']
+
+    def get_queryset(self):
+        return super().get_queryset().select_related(
+            'item', 'size', 'color', 'created_by'
+        )
 
     @transaction.atomic
     def perform_create(self, serializer):
@@ -1134,7 +1216,7 @@ class InventoryAuditLogViewSet(viewsets.ReadOnlyModelViewSet):
         school = resolve_school_from_request(self.request)
         if not school:
             raise PermissionDenied("Your account is not linked to a school.")
-        qs = InventoryAuditLog.objects.filter(school=school)
+        qs = InventoryAuditLog.objects.filter(school=school).select_related('user')
         entity_type = self.request.query_params.get('entity_type')
         action_name = self.request.query_params.get('action')
         if entity_type:

@@ -97,6 +97,7 @@ class Item(models.Model):
     allowed_sizes = models.ManyToManyField(ItemSize, blank=True, related_name="allowed_items")
     allowed_colors = models.ManyToManyField(ItemColor, blank=True, related_name="allowed_items")
     is_returnable = models.BooleanField(default=False)
+    damaged_stock = models.IntegerField(default=0)
     minimum_stock_level = models.IntegerField(default=5)
     maximum_stock_level = models.IntegerField(null=True, blank=True)
     is_active = models.BooleanField(default=True)
@@ -334,6 +335,11 @@ class StudentItemIssue(models.Model):
         ("SPECIAL_CASE", "Special Case"),
         ("OTHER", "Other"),
     ]
+    STATUS_CHOICES = [
+        ("ISSUED", "Issued"),
+        ("RETURNED", "Returned"),
+        ("REPLACED", "Replaced"),
+    ]
 
     school = models.ForeignKey(School, on_delete=models.CASCADE, related_name="student_item_issues")
     academic_year = models.ForeignKey(AcademicYear, on_delete=models.CASCADE, related_name="student_item_issues")
@@ -348,6 +354,7 @@ class StudentItemIssue(models.Model):
     charged_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
     issue_date = models.DateField(default=timezone.now)
     issue_reason = models.CharField(max_length=30, choices=ISSUE_REASON_CHOICES, default="INITIAL_ISSUE")
+    status = models.CharField(max_length=30, choices=STATUS_CHOICES, default="ISSUED")
     remarks = models.TextField(blank=True, null=True)
     issued_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)

@@ -177,17 +177,19 @@ class Isinventory(BasePermission):
         if getattr(user, 'is_superuser', False) or getattr(user, 'is_staff', False):
             return True
         role = str(getattr(user, 'role', '') or '').strip().upper()
-        if role in ['INVENTORY', 'PRINCIPAL', 'ADMIN', 'SUPERADMIN'] + CLERK_ROLES:
+        if role in ['INVENTORY', 'PRINCIPAL', 'ADMIN', 'SUPERADMIN', 'TRUSTEE', 'FEES MANAGEMENT', 'FEE MANAGEMENT', 'FEES_MANAGEMENT', 'ACCOUNTANT'] + CLERK_ROLES:
             return True
         if (
             user.groups.filter(name__iexact='INVENTORY').exists()
             or user.groups.filter(name__iexact='PRINCIPAL').exists()
             or user.groups.filter(name__iexact='super_admin').exists()
+            or user.groups.filter(name__iexact='trustee').exists()
+            or user.groups.filter(name__in=['FEES MANAGEMENT', 'Fee Management', 'fees management', 'admin(trustee)', 'ADMIN', 'admin']).exists()
             or user.groups.filter(name__in=CLERK_GROUPS).exists()
         ):
             return True
         staff = getattr(user, 'staff', None)
-        if staff and str(getattr(staff, 'category', '') or '').strip().upper() in (['INVENTORY', 'PRINCIPAL'] + CLERK_ROLES):
+        if staff and str(getattr(staff, 'category', '') or '').strip().upper() in (['INVENTORY', 'PRINCIPAL', 'TRUSTEE', 'FEES MANAGEMENT', 'FEE MANAGEMENT', 'ACCOUNTANT'] + CLERK_ROLES):
             return True
         from .models import School
         if School.objects.filter(login_id=user.id).exists():
