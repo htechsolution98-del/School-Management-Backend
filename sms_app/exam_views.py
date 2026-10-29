@@ -29,6 +29,7 @@ from sms_app.models import (
     ClassTeacherMarksVerification,
     FinalStudentResult,
     ResultAuditLog,
+    StudentAttendance,
 )
 
 from sms_app.exam_serializers import (
@@ -962,6 +963,28 @@ class ClassTeacherVerificationViewSet(viewsets.ModelViewSet):
             sc = SchoolClass.objects.filter(school=request.user.school, school_class=data.get("class_name")).first()
             if sc:
                 data["school_class"] = sc.id
+
+        year_val = data.get("academic_year")
+        class_val = data.get("school_class")
+        term_val = data.get("exam_term")
+        div_val = data.get("division")
+
+        existing = ClassTeacherMarksVerification.objects.filter(
+            school=request.user.school,
+            academic_year_id=year_val,
+            school_class_id=class_val,
+        )
+        if term_val:
+            existing = existing.filter(exam_term_id=term_val)
+        if div_val and div_val != "ALL":
+            existing = existing.filter(division=div_val)
+        existing_obj = existing.first()
+
+        if existing_obj:
+            serializer = self.get_serializer(existing_obj, data=data, partial=True)
+            serializer.is_valid(raise_exception=True)
+            self.perform_update(serializer)
+            return Response(serializer.data, status=status.HTTP_200_OK)
         
         serializer = self.get_serializer(data=data)
         serializer.is_valid(raise_exception=True)
@@ -984,9 +1007,13 @@ class ClassTeacherVerificationViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         teacher = getattr(self.request.user, "staff", None)
-        from rest_framework import serializers
         if not teacher:
-            raise serializers.ValidationError("Only staff members can verify marks.")
+            from sms_app.models import Staff
+            teacher = Staff.objects.filter(user=self.request.user).first()
+            if not teacher and getattr(self.request.user, "email", None):
+                teacher = Staff.objects.filter(email=self.request.user.email, school=self.request.user.school).first()
+            if not teacher and self.request.user.school:
+                teacher = Staff.objects.filter(school=self.request.user.school).first()
 
         status_val = serializer.validated_data.get("status", "VERIFIED")
         
@@ -998,27 +1025,55 @@ class ClassTeacherVerificationViewSet(viewsets.ModelViewSet):
 
         school_class_obj = serializer.validated_data.get("school_class")
         year_obj = serializer.validated_data.get("academic_year")
+        div_val = serializer.validated_data.get("division") or self.request.data.get("division")
 
         if status_val == "VERIFIED":
             serializer.save(school=self.request.user.school, class_teacher=teacher, verified_at=timezone.now())
             if school_class_obj and year_obj:
-                Result.objects.filter(
+                res_qs = Result.objects.filter(
                     exam__school=self.request.user.school,
                     exam__academic_year=year_obj,
                     exam__class_group=school_class_obj
-                ).update(status="VERIFIED")
+                )
+                if div_val and str(div_val).upper() != "ALL":
+                    res_qs = res_qs.filter(exam__division=div_val)
+                res_qs.update(status="VERIFIED")
+
+                # Auto-calculate and generate class results into FinalStudentResult
+                try:
+                    ResultCalculationEngine.calculate_class_results(
+                        school=self.request.user.school,
+                        academic_year=year_obj,
+                        school_class=school_class_obj,
+                        division=div_val if div_val and str(div_val).upper() != "ALL" else None
+                    )
+                except Exception as e:
+                    import logging
+                    logging.getLogger(__name__).error(f"Error calculating class results on create: {e}")
         elif status_val == "SENT_BACK":
             serializer.save(school=self.request.user.school, class_teacher=teacher, verified_at=None)
             if school_class_obj and year_obj:
-                Result.objects.filter(
+                res_qs = Result.objects.filter(
                     exam__school=self.request.user.school,
                     exam__academic_year=year_obj,
                     exam__class_group=school_class_obj
-                ).update(status="SENT_BACK")
+                )
+                if div_val and str(div_val).upper() != "ALL":
+                    res_qs = res_qs.filter(exam__division=div_val)
+                res_qs.update(status="SENT_BACK")
         else:
             serializer.save(school=self.request.user.school, class_teacher=teacher, verified_at=None)
 
     def perform_update(self, serializer):
+        teacher = getattr(self.request.user, "staff", None)
+        if not teacher:
+            from sms_app.models import Staff
+            teacher = Staff.objects.filter(user=self.request.user).first()
+            if not teacher and getattr(self.request.user, "email", None):
+                teacher = Staff.objects.filter(email=self.request.user.email, school=self.request.user.school).first()
+            if not teacher and self.request.user.school:
+                teacher = Staff.objects.filter(school=self.request.user.school).first()
+
         status_val = serializer.validated_data.get("status", "VERIFIED")
         
         class_name = self.request.data.get("class_name")
@@ -1029,23 +1084,45 @@ class ClassTeacherVerificationViewSet(viewsets.ModelViewSet):
 
         school_class_obj = serializer.validated_data.get("school_class") or serializer.instance.school_class
         year_obj = serializer.validated_data.get("academic_year") or serializer.instance.academic_year
+        div_val = serializer.validated_data.get("division") or self.request.data.get("division") or getattr(serializer.instance, "division", None)
 
         if status_val == "VERIFIED":
-            serializer.save(verified_at=timezone.now())
+            save_kwargs = {"verified_at": timezone.now()}
+            if teacher and not serializer.instance.class_teacher:
+                save_kwargs["class_teacher"] = teacher
+            serializer.save(**save_kwargs)
             if school_class_obj and year_obj:
-                Result.objects.filter(
+                res_qs = Result.objects.filter(
                     exam__school=self.request.user.school,
                     exam__academic_year=year_obj,
                     exam__class_group=school_class_obj
-                ).update(status="VERIFIED")
+                )
+                if div_val and str(div_val).upper() != "ALL":
+                    res_qs = res_qs.filter(exam__division=div_val)
+                res_qs.update(status="VERIFIED")
+
+                # Auto-calculate and generate class results into FinalStudentResult
+                try:
+                    ResultCalculationEngine.calculate_class_results(
+                        school=self.request.user.school,
+                        academic_year=year_obj,
+                        school_class=school_class_obj,
+                        division=div_val if div_val and str(div_val).upper() != "ALL" else None
+                    )
+                except Exception as e:
+                    import logging
+                    logging.getLogger(__name__).error(f"Error calculating class results on update: {e}")
         elif status_val == "SENT_BACK":
             serializer.save(verified_at=None)
             if school_class_obj and year_obj:
-                Result.objects.filter(
+                res_qs = Result.objects.filter(
                     exam__school=self.request.user.school,
                     exam__academic_year=year_obj,
                     exam__class_group=school_class_obj
-                ).update(status="SENT_BACK")
+                )
+                if div_val and str(div_val).upper() != "ALL":
+                    res_qs = res_qs.filter(exam__division=div_val)
+                res_qs.update(status="SENT_BACK")
         else:
             serializer.save(verified_at=None)
 
@@ -1594,7 +1671,9 @@ class StudentExamScheduleView(APIView):
     def get(self, request, *args, **kwargs):
         user = request.user
         school = user.school
-        student = getattr(user, "student_profile", None) or Student.objects.filter(school=school, email=user.email).first()
+        student = Student.objects.filter(user=user).first() or getattr(user, "student_profile", None)
+        if not student and getattr(user, "email", None):
+            student = Student.objects.filter(school=school, admission__email=user.email).first()
 
         if not student:
             # Check if parent
@@ -1652,7 +1731,9 @@ class StudentPublishedReportCardView(APIView):
     def get(self, request, *args, **kwargs):
         user = request.user
         school = user.school
-        student = getattr(user, "student_profile", None) or Student.objects.filter(school=school, email=user.email).first()
+        student = Student.objects.filter(user=user).first() or getattr(user, "student_profile", None)
+        if not student and getattr(user, "email", None):
+            student = Student.objects.filter(school=school, admission__email=user.email).first()
 
         student_id = request.query_params.get("student_id")
         if student_id:
