@@ -319,7 +319,7 @@ class ItemSerializer(serializers.ModelSerializer):
             'description', 'unit', 'has_size', 'has_color',
             'allowed_sizes', 'allowed_colors', 'allowed_size_details', 'allowed_color_details',
             'is_returnable',
-            'minimum_stock_level', 'maximum_stock_level', 'is_active',
+            'damaged_stock', 'minimum_stock_level', 'maximum_stock_level', 'is_active',
             'current_stock', 'stock_status', 'active_pricing', 'variant_stock_matrix',
             'last_purchase_cost',
             'created_by', 'updated_by', 'created_at', 'updated_at'
@@ -433,12 +433,43 @@ class ItemSerializer(serializers.ModelSerializer):
         return "IN_STOCK"
 
     def get_active_pricing(self, obj):
-        pricing = obj.pricings.filter(is_active=True).order_by('-academic_year__id').first()
+        # Use prefetched pricings cache if available to prevent N+1 queries
+        if hasattr(obj, '_prefetched_objects_cache') and 'pricings' in obj._prefetched_objects_cache:
+            active_pricings = [p for p in obj.pricings.all() if p.is_active]
+            pricing = active_pricings[0] if active_pricings else None
+        else:
+            pricing = obj.pricings.filter(is_active=True).select_related(
+                'academic_year', 'school_class', 'included_fee_type'
+            ).order_by('-academic_year__id').first()
         if pricing:
             return ItemPricingSerializer(pricing).data
         return None
 
     def get_variant_stock_matrix(self, obj):
+        # Optimization: Non-variant items have zero variant sub-combinations
+        if not obj.has_size and not obj.has_color:
+            current_qty = self.get_current_stock(obj)
+            return [{
+                'size_id': None,
+                'size_name': None,
+                'color_id': None,
+                'color_name': None,
+                'available_stock': current_qty,
+            }]
+
+        req = self.context.get('request')
+        # Cache school-wide active sizes and colors in request context so we do NOT query DB 50 times in a loop
+        if req:
+            if not hasattr(req, '_cached_sizes'):
+                req._cached_sizes = list(ItemSize.objects.filter(school=obj.school, is_active=True))
+            if not hasattr(req, '_cached_colors'):
+                req._cached_colors = list(ItemColor.objects.filter(school=obj.school, is_active=True))
+            all_sizes = req._cached_sizes
+            all_colors = req._cached_colors
+        else:
+            all_sizes = list(ItemSize.objects.filter(school=obj.school, is_active=True))
+            all_colors = list(ItemColor.objects.filter(school=obj.school, is_active=True))
+
         stock_map = {}
         txns = (
             obj.stock_transactions.values('size_id', 'color_id')
@@ -447,8 +478,8 @@ class ItemSerializer(serializers.ModelSerializer):
         for t in txns:
             stock_map[(t['size_id'], t['color_id'])] = t['total_qty'] or 0
 
-        sizes = list(ItemSize.objects.filter(school=obj.school, is_active=True)) if obj.has_size else [None]
-        colors = list(ItemColor.objects.filter(school=obj.school, is_active=True)) if obj.has_color else [None]
+        sizes = all_sizes if obj.has_size else [None]
+        colors = all_colors if obj.has_color else [None]
 
         matrix = []
         for s in sizes:
@@ -466,6 +497,13 @@ class ItemSerializer(serializers.ModelSerializer):
         return matrix
 
     def get_last_purchase_cost(self, obj):
+        # Check cached prefetched pricing first
+        if hasattr(obj, '_prefetched_objects_cache') and 'pricings' in obj._prefetched_objects_cache:
+            active_pricings = [p for p in obj.pricings.all() if p.is_active]
+            pricing = active_pricings[0] if active_pricings else None
+            if pricing and pricing.purchase_cost is not None:
+                return str(pricing.purchase_cost)
+
         last_txn = obj.stock_transactions.filter(
             transaction_type__in=['PURCHASE', 'OPENING'],
             unit_purchase_cost__isnull=False
@@ -918,7 +956,7 @@ class StudentItemIssueSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'school', 'issued_by', 'created_at']
 
     def get_status(self, obj):
-        return "ISSUED"
+        return getattr(obj, "status", None) or "ISSUED"
 
     def get_student_name(self, obj):
         return f"{obj.student.name or ''} {obj.student.surname or ''}".strip()
