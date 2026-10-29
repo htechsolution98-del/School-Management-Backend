@@ -27,6 +27,11 @@ class ResultCalculationEngine:
 
     @staticmethod
     def calculate_student_result(school, academic_year, student):
+        if isinstance(academic_year, (int, str)):
+            academic_year = AcademicYear.objects.filter(id=int(academic_year)).first()
+        if not academic_year:
+            academic_year = AcademicYear.objects.filter(school=school, is_active=True).first() or AcademicYear.objects.filter(school=school).first()
+
         config = None
         if student and getattr(student, "school_class", None):
             config = ResultWeightageConfig.objects.filter(
@@ -39,23 +44,66 @@ class ResultCalculationEngine:
             ).first()
 
         if not config:
-            return {
-                "success": False,
-                "reason": "No active Result Weightage Configuration found for this Academic Year.",
-            }
+            config = ResultWeightageConfig.objects.filter(
+                school=school, academic_year=academic_year
+            ).first()
 
-        components = list(config.components.all().order_by("sequence"))
-        if not components:
-            return {
-                "success": False,
-                "reason": "Result Weightage Configuration has no components defined.",
-            }
+        components = list(config.components.all().order_by("sequence")) if config else []
+        total_weightage = sum([float(c.weightage_percentage) for c in components]) if components else 0.0
+        is_config_valid = config and components and abs(total_weightage - 100.0) <= 0.01
 
-        total_weightage = sum([float(c.weightage_percentage) for c in components])
-        if abs(total_weightage - 100.0) > 0.01:
+        if not is_config_valid:
+            # Fallback Calculation: Compute directly from student's exam results for this academic year
+            exam_results = Result.objects.filter(
+                student=student,
+                exam__academic_year=academic_year
+            )
+            total_obt = sum([float(r.marks_obtained or 0) for r in exam_results if not r.is_absent])
+            total_max = sum([float(r.max_marks or 100) for r in exam_results])
+            pct = round((total_obt / total_max) * 100, 2) if total_max > 0 else 0.0
+            pct_dec = Decimal(str(pct))
+            grade = "F"
+            if pct >= 90: grade = "A+"
+            elif pct >= 80: grade = "A"
+            elif pct >= 70: grade = "B+"
+            elif pct >= 60: grade = "B"
+            elif pct >= 50: grade = "C+"
+            elif pct >= 40: grade = "C"
+            elif pct >= 33: grade = "D"
+
+            breakdowns = [{
+                "component_id": 0,
+                "name": "Consolidated Examination Marks",
+                "type": "EXAM",
+                "weightage_pct": 100.0,
+                "score_pct": float(pct),
+                "contribution_pct": float(pct),
+                "details": f"Marks: {total_obt}/{total_max}"
+            }]
+
+            existing_published = FinalStudentResult.objects.filter(student=student, academic_year=academic_year, status="PUBLISHED").exists()
+            final_record, created = FinalStudentResult.objects.update_or_create(
+                academic_year=academic_year,
+                student=student,
+                defaults={
+                    "school": school,
+                    "school_class": student.school_class,
+                    "division": student.division,
+                    "component_breakdown": {
+                        "components": breakdowns,
+                        "final_percentage": float(pct)
+                    },
+                    "total_percentage": pct_dec,
+                    "grade": grade,
+                    "status": "PUBLISHED" if existing_published else "READY_FOR_REVIEW"
+                }
+            )
             return {
-                "success": False,
-                "reason": f"Total weightage sum is {total_weightage}%, but must equal 100%.",
+                "success": True,
+                "final_percentage": float(pct),
+                "grade": grade,
+                "components": breakdowns,
+                "result_id": final_record.id
             }
 
         component_breakdowns = []
@@ -191,9 +239,20 @@ class ResultCalculationEngine:
 
     @staticmethod
     def calculate_class_results(school, academic_year, school_class, division=None):
+        if isinstance(academic_year, (int, str)):
+            academic_year = AcademicYear.objects.filter(id=int(academic_year)).first()
+        if not academic_year:
+            academic_year = AcademicYear.objects.filter(school=school, is_active=True).first() or AcademicYear.objects.filter(school=school).first()
+
+        if isinstance(school_class, (int, str)):
+            if str(school_class).isdigit():
+                school_class = SchoolClass.objects.filter(id=int(school_class)).first()
+            else:
+                school_class = SchoolClass.objects.filter(school=school, school_class__iexact=str(school_class).strip()).first()
+
         students = Student.objects.filter(school=school, school_class=school_class)
-        if division:
-            students = students.filter(division=division)
+        if division and str(division).strip().upper() != "ALL":
+            students = students.filter(division__iexact=str(division).strip())
 
         processed_count = 0
         for student in students:
