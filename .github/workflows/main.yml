@@ -1,3 +1,4 @@
+
 name: School-Management-Backend
 
 on:
@@ -19,12 +20,20 @@ jobs:
 
       - name: Install SSH Key
         run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
+          echo "=== Checking SSH Environment ==="
+          echo "HOME=$HOME"
+          whoami
+          pwd
+          ls -ld "$HOME"
+
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > "$HOME/.ssh/id_rsa"
+          chmod 600 "$HOME/.ssh/id_rsa"
 
           ssh-keyscan -p "${{ secrets.SSH_PORT }}" \
-            -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+            -H "${{ secrets.SSH_HOST }}" >> "$HOME/.ssh/known_hosts" 2>/dev/null
 
       - name: Deploy Backend
         run: |
@@ -72,4 +81,4 @@ jobs:
 
       - name: Cleanup SSH
         if: always()
-        run: rm -rf ~/.ssh
+        run: rm -rf "$HOME/.ssh"
