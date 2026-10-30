@@ -46,7 +46,7 @@ from sms_app.exam_serializers import (
 )
 
 from sms_app.result_engine import ResultCalculationEngine
-from sms_app.permissions import IsCLerk  # or principal/teacher check
+from sms_app.permissions import IsCLerk, Isprincipal
 
 
 def check_is_class_teacher(user, school_class, division=None):
@@ -850,6 +850,7 @@ class SubjectMarksEntryViewSet(viewsets.ModelViewSet):
                             "grade": grade_str,
                             "remarks": remarks,
                             "status": row_status,
+                            "is_published": False,
                         },
                     )
                     saved_count += 1
@@ -1025,6 +1026,7 @@ class ClassTeacherVerificationViewSet(viewsets.ModelViewSet):
 
         school_class_obj = serializer.validated_data.get("school_class")
         year_obj = serializer.validated_data.get("academic_year")
+        term_obj = serializer.validated_data.get("exam_term")
         div_val = serializer.validated_data.get("division") or self.request.data.get("division")
 
         if status_val == "VERIFIED":
@@ -1035,6 +1037,8 @@ class ClassTeacherVerificationViewSet(viewsets.ModelViewSet):
                     exam__academic_year=year_obj,
                     exam__class_group=school_class_obj
                 )
+                if term_obj:
+                    res_qs = res_qs.filter(exam__exam_term=term_obj)
                 if div_val and str(div_val).upper() != "ALL":
                     res_qs = res_qs.filter(exam__division=div_val)
                 res_qs.update(status="VERIFIED")
@@ -1058,6 +1062,8 @@ class ClassTeacherVerificationViewSet(viewsets.ModelViewSet):
                     exam__academic_year=year_obj,
                     exam__class_group=school_class_obj
                 )
+                if term_obj:
+                    res_qs = res_qs.filter(exam__exam_term=term_obj)
                 if div_val and str(div_val).upper() != "ALL":
                     res_qs = res_qs.filter(exam__division=div_val)
                 res_qs.update(status="SENT_BACK")
@@ -1084,6 +1090,7 @@ class ClassTeacherVerificationViewSet(viewsets.ModelViewSet):
 
         school_class_obj = serializer.validated_data.get("school_class") or serializer.instance.school_class
         year_obj = serializer.validated_data.get("academic_year") or serializer.instance.academic_year
+        term_obj = serializer.validated_data.get("exam_term") or serializer.instance.exam_term
         div_val = serializer.validated_data.get("division") or self.request.data.get("division") or getattr(serializer.instance, "division", None)
 
         if status_val == "VERIFIED":
@@ -1097,6 +1104,8 @@ class ClassTeacherVerificationViewSet(viewsets.ModelViewSet):
                     exam__academic_year=year_obj,
                     exam__class_group=school_class_obj
                 )
+                if term_obj:
+                    res_qs = res_qs.filter(exam__exam_term=term_obj)
                 if div_val and str(div_val).upper() != "ALL":
                     res_qs = res_qs.filter(exam__division=div_val)
                 res_qs.update(status="VERIFIED")
@@ -1120,6 +1129,8 @@ class ClassTeacherVerificationViewSet(viewsets.ModelViewSet):
                     exam__academic_year=year_obj,
                     exam__class_group=school_class_obj
                 )
+                if term_obj:
+                    res_qs = res_qs.filter(exam__exam_term=term_obj)
                 if div_val and str(div_val).upper() != "ALL":
                     res_qs = res_qs.filter(exam__division=div_val)
                 res_qs.update(status="SENT_BACK")
@@ -1459,10 +1470,101 @@ class ClassTeacherVerificationViewSet(viewsets.ModelViewSet):
 
 
 class ResultProcessingViewSet(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, Isprincipal]
+
+    def get(self, request, *args, **kwargs):
+        """Return the real marks for one exam for principal result review."""
+        school = request.user.school
+        exam_id = request.query_params.get("exam")
+        if not exam_id:
+            return Response({"error": "exam is required"}, status=status.HTTP_400_BAD_REQUEST)
+        exam = Exam.objects.filter(id=exam_id, school=school).first()
+        if not exam:
+            return Response({"error": "Exam not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        # Resolve optional/legacy foreign keys explicitly. Some older exam rows can
+        # contain references to removed class, subject, or term records; dereferencing
+        # those relations raises RelatedObjectDoesNotExist and turns this read into a 500.
+        school_class = SchoolClass.objects.filter(
+            id=exam.class_group_id, school=school
+        ).first()
+        if not school_class:
+            return Response(
+                {"error": "The class assigned to this exam no longer exists."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        subject = Subject.objects.filter(id=exam.subject_id).first() if exam.subject_id else None
+        exam_term = ExamTerm.objects.filter(id=exam.exam_term_id).first() if exam.exam_term_id else None
+
+        students = Student.objects.filter(
+            school=school, school_class=school_class, is_active=True
+        )
+        division = request.query_params.get("division")
+        if division and division.upper() != "ALL":
+            students = students.filter(division__iexact=division)
+        if exam.division and exam.division.upper() != "ALL":
+            students = students.filter(division__iexact=exam.division)
+        students = students.order_by("roll_no", "gr_no", "id")
+        result_by_student = {
+            row.student_id: row
+            for row in Result.objects.filter(exam=exam, student__in=students)
+        }
+        rows = []
+        for student in students:
+            result = result_by_student.get(student.id)
+            rows.append({
+                "student": student.id,
+                "student_name": " ".join(filter(None, [student.surname, student.name, student.father_name])),
+                "roll_no": student.roll_no,
+                "gr_no": student.gr_no,
+                "marks_obtained": str(result.marks_obtained) if result and result.marks_obtained is not None else None,
+                "max_marks": str(result.max_marks) if result else str(exam.max_marks),
+                "is_absent": result.is_absent if result else False,
+                "grade": result.grade if result else "",
+                "status": result.status if result else "MISSING",
+                "is_published": result.is_published if result else False,
+                "report_template": result.report_template if result else "classic",
+            })
+
+        marks_verified = bool(rows) and all(
+            row["status"] in {"VERIFIED", "APPROVED"} and (row["is_absent"] or row["marks_obtained"] is not None)
+            for row in rows
+        )
+        ready_to_publish = marks_verified and all(row["status"] == "APPROVED" for row in rows)
+        return Response({
+            "exam": exam.id,
+            "exam_title": exam.title,
+            "term_name": exam_term.name if exam_term else "",
+            "class_name": school_class.school_class,
+            "subject_name": subject.name if subject else exam.title,
+            "division": exam.division or "ALL",
+            "max_marks": str(exam.max_marks),
+            "complete": marks_verified,
+            "ready_to_publish": ready_to_publish,
+            "students": rows,
+        })
 
     def post(self, request, *args, **kwargs):
         school = request.user.school
+        action = request.data.get("action")
+        if action in {"APPROVE_STUDENT", "SEND_BACK_STUDENT"}:
+            exam_id = request.data.get("exam")
+            student_id = request.data.get("student")
+            exam = Exam.objects.filter(id=exam_id, school=school).first()
+            result = Result.objects.filter(exam=exam, student_id=student_id).first() if exam else None
+            if not result:
+                return Response({"error": "Exam result not found"}, status=status.HTTP_404_NOT_FOUND)
+            if action == "APPROVE_STUDENT":
+                if not result.is_absent and result.marks_obtained is None:
+                    return Response({"error": "Enter marks or mark the student absent before verification."}, status=status.HTTP_400_BAD_REQUEST)
+                if result.status != "VERIFIED":
+                    return Response({"error": "Class teacher must verify the marks before principal approval."}, status=status.HTTP_400_BAD_REQUEST)
+                result.status = "APPROVED"
+            else:
+                result.status = "SENT_BACK"
+            result.save(update_fields=["status", "updated_at"])
+            return Response({"success": True, "student": result.student_id, "status": result.status})
+
         year_id = request.data.get("academic_year")
         class_id = request.data.get("school_class")
         div = request.data.get("division")
@@ -1475,6 +1577,19 @@ class ResultProcessingViewSet(APIView):
 
         if not academic_year or not school_class:
             return Response({"error": "Academic Year or School Class not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        readiness = ResultCalculationEngine.check_readiness(
+            school=school,
+            academic_year=academic_year,
+            school_class=school_class,
+            division=div,
+        )
+        if not readiness.get("is_ready"):
+            return Response({
+                "success": False,
+                "reason": "Final results are available after all configured terms and required assessments are complete.",
+                "blockers": readiness.get("blockers", []),
+            }, status=status.HTTP_200_OK)
 
         res = ResultCalculationEngine.calculate_class_results(
             school=school,
@@ -1495,6 +1610,16 @@ class ResultPublishView(APIView):
         class_id = request.query_params.get("school_class")
         div = request.query_params.get("division")
 
+        academic_year = AcademicYear.objects.filter(id=year_id, school=school).first()
+        school_class = SchoolClass.objects.filter(id=class_id, school=school).first()
+        if not academic_year or not school_class:
+            return Response([])
+        readiness = ResultCalculationEngine.check_readiness(
+            school=school, academic_year=academic_year, school_class=school_class, division=div
+        )
+        if not readiness.get("is_ready"):
+            return Response([])
+
         qs = FinalStudentResult.objects.filter(school=school, academic_year_id=year_id, school_class_id=class_id)
         if div and div != "ALL":
             qs = qs.filter(division=div)
@@ -1513,23 +1638,71 @@ class ResultPublishView(APIView):
         if div and div != "ALL":
             qs = qs.filter(division=div)
 
-        now = timezone.now()
-        student_ids = list(qs.values_list("student_id", flat=True))
-        if not student_ids and class_id:
-            student_ids = list(Student.objects.filter(school=school, school_class_id=class_id).values_list("id", flat=True))
-
         if publish_action == "PUBLISH":
-            cnt = qs.update(status="PUBLISHED", is_published=True, published_at=now)
-            if student_ids:
-                Result.objects.filter(student_id__in=student_ids).update(is_published=True)
+            academic_year = AcademicYear.objects.filter(id=year_id, school=school).first()
+            school_class = SchoolClass.objects.filter(id=class_id, school=school).first()
+            if not academic_year or not school_class:
+                return Response({"error": "Academic Year or School Class not found"}, status=status.HTTP_404_NOT_FOUND)
+            readiness = ResultCalculationEngine.check_readiness(
+                school=school, academic_year=academic_year, school_class=school_class, division=div
+            )
+            if not readiness.get("is_ready"):
+                return Response({
+                    "error": "Final results cannot be published until all configured terms and required assessments are complete.",
+                    "blockers": readiness.get("blockers", []),
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+        template = request.data.get("template", "classic")
+        if template not in {"classic", "modern", "compact", "watermark"}:
+            return Response({"error": "Invalid report template"}, status=status.HTTP_400_BAD_REQUEST)
+
+        now = timezone.now()
+        if publish_action == "PUBLISH":
+            cnt = qs.update(status="PUBLISHED", is_published=True, published_at=now, report_template=template)
             msg = f"Successfully published final results for {cnt} student(s)."
         else:
             cnt = qs.update(status="APPROVED", is_published=False, published_at=None)
-            if student_ids:
-                Result.objects.filter(student_id__in=student_ids).update(is_published=False)
             msg = f"Unpublished final results for {cnt} student(s)."
 
         return Response({"message": msg, "count": cnt})
+
+
+class PublishedResultTemplateView(APIView):
+    permission_classes = [IsAuthenticated, Isprincipal]
+
+    def post(self, request, *args, **kwargs):
+        school = request.user.school
+        template = request.data.get("template")
+        if template not in {"classic", "modern", "compact", "watermark"}:
+            return Response({"error": "Invalid report template"}, status=status.HTTP_400_BAD_REQUEST)
+
+        scope = request.data.get("scope")
+        division = request.data.get("division")
+        if scope == "exam":
+            exam = Exam.objects.filter(id=request.data.get("exam"), school=school).first()
+            if not exam:
+                return Response({"error": "Exam not found"}, status=status.HTTP_404_NOT_FOUND)
+            qs = Result.objects.filter(exam=exam, is_published=True)
+            if division and str(division).upper() != "ALL":
+                qs = qs.filter(student__division__iexact=division)
+            count = qs.update(report_template=template)
+        elif scope == "final":
+            year = AcademicYear.objects.filter(id=request.data.get("academic_year"), school=school).first()
+            school_class = SchoolClass.objects.filter(id=request.data.get("school_class"), school=school).first()
+            if not year or not school_class:
+                return Response({"error": "Academic Year or Class not found"}, status=status.HTTP_404_NOT_FOUND)
+            qs = FinalStudentResult.objects.filter(
+                school=school, academic_year=year, school_class=school_class, is_published=True
+            )
+            if division and str(division).upper() != "ALL":
+                qs = qs.filter(division__iexact=division)
+            count = qs.update(report_template=template)
+        else:
+            return Response({"error": "scope must be exam or final"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not count:
+            return Response({"error": "No published results found for the selected scope"}, status=status.HTTP_404_NOT_FOUND)
+        return Response({"success": True, "template": template, "updated_count": count})
 
 
 class ResultDashboardSummaryAPIView(APIView):
@@ -1760,11 +1933,26 @@ class StudentPublishedReportCardView(APIView):
                 "division": student.division or "",
             })
 
+        readiness = ResultCalculationEngine.check_readiness(
+            school=school,
+            academic_year=final_res.academic_year,
+            school_class=final_res.school_class,
+            division=final_res.division,
+        )
+        if not readiness.get("is_ready"):
+            return Response({
+                "is_published": False,
+                "message": "The final result is available after all configured terms and required assessments are complete.",
+                "student_name": f"{student.surname or ''} {student.name or ''}".strip(),
+                "class_name": final_res.school_class.school_class if final_res.school_class else "",
+                "division": final_res.division or "",
+            })
+
         # Fetch subject-wise exam marks for this student in this academic year
         exam_results = Result.objects.filter(
             student=student,
             exam__academic_year=final_res.academic_year,
-            is_published=True
+            status__in=["VERIFIED", "APPROVED"],
         ).select_related("exam__subject", "exam__exam_term")
 
         subject_marks = []
@@ -1812,6 +2000,7 @@ class StudentPublishedReportCardView(APIView):
             "total_percentage": float(final_res.total_percentage),
             "grade": final_res.grade,
             "status": final_res.status,
+            "report_template": final_res.report_template,
             "published_at": final_res.published_at,
             "component_breakdown": final_res.component_breakdown,
             "subject_marks": subject_marks,

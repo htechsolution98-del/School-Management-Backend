@@ -1438,6 +1438,7 @@ class ResultBulkCreateSerializer(serializers.Serializer):
     
 class ResultPublishSerializer(serializers.Serializer):
     exam = serializers.PrimaryKeyRelatedField(queryset=Exam.objects.all())
+    template = serializers.ChoiceField(choices=["classic", "modern", "compact", "watermark"], required=False, default="classic")
 
     def validate_exam(self, exam):
         request = self.context.get("request")
@@ -1459,7 +1460,7 @@ class ResultViewSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Result
-        fields = ["created_at", "exam_title", "subject", "marks_obtained", "max_marks", "is_absent", "grade", "remarks"]
+        fields = ["created_at", "exam_title", "subject", "marks_obtained", "max_marks", "is_absent", "grade", "remarks", "report_template"]
     
 
 class LibrarySettingSerializer(serializers.ModelSerializer):

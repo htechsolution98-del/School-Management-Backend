@@ -3347,6 +3347,7 @@ class Result(models.Model):
         ('DRAFT', 'Draft'),
         ('SUBMITTED', 'Submitted'),
         ('VERIFIED', 'Verified'),
+        ('APPROVED', 'Approved by Principal'),
         ('SENT_BACK', 'Sent Back'),
     )
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='DRAFT')
@@ -3355,6 +3356,7 @@ class Result(models.Model):
     remarks = models.CharField(max_length=255, blank=True)
 
     is_published = models.BooleanField(default=False)
+    report_template = models.CharField(max_length=20, default="classic", choices=(("classic", "Classic School"), ("modern", "Modern Color"), ("compact", "Compact Table"), ("watermark", "School Watermark")))
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -4026,6 +4028,7 @@ class FinalStudentResult(models.Model):
     remarks = models.TextField(blank=True, null=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='NOT_READY')
     is_published = models.BooleanField(default=False)
+    report_template = models.CharField(max_length=20, default="classic", choices=(("classic", "Classic School"), ("modern", "Modern Color"), ("compact", "Compact Table"), ("watermark", "School Watermark")))
     published_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

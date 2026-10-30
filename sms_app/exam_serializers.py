@@ -182,6 +182,7 @@ class SubjectMarksEntrySerializer(serializers.ModelSerializer):
             "remarks",
             "status",
             "is_published",
+            "report_template",
             "updated_at",
         ]
 
@@ -272,6 +273,7 @@ class FinalStudentResultSerializer(serializers.ModelSerializer):
             "remarks",
             "status",
             "is_published",
+            "report_template",
             "published_at",
             "updated_at",
         ]
