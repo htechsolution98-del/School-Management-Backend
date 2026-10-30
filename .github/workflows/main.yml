@@ -19,32 +19,39 @@ jobs:
 
       - name: Install SSH Key
         env:
-          SSH_KEY: ${{ secrets.SSH_KEY }}
-          SSH_HOST: ${{ secrets.IP }}
-          SSH_PORT: ${{ secrets.PORT }}
+          KEY: ${{ secrets.SSH_KEY }}
+          S_USER: ${{ secrets.USER }}
+          S_IP: ${{ secrets.IP }}
+          S_PORT: ${{ secrets.PORT }}
         run: |
           set -eu
 
-          [ -n "$SSH_KEY" ]  || { echo "::error::Secret SSH_KEY is empty or not available"; exit 1; }
-          [ -n "$IP" ] || { echo "::error::Secret SSH_HOST is empty or not available"; exit 1; }
-          [ -n "$SSH_PORT" ] || { echo "::error::Secret SSH_PORT is empty or not available"; exit 1; }
+          [ -n "$KEY" ]    || { echo "::error::Secret SSH_KEY is empty or not available"; exit 1; }
+          [ -n "$S_USER" ] || { echo "::error::Secret USER is empty or not available"; exit 1; }
+          [ -n "$S_IP" ]   || { echo "::error::Secret IP is empty or not available"; exit 1; }
+          [ -n "$S_PORT" ] || { echo "::error::Secret PORT is empty or not available"; exit 1; }
 
           mkdir -p "$HOME/.ssh"
           chmod 700 "$HOME/.ssh"
 
-          printf '%s\n' "$SSH_KEY" > "$HOME/.ssh/id_rsa"
+          printf '%s\n' "$KEY" > "$HOME/.ssh/id_rsa"
           chmod 600 "$HOME/.ssh/id_rsa"
 
-          if ! ssh-keyscan -T 15 -p "$PORT" -H "$IP" >> "$HOME/.ssh/known_hosts"; then
-            echo "::error::ssh-keyscan failed: no route, firewall block, or wrong host/port"
-            exit 1
-          fi
-          [ -s "$HOME/.ssh/known_hosts" ] || { echo "::error::No host key retrieved"; exit 1; }
+          cat > "$HOME/.ssh/config" <<EOF
+          Host deploy-target
+            HostName $S_IP
+            Port $S_PORT
+            User $S_USER
+            IdentityFile $HOME/.ssh/id_rsa
+            IdentitiesOnly yes
+            StrictHostKeyChecking accept-new
+            ConnectTimeout 20
+          EOF
+          chmod 600 "$HOME/.ssh/config"
 
       - name: Deploy Backend
         run: |
-          ssh -T -p "${{ secrets.PORT }}" \
-            "${{ secrets.USER }}@${{ secrets.IP }}" << 'SSHEOF'
+          ssh -T deploy-target << 'SSHEOF'
           set -e
 
           cd -- "${{ secrets.BACKEND_WORK_DIR }}"
