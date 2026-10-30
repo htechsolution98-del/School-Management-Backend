@@ -20,13 +20,13 @@ jobs:
       - name: Install SSH Key
         env:
           SSH_KEY: ${{ secrets.SSH_KEY }}
-          SSH_HOST: ${{ secrets.SSH_HOST }}
-          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_HOST: ${{ secrets.IP }}
+          SSH_PORT: ${{ secrets.PORT }}
         run: |
           set -eu
 
           [ -n "$SSH_KEY" ]  || { echo "::error::Secret SSH_KEY is empty or not available"; exit 1; }
-          [ -n "$SSH_HOST" ] || { echo "::error::Secret SSH_HOST is empty or not available"; exit 1; }
+          [ -n "$IP" ] || { echo "::error::Secret SSH_HOST is empty or not available"; exit 1; }
           [ -n "$SSH_PORT" ] || { echo "::error::Secret SSH_PORT is empty or not available"; exit 1; }
 
           mkdir -p "$HOME/.ssh"
@@ -35,7 +35,7 @@ jobs:
           printf '%s\n' "$SSH_KEY" > "$HOME/.ssh/id_rsa"
           chmod 600 "$HOME/.ssh/id_rsa"
 
-          if ! ssh-keyscan -T 15 -p "$SSH_PORT" -H "$SSH_HOST" >> "$HOME/.ssh/known_hosts"; then
+          if ! ssh-keyscan -T 15 -p "$PORT" -H "$IP" >> "$HOME/.ssh/known_hosts"; then
             echo "::error::ssh-keyscan failed: no route, firewall block, or wrong host/port"
             exit 1
           fi
@@ -43,8 +43,8 @@ jobs:
 
       - name: Deploy Backend
         run: |
-          ssh -T -p "${{ secrets.SSH_PORT }}" \
-            "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" << 'SSHEOF'
+          ssh -T -p "${{ secrets.PORT }}" \
+            "${{ secrets.USER }}@${{ secrets.IP }}" << 'SSHEOF'
           set -e
 
           cd -- "${{ secrets.BACKEND_WORK_DIR }}"
