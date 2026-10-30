@@ -21,11 +21,11 @@ jobs:
         env:
           SSH_KEY: ${{ secrets.SSH_KEY }}
           SSH_HOST: ${{ secrets.SSH_HOST }}
-          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_PORT: ${{ secrets.PORT }}
         run: |
           set -euo pipefail
 
-          for v in SSH_KEY SSH_HOST SSH_PORT; do
+          for v in SSH_KEY SSH_HOST PORT; do
             if [ -z "${!v}" ]; then
               echo "::error::Secret $v is empty or not available to this workflow"
               exit 1
@@ -38,7 +38,7 @@ jobs:
           printf '%s\n' "$SSH_KEY" > "$HOME/.ssh/id_rsa"
           chmod 600 "$HOME/.ssh/id_rsa"
 
-          if ! ssh-keyscan -T 15 -p "$SSH_PORT" -H "$SSH_HOST" >> "$HOME/.ssh/known_hosts"; then
+          if ! ssh-keyscan -T 15 -p "$PORT" -H "$SSH_HOST" >> "$HOME/.ssh/known_hosts"; then
             echo "::error::ssh-keyscan failed for the host/port secrets: no route, firewall block, or wrong port"
             exit 1
           fi
@@ -46,7 +46,7 @@ jobs:
 
       - name: Deploy Backend
         run: |
-          ssh -T -p "${{ secrets.SSH_PORT }}" \
+          ssh -T -p "${{ secrets.PORT }}" \
             "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" << 'SSHEOF'
           set -e
 
