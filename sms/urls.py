@@ -90,6 +90,7 @@ from sms_app.trustee_inventory_report import TrusteeInventoryReport
 from sms_app.trustee_library_report import TrusteeLibraryReport
 from sms_app.trustee_student_report import TrusteeStudentReport
 from sms_app.trustee_staff_report import TrusteeStaffReport
+from sms_app.school_profile_views import SchoolProfileView, SchoolProfileAssetUploadView
 from sms_app.support_views import SupportTicketViewSet
 from sms_app.tutorial_views import PageTutorialViewSet
 
@@ -511,6 +512,10 @@ urlpatterns = [
     path('api/trustee/library-report/', TrusteeLibraryReport.as_view(), name='trustee-library-report'),
     path('api/trustee/student-report/', TrusteeStudentReport.as_view(), name='trustee-student-report'),
     path('api/trustee/staff-report/', TrusteeStaffReport.as_view(), name='trustee-staff-report'),
+    path('api/school-profile/', SchoolProfileView.as_view(), name='school-profile'),
+    path('api/school-profile/upload-asset/', SchoolProfileAssetUploadView.as_view(), name='school-profile-upload-asset'),
+    path('api/trustee/school-profile/', SchoolProfileView.as_view(), name='trustee-school-profile'),
+    path('api/trustee/school-profile/upload-asset/', SchoolProfileAssetUploadView.as_view(), name='trustee-school-profile-upload-asset'),
     path('api/rte/summary/', RTESummaryView.as_view()),
     path('api/duefeesview/',DueFeesView.as_view()),
     path('api/payment-history/',PaymentHistoryView.as_view()),

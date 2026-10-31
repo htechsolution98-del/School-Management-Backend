@@ -45,8 +45,14 @@ class AdmissionFormViewSet(ModelViewSet):
 
     def get_queryset(self):
         user = getattr(self.request, "user", None)
-        if user and getattr(user, "school", None):
-            return AdmissionForm.objects.filter(school=user.school)
+        school = getattr(user, "school", None) if user else None
+        if not school and user and user.is_authenticated:
+            from .models import Staff
+            staff = Staff.objects.filter(user=user).first()
+            if staff and staff.school:
+                school = staff.school
+        if school:
+            return AdmissionForm.objects.filter(school=school)
         school_id = self.request.query_params.get("school_id")
         school_slug = self.request.query_params.get("school_slug")
         if school_id or school_slug:
@@ -56,6 +62,8 @@ class AdmissionFormViewSet(ModelViewSet):
             if school_slug:
                 filters["school__slug"] = school_slug
             return AdmissionForm.objects.filter(**filters)
+        if user and user.is_authenticated:
+            return AdmissionForm.objects.all()
         return AdmissionForm.objects.filter(is_active=True)
 
     def get_object(self):
@@ -64,9 +72,21 @@ class AdmissionFormViewSet(ModelViewSet):
         queryset = self.filter_queryset(self.get_queryset())
         if lookup_val and str(lookup_val).isdigit():
             obj = queryset.filter(id=lookup_val).first()
+            if not obj:
+                user = getattr(self.request, "user", None)
+                school = getattr(user, "school", None) if user else None
+                if not school and user and user.is_authenticated:
+                    from .models import Staff
+                    staff = Staff.objects.filter(user=user).first()
+                    if staff and staff.school:
+                        school = staff.school
+                fallback_qs = AdmissionForm.objects.filter(school=school) if school else AdmissionForm.objects.all()
+                obj = fallback_qs.filter(id=lookup_val).first()
             if obj:
                 self.check_object_permissions(self.request, obj)
                 return obj
+            from rest_framework.exceptions import NotFound
+            raise NotFound(f"Admission form with ID '{lookup_val}' not found.")
         return super().get_object()
 
     def perform_create(self, serializer):
@@ -74,11 +94,42 @@ class AdmissionFormViewSet(ModelViewSet):
 
     def create(self, request, *args, **kwargs):
         with transaction.atomic():
-            serializer = self.get_serializer(data=request.data)
+            serializer = self.get_serializer(data=request.data, context=self.get_serializer_context())
             serializer.is_valid(raise_exception=True)
             instance = serializer.save()
 
         return Response(AdmissionFormViewSerializer(instance, context={"request": request}).data, status=status.HTTP_201_CREATED)
+
+    def update(self, request, *args, **kwargs):
+        import logging
+        import traceback
+        logger = logging.getLogger(__name__)
+        log_file = "H:/school-management/School-Management-Backend/backend_error.log"
+
+        try:
+            partial = kwargs.pop("partial", False)
+            instance = self.get_object()
+            serializer = self.get_serializer(instance, data=request.data, partial=partial, context=self.get_serializer_context())
+            serializer.is_valid(raise_exception=True)
+            self.perform_update(serializer)
+            instance.refresh_from_db()
+            data = AdmissionFormViewSerializer(instance, context={"request": request}).data
+            return Response(data, status=status.HTTP_200_OK)
+        except Exception as exc:
+            tb = traceback.format_exc()
+            logger.error(f"[AdmissionFormViewSet.update] Error: {exc}\n{tb}")
+            try:
+                with open(log_file, "a", encoding="utf-8") as f:
+                    f.write(f"\n[{timezone.now()}] EXCEPTION in AdmissionFormViewSet.update:\n{exc}\n{tb}\n")
+            except Exception:
+                pass
+            from rest_framework.exceptions import APIException
+            if isinstance(exc, APIException):
+                raise exc
+            return Response(
+                {"detail": str(exc), "error": str(exc), "traceback": tb},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 
 class FormStatus(ModelViewSet):

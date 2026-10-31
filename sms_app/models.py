@@ -4493,3 +4493,5 @@ from .tutorial_models import PageTutorial
 from .id_card_models import IDCardTemplate, IDCardRecord, IDCardLog
 
 
+
+from .school_profile_models import SchoolProfile
