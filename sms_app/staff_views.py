@@ -33,6 +33,7 @@ from django.contrib.auth.models import Group
 # pyrefly: ignore [missing-import]
 from django.contrib.auth import get_user_model
 from rest_framework.exceptions import PermissionDenied
+from django.db.models import Count, ProtectedError, RestrictedError
 
 User = get_user_model()
 
@@ -50,9 +51,15 @@ class DepartmentViewSet(ModelViewSet):
             staff = getattr(user, 'staff', None)
             if staff and staff.school:
                 school = staff.school
+        if not school:
+            school = getattr(user, 'managed_school', None)
+            if not school:
+                school = School.objects.filter(login_id=user.id).first()
         if school:
-            return Department.objects.filter(school=school)
-        return Department.objects.filter(school__login_id=user)
+            qs = Department.objects.filter(school=school)
+        else:
+            qs = Department.objects.filter(school__login_id=user)
+        return qs.annotate(annotated_staff_count=Count('staff')).order_by('name')
 
     def perform_create(self, serializer):
         user = self.request.user
@@ -71,6 +78,29 @@ class DepartmentViewSet(ModelViewSet):
         if name and Department.objects.filter(school=school, name__iexact=name).exists():
             raise serializers.ValidationError({"name": "A department with this name already exists in your school."})
         serializer.save(school=school)
+
+    def perform_update(self, serializer):
+        instance = serializer.instance
+        name = serializer.validated_data.get('name')
+        if name and Department.objects.filter(school=instance.school, name__iexact=name).exclude(pk=instance.pk).exists():
+            raise serializers.ValidationError({"name": "A department with this name already exists in your school."})
+        serializer.save()
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        if instance.staff_set.exists():
+            return Response(
+                {"error": "Cannot delete department with active staff members assigned."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            self.perform_destroy(instance)
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        except (ProtectedError, RestrictedError):
+            return Response(
+                {"error": "Cannot delete department with active staff members assigned."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
 class StaffView(ModelViewSet):
     queryset = Staff.objects.all()

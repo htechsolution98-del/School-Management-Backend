@@ -11,10 +11,37 @@ import cv2.data
 
 User = get_user_model()
 class DepartmentSerializer(serializers.ModelSerializer):
+    staff_count = serializers.SerializerMethodField()
+    total_staff = serializers.SerializerMethodField()
+
     class Meta:
         model = Department
-        fields = "__all__"
-        read_only_fields = ["school"]
+        fields = [
+            "id",
+            "school",
+            "name",
+            "created_at",
+            "updated_at",
+            "staff_count",
+            "total_staff",
+        ]
+        read_only_fields = ["school", "created_at", "updated_at"]
+
+    def get_staff_count(self, obj):
+        if hasattr(obj, "annotated_staff_count"):
+            return obj.annotated_staff_count
+        return obj.staff_set.count()
+
+    def get_total_staff(self, obj):
+        return self.get_staff_count(obj)
+
+    def validate_name(self, value):
+        if not value or not str(value).strip():
+            raise serializers.ValidationError("Department name cannot be blank.")
+        clean_name = str(value).strip()
+        if len(clean_name) > 100:
+            raise serializers.ValidationError("Department name cannot exceed 100 characters.")
+        return clean_name
 
 class StaffSerializer(serializers.ModelSerializer):
     class Meta:
