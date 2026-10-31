@@ -1338,6 +1338,11 @@ class AdmissionFormSerializer(serializers.ModelSerializer):
         required=False,
         write_only=True,
     )
+    document_fields_config = serializers.ListField(
+        child=serializers.DictField(),
+        required=False,
+        write_only=True,
+    )
 
     fee_structures_input = AdmissionFeeStructureSerializer(
         many=True, required=False, write_only=True
@@ -1357,6 +1362,7 @@ class AdmissionFormSerializer(serializers.ModelSerializer):
             "fee_type",
             "fee_structures_input",
             "document_fields",
+            "document_fields_config",
         ]
         read_only_fields = ["unique_link"]
 
@@ -1370,6 +1376,41 @@ class AdmissionFormSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 "fee_structures_input is required when fee_type is 'individual'"
             )
+
+        # Title uniqueness check within the same school/tenant
+        title = data.get("title") or (getattr(self.instance, "title", None) if self.instance else None)
+        if title:
+            title_clean = str(title).strip()
+            if not title_clean:
+                raise serializers.ValidationError({"title": "Form title is required."})
+            data["title"] = title_clean
+
+            # Resolve school from context or instance
+            request = self.context.get("request")
+            school = None
+            if request and hasattr(request, "user") and request.user.is_authenticated:
+                school = getattr(request.user, "school", None)
+                if not school:
+                    from .models import Staff
+                    member = Staff.objects.filter(user=request.user).first()
+                    school = member.school if member else None
+                if not school and (request.user.is_superuser or request.user.is_staff):
+                    school_id = request.data.get("school") or (request.query_params.get("school_id") if hasattr(request, "query_params") else None)
+                    if school_id:
+                        from .models import School
+                        school = School.objects.filter(id=school_id).first()
+            if not school and getattr(self, "instance", None):
+                school = self.instance.school
+
+            if school:
+                existing_qs = AdmissionForm.objects.filter(school=school, title__iexact=title_clean)
+                if self.instance and self.instance.pk:
+                    existing_qs = existing_qs.exclude(pk=self.instance.pk)
+                if existing_qs.exists():
+                    raise serializers.ValidationError({
+                        "title": "A form with this title already exists.",
+                        "detail": "A form with this title already exists."
+                    })
 
         return data
 
@@ -1421,6 +1462,200 @@ class AdmissionFormSerializer(serializers.ModelSerializer):
                     )
 
             return form
+
+    # ================= UPDATE =================
+    def update(self, instance, validated_data):
+        import logging as _logging
+        _logger = _logging.getLogger("django")
+        _logger.warning("[AdmissionFormSerializer.update] CALLED for form id=%s", instance.pk)
+        try:
+            with transaction.atomic():
+                document_fields = validated_data.pop("document_fields", None)
+                document_config = validated_data.pop("document_fields_config", None)
+                sections_data = validated_data.pop("sections", None)
+                fee_data = validated_data.pop("fee_structures_input", None)
+
+                # Fallback to initial_data if DRF didn't populate them into validated_data during partial update
+                if sections_data is None and hasattr(self, "initial_data") and "sections" in self.initial_data:
+                    sections_data = self.initial_data.get("sections")
+                if document_fields is None and hasattr(self, "initial_data") and "document_fields" in self.initial_data:
+                    document_fields = self.initial_data.get("document_fields")
+                if fee_data is None and hasattr(self, "initial_data") and "fee_structures_input" in self.initial_data:
+                    fee_data = self.initial_data.get("fee_structures_input")
+
+                school = instance.school
+                if not school:
+                    request = self.context.get("request")
+                    user = getattr(request, "user", None)
+                    if user:
+                        school = getattr(user, "school", None)
+                        if not school:
+                            from .models import Staff
+                            staff = Staff.objects.filter(user=user).first()
+                            school = staff.school if staff else None
+                if school and not instance.school:
+                    instance.school = school
+
+                # Update direct scalar fields on instance
+                SKIP_ATTRS = {"school", "unique_link", "id", "created_at"}
+                for attr, value in validated_data.items():
+                    if attr not in SKIP_ATTRS:
+                        setattr(instance, attr, value)
+                instance.save()
+
+                # Process sections and fields with strict orphan cleanup and core preservation
+                if sections_data is not None:
+                    # 1. Collect all incoming field IDs and normalized labels
+                    incoming_field_ids = set()
+                    incoming_field_labels = set()
+                    for sec in sections_data:
+                        for f in (sec.get("fields") or []):
+                            if isinstance(f, dict):
+                                if f.get("id"):
+                                    incoming_field_ids.add(str(f.get("id")))
+                                if f.get("label"):
+                                    incoming_field_labels.add(str(f.get("label")).strip().lower())
+
+                    # 2. Fetch all existing sections and fields for this form
+                    existing_sections = FormSection.objects.filter(form=instance)
+                    existing_fields = FormField.objects.filter(section__in=existing_sections)
+
+                    # 3. Core field definitions (CANNOT be deleted or deselected)
+                    CORE_MAPPINGS = {"name", "date_of_birth", "gender", "school_class", "father_name"}
+                    CORE_LABELS = {
+                        "student name",
+                        "student full name",
+                        "date of birth",
+                        "dob",
+                        "gender",
+                        "applying for class",
+                        "applying class",
+                        "father name",
+                        "fathers name",
+                    }
+
+                    # 4. Explicitly delete any orphan FormField in DB no longer present in request (unless core)
+                    for db_f in existing_fields:
+                        is_core = (
+                            (db_f.map_to_student_field and db_f.map_to_student_field.lower() in CORE_MAPPINGS) or
+                            (db_f.label and db_f.label.strip().lower() in CORE_LABELS)
+                        )
+                        if not is_core:
+                            has_matching_id = str(db_f.id) in incoming_field_ids
+                            has_matching_label = db_f.label and str(db_f.label).strip().lower() in incoming_field_labels
+                            if not has_matching_id and not has_matching_label:
+                                _logger.warning("[update] Deleting orphan FormField id=%s label='%s'", db_f.id, db_f.label)
+                                AdmissionFieldValue.objects.filter(field=db_f).delete()
+                                db_f.delete()
+
+                    # 5. Clean up remaining fields and sections for recreation
+                    remaining_fields = FormField.objects.filter(section__in=existing_sections)
+                    AdmissionFieldValue.objects.filter(field__in=remaining_fields).delete()
+                    remaining_fields.delete()
+                    existing_sections.delete()
+
+                    # 6. Recreate only the incoming sections and fields from request payload
+                    VALID_SECTION_KEYS = {"title", "order"}
+                    VALID_FIELD_KEYS = {
+                        "label",
+                        "field_type",
+                        "is_required",
+                        "options",
+                        "order",
+                        "map_to_student_field",
+                        "is_system_field",
+                    }
+                    VALID_FIELD_TYPES = {"text", "number", "date", "select", "checkbox", "radio"}
+
+                    for s_idx, section_data in enumerate(sections_data):
+                        sec_dict = dict(section_data)
+                        raw_fields = sec_dict.pop("fields", [])
+                        clean_sec = {k: v for k, v in sec_dict.items() if k in VALID_SECTION_KEYS}
+                        if "order" not in clean_sec:
+                            clean_sec["order"] = s_idx + 1
+
+                        section_obj = FormSection.objects.create(
+                            form=instance, school=school, **clean_sec
+                        )
+                        for f_idx, field_data in enumerate(raw_fields):
+                            f_dict = dict(field_data)
+                            is_req = bool(f_dict.get("is_required", f_dict.get("required", False)))
+
+                            # Enforce is_required for core fields
+                            mapping = f_dict.get("map_to_student_field")
+                            lbl = f_dict.get("label", "")
+                            if (mapping and mapping.lower() in CORE_MAPPINGS) or (lbl and lbl.strip().lower() in CORE_LABELS):
+                                is_req = True
+
+                            clean_f = {k: v for k, v in f_dict.items() if k in VALID_FIELD_KEYS}
+                            clean_f["is_required"] = is_req
+                            if "order" not in clean_f:
+                                clean_f["order"] = f_idx + 1
+                            if "field_type" not in clean_f:
+                                clean_f["field_type"] = f_dict.get("type", "text")
+                            if clean_f["field_type"] not in VALID_FIELD_TYPES:
+                                clean_f["field_type"] = "text"
+                            if "options" in clean_f and clean_f["options"]:
+                                if isinstance(clean_f["options"], list):
+                                    clean_f["options"] = [dict(opt) if isinstance(opt, dict) else opt for opt in clean_f["options"]]
+
+                            FormField.objects.create(
+                                section=section_obj, school=school, **clean_f
+                            )
+
+                # Process document fields
+                if document_fields is not None:
+                    DocumentField.objects.filter(form=instance).delete()
+                    doc_config = document_config or []
+                    for idx, label in enumerate(document_fields):
+                        if not label or not str(label).strip():
+                            continue
+                        clean_lbl = str(label).strip()
+                        required = False
+                        if isinstance(doc_config, list):
+                            for item in doc_config:
+                                if isinstance(item, dict) and item.get("label", "").strip() == clean_lbl:
+                                    required = bool(item.get("is_required", False))
+                                    break
+                        DocumentField.objects.create(
+                            form=instance, school=school, label=clean_lbl, is_required=required, order=idx + 1
+                        )
+
+                # Process fee structures
+                if fee_data is not None or instance.fee_type == "individual":
+                    AdmissionFeeStructure.objects.filter(admission_form=instance).delete()
+                    if instance.fee_type == "individual" and fee_data:
+                        for fee in fee_data:
+                            fee_dict = dict(fee)
+                            cls_val = fee_dict.get("class_name")
+                            cls_id = getattr(cls_val, "id", cls_val)
+                            clean_fee = {
+                                "class_name_id": cls_id,
+                                "fee_amount": fee_dict.get("fee_amount"),
+                            }
+                            if not clean_fee["class_name_id"]:
+                                clean_fee.pop("class_name_id", None)
+                            AdmissionFeeStructure.objects.create(
+                                admission_form=instance, school=school, **clean_fee
+                            )
+
+                if hasattr(instance, "custom_fields"):
+                    instance.custom_fields = validated_data.get("custom_fields", getattr(instance, "custom_fields", None))
+
+                instance.refresh_from_db()
+                return instance
+        except Exception as _exc:
+            import traceback as _tb
+            tb_str = _tb.format_exc()
+            _logger.error("[AdmissionFormSerializer.update] EXCEPTION: %s", str(_exc))
+            _logger.error("[AdmissionFormSerializer.update] TRACEBACK: %s", tb_str)
+            try:
+                from django.utils import timezone
+                with open("H:/school-management/School-Management-Backend/backend_error.log", "a", encoding="utf-8") as f:
+                    f.write(f"\n[{timezone.now()}] EXCEPTION in AdmissionFormSerializer.update:\n{_exc}\n{tb_str}\n")
+            except Exception:
+                pass
+            raise
 
 
 # ====THIS SERIALIZER FOR VIEW ADMISSION FORM FIELD====
