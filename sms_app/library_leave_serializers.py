@@ -1821,7 +1821,9 @@ class BookReservationSerializer(serializers.ModelSerializer):
     class Meta:
         model = BookReservation
         fields = '__all__'
-        read_only_fields = ['school', 'queue_number', 'reservation_date', 'status']
+        # The reservation endpoint resolves the student from request.user.
+        # Accepting a student ID from the client is both redundant and unsafe.
+        read_only_fields = ['school', 'student', 'queue_number', 'reservation_date', 'status']
 
     def get_student_name(self, obj):
         if obj.student:

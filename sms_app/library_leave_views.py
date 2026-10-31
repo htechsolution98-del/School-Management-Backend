@@ -3854,32 +3854,32 @@ class BookReservationViewSet(CachedLibraryViewSetMixin, ModelViewSet):
         book = serializer.validated_data["book"]
         if book.school_id != student.school_id:
             raise ValidationError("That book does not belong to your school.")
+        with transaction.atomic():
+            already_reserved = BookReservation.objects.filter(
+                school=student.school, book=book, student=student, status__in=["WAITING", "AVAILABLE"]
+            ).exists()
+            if already_reserved:
+                raise ValidationError("You have already reserved this book.")
 
-        already_reserved = BookReservation.objects.filter(
-            school=student.school, book=book, student=student, status__in=["WAITING", "AVAILABLE"]
-        ).exists()
-        if already_reserved:
-            raise ValidationError("You have already reserved this book.")
+            active_loan = BookIssued.objects.filter(
+                school=student.school, book=book, student=student, status="ISSUED"
+            ).exists()
+            if active_loan:
+                raise ValidationError("You already have this book checked out.")
 
-        active_loan = BookIssued.objects.filter(
-            school=student.school, book=book, student=student, status="ISSUED"
-        ).exists()
-        if active_loan:
-            raise ValidationError("You already have this book checked out.")
+            # Compute the next position using this book's active waitlist.
+            last_queue = BookReservation.objects.filter(
+                school=student.school, book=book, status="WAITING"
+            ).count()
 
-        # Compute next queue number for this book
-        last_queue = BookReservation.objects.filter(
-            school=student.school, book=book, status="WAITING"
-        ).count()
-        next_queue = last_queue + 1
-
-        serializer.save(
-            school=student.school,
-            student=student,
-            book=book,
-            queue_number=next_queue,
-            status="WAITING"
-        )
+            serializer.save(
+                school=student.school,
+                student=student,
+                book=book,
+                queue_number=last_queue + 1,
+                status="WAITING"
+            )
+        invalidate_library_school_cache(student.school_id)
 
     @action(detail=True, methods=["post"], url_path="cancel")
     def cancel_reservation(self, request, pk=None):

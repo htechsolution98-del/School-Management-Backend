@@ -42,11 +42,10 @@ class SchoolProfile(models.Model):
         null=True,
         help_text="Year the institution was established (e.g. 1998)"
     )
-    board_affiliation = models.CharField(
-        max_length=150,
+    board_affiliation = models.JSONField(
+        default=list,
         blank=True,
-        null=True,
-        help_text="Affiliation board (e.g. CBSE, ICSE, GSEB, State Board, IB)"
+        help_text="Affiliation board(s) (e.g. ['CBSE', 'ICSE', 'GSEB'])"
     )
     udise_code = models.CharField(
         max_length=50,
