@@ -778,6 +778,26 @@ def _user_display_name(user):
     """Best-effort human name for a user, since CustomUser has no name column."""
     if not user:
         return "System"
+
+    # For School Trustee accounts, prioritize the institutional short name
+    try:
+        is_trustee = getattr(user, "role", "").lower() in ["admin(trustee)", "trustee", "admin"]
+        school = getattr(user, "school", None)
+        if not school:
+            from .models import School
+            school = School.objects.filter(login_id=user).first()
+        if school:
+            sp = getattr(school, "school_profile", None)
+            if sp and sp.school_short_name:
+                return sp.school_short_name
+            if is_trustee:
+                if sp and sp.school_full_name:
+                    return sp.school_full_name
+                if school.name:
+                    return school.name
+    except Exception:
+        pass
+
     full_name = " ".join(
         part for part in [getattr(user, "first_name", ""), getattr(user, "last_name", "")] if part
     ).strip()
@@ -815,6 +835,9 @@ class CurrentUserProfileSerializer(serializers.ModelSerializer):
     """Profile of the authenticated user, resolved from the request token."""
 
     name = serializers.SerializerMethodField()
+    short_display_name = serializers.SerializerMethodField()
+    school_short_name = serializers.SerializerMethodField()
+    school_full_name = serializers.SerializerMethodField()
     roles = serializers.SerializerMethodField()
     role = serializers.SerializerMethodField()
     avatar = serializers.SerializerMethodField()
@@ -833,6 +856,9 @@ class CurrentUserProfileSerializer(serializers.ModelSerializer):
             "first_name",
             "last_name",
             "name",
+            "short_display_name",
+            "school_short_name",
+            "school_full_name",
             "email",
             "mobile",
             "role",
@@ -851,10 +877,65 @@ class CurrentUserProfileSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = fields
 
+    def _get_school_and_profile(self, user):
+        school = getattr(user, "school", None) or getattr(user, "managed_school", None)
+        if not school:
+            from .models import School
+            school = School.objects.filter(login_id=user).first()
+        if not school:
+            staff = Staff.objects.filter(user=user).select_related("school").first()
+            if staff:
+                school = staff.school
+        if not school:
+            student = Student.objects.filter(user=user).select_related("school").first()
+            if not student and getattr(user, "username", None):
+                student = Student.objects.filter(gr_no=user.username).select_related("school").first()
+            if student:
+                school = student.school
+        if not school:
+            parent = Perents.objects.filter(user=user).select_related("perents_of__school").first()
+            if parent and parent.perents_of:
+                school = parent.perents_of.school
+        if not school:
+            return None, None
+        sp = getattr(school, "school_profile", None)
+        return school, sp
+
+    def get_short_display_name(self, user):
+        school, sp = self._get_school_and_profile(user)
+        if sp and sp.school_short_name:
+            return sp.school_short_name
+        if sp and sp.school_full_name:
+            return sp.school_full_name
+        if school and school.name:
+            return school.name
+        return None
+
+    def get_school_short_name(self, user):
+        _, sp = self._get_school_and_profile(user)
+        return sp.school_short_name if sp else None
+
+    def get_school_full_name(self, user):
+        school, sp = self._get_school_and_profile(user)
+        if sp and sp.school_full_name:
+            return sp.school_full_name
+        if school and school.name:
+            return school.name
+        return None
+
     def get_name(self, user):
         return _user_display_name(user)
 
     def get_initials(self, user):
+        short_name = self.get_short_display_name(user)
+        is_trustee = getattr(user, "role", "").lower() in ["admin(trustee)", "trustee", "admin"]
+        if is_trustee and short_name:
+            name = short_name.strip()
+            parts = [part for part in name.split() if part]
+            if len(parts) == 1:
+                return parts[0][:2].upper()
+            return (parts[0][0] + parts[-1][0]).upper()
+
         name = self.get_name(user)
         parts = [part for part in name.split() if part]
         if not parts:
@@ -895,10 +976,17 @@ class CurrentUserProfileSerializer(serializers.ModelSerializer):
             if parent and parent.perents_of:
                 school = parent.perents_of.school
 
-        if school and school.logo:
-            request = self.context.get("request")
-            url = school.logo.url
-            return request.build_absolute_uri(url) if request else url
+        if school:
+            profile = getattr(school, "school_profile", None)
+            if profile and profile.main_logo_url:
+                return profile.main_logo_url
+            if school.logo:
+                request = self.context.get("request")
+                try:
+                    url = school.logo.url
+                    return request.build_absolute_uri(url) if request else url
+                except Exception:
+                    return str(school.logo)
         return None
 
     def get_school(self, user):
@@ -919,19 +1007,36 @@ class CurrentUserProfileSerializer(serializers.ModelSerializer):
             parent = Perents.objects.filter(user=user).select_related("perents_of__school").first()
             if parent and parent.perents_of:
                 school = parent.perents_of.school
+        if not school:
+            from .models import School
+            school = School.objects.filter(login_id=user).first()
 
         if not school:
             return None
 
+        profile = getattr(school, "school_profile", None)
+        school_name = (
+            profile.school_short_name
+            or profile.school_full_name
+            or school.name
+        ) if profile else school.name
+
         logo_url = None
-        if school.logo:
+        if profile and profile.main_logo_url:
+            logo_url = profile.main_logo_url
+        elif school.logo:
             request = self.context.get("request")
-            url = school.logo.url
-            logo_url = request.build_absolute_uri(url) if request else url
+            try:
+                url = school.logo.url
+                logo_url = request.build_absolute_uri(url) if request else url
+            except Exception:
+                logo_url = str(school.logo)
 
         return {
             "id": school.id,
-            "name": school.name,
+            "name": school_name,
+            "full_name": getattr(profile, "school_full_name", None) or school.name,
+            "short_name": getattr(profile, "school_short_name", None),
             "slug": school.slug,
             "logo": logo_url,
             "address": getattr(school, "address", None),
