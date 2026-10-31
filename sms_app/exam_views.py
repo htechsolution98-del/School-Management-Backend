@@ -1614,15 +1614,17 @@ class ResultPublishView(APIView):
         school_class = SchoolClass.objects.filter(id=class_id, school=school).first()
         if not academic_year or not school_class:
             return Response([])
-        readiness = ResultCalculationEngine.check_readiness(
-            school=school, academic_year=academic_year, school_class=school_class, division=div
-        )
-        if not readiness.get("is_ready"):
-            return Response([])
 
         qs = FinalStudentResult.objects.filter(school=school, academic_year_id=year_id, school_class_id=class_id)
         if div and div != "ALL":
             qs = qs.filter(division=div)
+
+        if not qs.exists():
+            readiness = ResultCalculationEngine.check_readiness(
+                school=school, academic_year=academic_year, school_class=school_class, division=div
+            )
+            if not readiness.get("is_ready"):
+                return Response([])
 
         serializer = FinalStudentResultSerializer(qs, many=True)
         return Response(serializer.data)
@@ -1643,14 +1645,15 @@ class ResultPublishView(APIView):
             school_class = SchoolClass.objects.filter(id=class_id, school=school).first()
             if not academic_year or not school_class:
                 return Response({"error": "Academic Year or School Class not found"}, status=status.HTTP_404_NOT_FOUND)
-            readiness = ResultCalculationEngine.check_readiness(
-                school=school, academic_year=academic_year, school_class=school_class, division=div
-            )
-            if not readiness.get("is_ready"):
-                return Response({
-                    "error": "Final results cannot be published until all configured terms and required assessments are complete.",
-                    "blockers": readiness.get("blockers", []),
-                }, status=status.HTTP_400_BAD_REQUEST)
+            if not qs.exists():
+                readiness = ResultCalculationEngine.check_readiness(
+                    school=school, academic_year=academic_year, school_class=school_class, division=div
+                )
+                if not readiness.get("is_ready"):
+                    return Response({
+                        "error": "Final results cannot be published until all configured terms and required assessments are complete.",
+                        "blockers": readiness.get("blockers", []),
+                    }, status=status.HTTP_400_BAD_REQUEST)
 
         template = request.data.get("template", "classic")
         if template not in {"classic", "modern", "compact", "watermark"}:
@@ -1659,9 +1662,23 @@ class ResultPublishView(APIView):
         now = timezone.now()
         if publish_action == "PUBLISH":
             cnt = qs.update(status="PUBLISHED", is_published=True, published_at=now, report_template=template)
+            student_ids = list(qs.values_list("student_id", flat=True))
+            Result.objects.filter(
+                exam__school=school,
+                exam__academic_year_id=year_id,
+                exam__class_group_id=class_id,
+                student_id__in=student_ids
+            ).update(is_published=True, status="VERIFIED")
             msg = f"Successfully published final results for {cnt} student(s)."
         else:
             cnt = qs.update(status="APPROVED", is_published=False, published_at=None)
+            student_ids = list(qs.values_list("student_id", flat=True))
+            Result.objects.filter(
+                exam__school=school,
+                exam__academic_year_id=year_id,
+                exam__class_group_id=class_id,
+                student_id__in=student_ids
+            ).update(is_published=False)
             msg = f"Unpublished final results for {cnt} student(s)."
 
         return Response({"message": msg, "count": cnt})
