@@ -29,13 +29,12 @@ class Command(BaseCommand):
         else:
             user.username = username
             user.email = email
-            user.set_password(password)
             user.mobile = "superadmin"
             user.is_superuser = True
             user.is_staff = True
             user.role = "superadmin"
             user.save()
-            self.stdout.write(self.style.SUCCESS(f"Superadmin '{username}' updated successfully!"))
+            self.stdout.write(self.style.SUCCESS(f"Superadmin '{username}' updated; existing password preserved."))
 
         # 2. Ensure at least one default School exists if database is fresh
         school = School.objects.first()
@@ -140,7 +139,6 @@ class Command(BaseCommand):
                     )
                 )
             else:
-                u.set_password(default_password)
                 u.role = udata["role"]
                 u.school = school
                 u.is_active = True
@@ -148,7 +146,7 @@ class Command(BaseCommand):
                 u.groups.add(group_obj)
                 self.stdout.write(
                     self.style.SUCCESS(
-                        f"Updated password for demo user: {udata['email']} / {udata['username']}"
+                        f"Updated demo-user metadata for {udata['email']}; existing password preserved."
                     )
                 )
 

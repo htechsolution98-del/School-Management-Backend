@@ -53,58 +53,7 @@ class ResultCalculationEngine:
         is_config_valid = config and components and abs(total_weightage - 100.0) <= 0.01
 
         if not is_config_valid:
-            # Fallback Calculation: Compute directly from student's exam results for this academic year
-            exam_results = Result.objects.filter(
-                student=student,
-                exam__academic_year=academic_year
-            )
-            total_obt = sum([float(r.marks_obtained or 0) for r in exam_results if not r.is_absent])
-            total_max = sum([float(r.max_marks or 100) for r in exam_results])
-            pct = round((total_obt / total_max) * 100, 2) if total_max > 0 else 0.0
-            pct_dec = Decimal(str(pct))
-            grade = "F"
-            if pct >= 90: grade = "A+"
-            elif pct >= 80: grade = "A"
-            elif pct >= 70: grade = "B+"
-            elif pct >= 60: grade = "B"
-            elif pct >= 50: grade = "C+"
-            elif pct >= 40: grade = "C"
-            elif pct >= 33: grade = "D"
-
-            breakdowns = [{
-                "component_id": 0,
-                "name": "Consolidated Examination Marks",
-                "type": "EXAM",
-                "weightage_pct": 100.0,
-                "score_pct": float(pct),
-                "contribution_pct": float(pct),
-                "details": f"Marks: {total_obt}/{total_max}"
-            }]
-
-            existing_published = FinalStudentResult.objects.filter(student=student, academic_year=academic_year, status="PUBLISHED").exists()
-            final_record, created = FinalStudentResult.objects.update_or_create(
-                academic_year=academic_year,
-                student=student,
-                defaults={
-                    "school": school,
-                    "school_class": student.school_class,
-                    "division": student.division,
-                    "component_breakdown": {
-                        "components": breakdowns,
-                        "final_percentage": float(pct)
-                    },
-                    "total_percentage": pct_dec,
-                    "grade": grade,
-                    "status": "PUBLISHED" if existing_published else "READY_FOR_REVIEW"
-                }
-            )
-            return {
-                "success": True,
-                "final_percentage": float(pct),
-                "grade": grade,
-                "components": breakdowns,
-                "result_id": final_record.id
-            }
+            return {"success": False, "reason": "A valid, active 100% result weightage configuration is required for final results."}
 
         component_breakdowns = []
         final_percentage = Decimal("0.00")
@@ -148,6 +97,12 @@ class ResultCalculationEngine:
                             results_qs = results_qs.filter(exam__in=matching_exams)
 
                 if results_qs.exists():
+                    incomplete = results_qs.filter(
+                        ~Q(status__in=["VERIFIED", "APPROVED"]) |
+                        Q(marks_obtained__isnull=True, is_absent=False)
+                    ).exists()
+                    if incomplete:
+                        return {"success": False, "reason": f"{comp.name} marks must be complete and verified before final calculation."}
                     total_obtained = sum([float(r.marks_obtained or 0) for r in results_qs if not r.is_absent])
                     total_max = sum([float(r.max_marks or 100) for r in results_qs])
                     if total_max > 0:
@@ -156,7 +111,7 @@ class ResultCalculationEngine:
                         max_val = total_max
                         details_str = f"Marks: {total_obtained}/{total_max}"
                 else:
-                    details_str = "No exam marks recorded"
+                    return {"success": False, "reason": f"No verified exam marks are available for {comp.name}."}
 
             elif comp_type == "ATTENDANCE":
                 # Calculate attendance percentage from StudentAttendance records
@@ -169,8 +124,7 @@ class ResultCalculationEngine:
                     score_pct = Decimal(str(round(att_pct, 2)))
                     details_str = f"Present: {present_days}/{total_days} days ({score_pct}%)"
                 else:
-                    score_pct = Decimal("100.00") # fallback if attendance module has no records yet
-                    details_str = "Attendance data unavailable (defaulted to 100%)"
+                    return {"success": False, "reason": "Attendance records are required for final result calculation."}
 
             elif comp_type == "TEACHER_ASSESSMENT":
                 # Aggregate teacher assessment scores for this student
@@ -182,7 +136,7 @@ class ResultCalculationEngine:
                     score_pct = Decimal(str(round(avg_pct, 2)))
                     details_str = f"Avg score: {score_pct}% from {scores_qs.count()} teacher evaluation(s)"
                 else:
-                    details_str = "No teacher assessment recorded"
+                    return {"success": False, "reason": "Teacher assessment scores are required for final result calculation."}
 
             elif comp_type == "CUSTOM":
                 details_str = "Custom assessment"
@@ -261,9 +215,10 @@ class ResultCalculationEngine:
                 processed_count += 1
 
         return {
-            "success": True,
+            "success": processed_count > 0,
             "total_students": students.count(),
-            "processed_count": processed_count
+            "processed_count": processed_count,
+            "reason": None if processed_count else "No final results were calculated. Complete and verify the configured exam, attendance, and assessment data first.",
         }
 
     @staticmethod
@@ -368,7 +323,7 @@ class ResultCalculationEngine:
         # 6. Check Attendance
         att_count = StudentAttendance.objects.filter(school=school, student__in=students_qs).count()
         if att_count == 0:
-            warnings.append("No student attendance records logged. System will default attendance percentage to 100%.")
+            warnings.append("No student attendance records logged. Final result calculation needs actual attendance data.")
 
         is_ready = len(blockers) == 0
         return {

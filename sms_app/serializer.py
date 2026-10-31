@@ -6,6 +6,7 @@ import json
 from os import name
 
 from django.db import transaction
+from django.db.utils import ProgrammingError
 from django.utils import timezone
 from rest_framework import serializers
 from django.db import transaction
@@ -863,7 +864,12 @@ class CurrentUserProfileSerializer(serializers.ModelSerializer):
         return (parts[0][0] + parts[-1][0]).upper()
 
     def get_roles(self, user):
-        roles = list(user.groups.values_list("name", flat=True))
+        try:
+            roles = list(user.groups.values_list("name", flat=True))
+        except ProgrammingError:
+            # Older/local databases may not yet have the custom user's optional
+            # groups join table. The persisted role is sufficient for profile output.
+            roles = []
         if user.is_superuser and "super_admin" not in roles:
             roles.append("super_admin")
         if not roles and user.role:
@@ -871,7 +877,8 @@ class CurrentUserProfileSerializer(serializers.ModelSerializer):
         return roles
 
     def get_role(self, user):
-        return self.get_roles(user)[0] if self.get_roles(user) else None
+        roles = self.get_roles(user)
+        return roles[0] if roles else None
 
     def get_avatar(self, user):
         school = getattr(user, "school", None) or getattr(user, "managed_school", None)

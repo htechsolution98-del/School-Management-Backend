@@ -294,9 +294,12 @@ if DATABASE_URL:
 
 if use_postgres and DATABASE_URL:
     DATABASES = {
-        "default": dj_database_url.parse(DATABASE_URL, conn_max_age=600)
+        # Supabase's session pooler has a small per-project connection limit.
+        # Release each request's connection rather than pinning one per worker.
+        "default": dj_database_url.parse(DATABASE_URL, conn_max_age=0)
     }
     DATABASES["default"]["DISABLE_SERVER_SIDE_CURSORS"] = True
+    DATABASES["default"]["CONN_HEALTH_CHECKS"] = True
 else:
     DATABASES = {
         'default': {

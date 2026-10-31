@@ -1760,12 +1760,24 @@ class ExamViewSet(ListAPIView):
     permission_classes = [IsAuthenticated, Isstudent]
     
     def get_queryset(self):
-        
-        student = Student.objects.filter(user=self.request.user).first()
+        user = self.request.user
+        student = Student.objects.filter(user=user).select_related("school", "school_class").first()
+        if not student and getattr(user, "username", None):
+            student = Student.objects.filter(gr_no__iexact=user.username).select_related("school", "school_class").first()
+        if not student and getattr(user, "email", None):
+            student = Student.objects.filter(admission__email__iexact=user.email).select_related("school", "school_class").first()
+        if not student or not student.school_id or not student.school_class_id:
+            return Exam.objects.none()
 
-        qs = Exam.objects.filter(school=student.school, class_group=student.school_class)
-        
-        return qs
+        return Exam.objects.filter(
+            school_id=student.school_id,
+            class_group_id=student.school_class_id,
+        ).filter(
+            Q(division__isnull=True)
+            | Q(division="")
+            | Q(division="ALL")
+            | Q(division=student.division)
+        ).select_related("class_group", "subject", "room").order_by("exam_date", "start_time", "id")
     
 class ExamCreateViewSet(GenericAPIView):
     serializer_class = ExamViewSerializer
@@ -1909,7 +1921,31 @@ class ResultPublishViewSet(GenericAPIView):
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
         exam = serializer.validated_data["exam"]
-        updated_count = Result.objects.filter(exam=exam).update(is_published=True)
+        school = getattr(request.user, "school", None)
+        if not school or exam.school_id != school.id:
+            return Response({"detail": "Exam not found"}, status=status.HTTP_404_NOT_FOUND)
+        students = Student.objects.filter(
+            school=school, school_class=exam.class_group, is_active=True
+        )
+        division = request.data.get("division")
+        if division and str(division).upper() != "ALL":
+            students = students.filter(division__iexact=division)
+        if exam.division and exam.division.upper() != "ALL":
+            students = students.filter(division__iexact=exam.division)
+        expected_count = students.count()
+        results = Result.objects.filter(exam=exam, student__in=students)
+        ready_count = results.filter(status="APPROVED").filter(
+            Q(is_absent=True) | Q(marks_obtained__isnull=False)
+        ).count()
+        if not expected_count or ready_count != expected_count:
+            return Response(
+                {"detail": "Every student must have verified marks or be marked absent before publishing."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        updated_count = results.update(
+            is_published=True,
+            report_template=serializer.validated_data.get("template", "classic"),
+        )
 
         return Response(
             {"detail": "results published", "count": updated_count},
@@ -2046,7 +2082,12 @@ class StudentResultPDFView(APIView):
         if str(student.id) != str(student_id):
             return Response({"detail": "not allowed"}, status=status.HTTP_403_FORBIDDEN)
 
-        results = Result.objects.filter(student=student, is_published=True).select_related("exam", "exam__subject")
+        results = Result.objects.filter(student=student, is_published=True).select_related("exam", "exam__subject", "exam__exam_term")
+        exam_id = request.query_params.get("exam_id")
+        if exam_id:
+            results = results.filter(exam_id=exam_id)
+            if not results.exists():
+                return Response({"detail": "No published marksheet is available for this exam."}, status=status.HTTP_404_NOT_FOUND)
 
         total_obtained = sum(r.marks_obtained or 0 for r in results)
         total_max = sum(r.max_marks for r in results)
@@ -2058,6 +2099,10 @@ class StudentResultPDFView(APIView):
             "total_obtained": total_obtained,
             "total_max": total_max,
             "percentage": percentage,
+            "term": results.first().exam.title if exam_id and results.exists() else "Published Examinations",
+            "academic_year": results.first().exam.academic_year.name if results.exists() and results.first().exam.academic_year else "",
+            "is_single_exam": bool(exam_id),
+            "result_template": results.first().report_template if results.exists() else "classic",
         })
 
         pdf_buffer = io.BytesIO()
@@ -2067,7 +2112,8 @@ class StudentResultPDFView(APIView):
             return Response({"detail": "PDF generation failed"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         response = HttpResponse(pdf_buffer.getvalue(), content_type="application/pdf")
-        response["Content-Disposition"] = f'attachment; filename="report_card_{student.id}.pdf"'
+        filename = f'report_card_{student.id}_exam_{exam_id}.pdf' if exam_id else f'report_card_{student.id}.pdf'
+        response["Content-Disposition"] = f'attachment; filename="{filename}"'
         return response
     
     
