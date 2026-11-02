@@ -250,9 +250,27 @@ class ExamFullViewSet(viewsets.ModelViewSet):
         
         if not is_admin_or_clerk:
             if staff:
-                from .models import AssignClass
-                assigned_subjects = AssignClass.objects.filter(teacher=staff).values_list('subject_id', flat=True)
-                qs = qs.filter(subject_id__in=assigned_subjects)
+                from .models import AssignClass, Division
+                from django.db.models import Q
+
+                teacher_assigns = AssignClass.objects.filter(teacher=staff)
+                assigned_div_ids = list(teacher_assigns.values_list('division_id', flat=True))
+                assigned_subjects = list(teacher_assigns.values_list('subject_id', flat=True))
+
+                div_objs = Division.objects.filter(id__in=assigned_div_ids).select_related('SchoolClass')
+                class_ids = [d.SchoolClass_id for d in div_objs if d.SchoolClass_id]
+                div_names = [d.division for d in div_objs if d.division]
+
+                # Allow exams of assigned subjects OR assigned classes/divisions (e.g. for class reports)
+                exam_filter = Q(subject_id__in=assigned_subjects)
+                if class_ids:
+                    exam_filter |= Q(class_group_id__in=class_ids)
+                if div_names:
+                    exam_filter |= Q(division__in=div_names)
+
+                # If explicitly querying by class_group or division, allow viewing class exams
+                if not (self.request.query_params.get("class_group") or self.request.query_params.get("division")):
+                    qs = qs.filter(exam_filter)
 
         if getattr(self, "action", None) in ["retrieve", "update", "partial_update", "destroy"]:
             return qs

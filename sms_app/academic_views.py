@@ -462,9 +462,16 @@ class SetSubjectView(ModelViewSet):
         
         if not is_admin_or_clerk:
             if staff:
-                from .models import AssignClass
-                assigned_subjects = AssignClass.objects.filter(teacher=staff).values_list('subject_id', flat=True)
-                qs = qs.filter(id__in=assigned_subjects)
+                from .models import AssignClass, Division
+                from django.db.models import Q
+                teacher_assigns = AssignClass.objects.filter(teacher=staff)
+                assigned_div_ids = list(teacher_assigns.values_list('division_id', flat=True))
+                assigned_subjects = list(teacher_assigns.values_list('subject_id', flat=True))
+                subject_filter = Q(id__in=assigned_subjects)
+                if assigned_div_ids:
+                    subject_filter |= Q(division_id__in=assigned_div_ids)
+                if not (self.request.query_params.get('division') or self.request.query_params.get('school_class') or self.request.query_params.get('class_id')):
+                    qs = qs.filter(subject_filter)
                 
         return qs
 
