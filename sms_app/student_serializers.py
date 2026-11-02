@@ -299,12 +299,13 @@ class AdmissionFormSerializer(serializers.ModelSerializer):
     # ================= VALIDATION =================
     def validate(self, attrs):
         data = attrs
-        fee_type = data.get("fee_type")
+        fees_enable = data.get("fees_enable", getattr(self.instance, "fees_enable", False))
+        fee_type = data.get("fee_type", getattr(self.instance, "fee_type", None))
         fee_structures = data.get("fee_structures_input") or []
 
-        if fee_type == "individual" and not fee_structures:
+        if fees_enable and fee_type == "individual" and not fee_structures:
             raise serializers.ValidationError(
-                "fee_structures_input is required when fee_type is 'individual'"
+                {"fee_structures_input": "fee_structures_input is required when fee_type is 'individual' and fees are enabled."}
             )
 
         title = data.get("title") or (getattr(self.instance, "title", None) if self.instance else None)
@@ -349,45 +350,124 @@ class AdmissionFormSerializer(serializers.ModelSerializer):
             document_config = validated_data.pop("document_fields_config", [])
             sections_data = validated_data.pop("sections", [])
             fee_data = validated_data.pop("fee_structures_input", [])
+            validated_data.pop("payment_mode", None)
 
             request = self.context.get("request")
             user = getattr(request, "user", None)
-            school = getattr(user, "school", None)
+            school = getattr(user, "school", None) if user else None
+
+            if not school and user and user.is_authenticated:
+                from .models import Staff
+                staff = Staff.objects.filter(user=user).first()
+                if staff and staff.school:
+                    school = staff.school
+
+            if not school and user and (getattr(user, "is_superuser", False) or getattr(user, "is_staff", False)):
+                school_id = validated_data.get("school") or (request.data.get("school") if hasattr(request, "data") else None)
+                if school_id:
+                    from .models import School
+                    school = School.objects.filter(id=school_id).first() if not isinstance(school_id, School) else school_id
 
             if not school:
                 raise serializers.ValidationError(
-                    "User does not have a school assigned"
+                    {"detail": "User does not have a school assigned."}
                 )
 
             validated_data["school"] = school
 
-            form = AdmissionForm.objects.create(**validated_data)
+            # Ensure fee consistency
+            fees_enable = validated_data.get("fees_enable", False)
+            fee_type = validated_data.get("fee_type", "general")
+            if not fees_enable:
+                validated_data["fees"] = None
+                validated_data["fee_type"] = None
+            else:
+                if fee_type == "general":
+                    if validated_data.get("fees") is None:
+                        validated_data["fees"] = 0
+                elif fee_type == "individual":
+                    validated_data["fees"] = None
 
-            for section_data in sections_data:
+            # Filter fields to only valid AdmissionForm model fields
+            valid_model_fields = {f.name for f in AdmissionForm._meta.get_fields()}
+            clean_form_data = {k: v for k, v in validated_data.items() if k in valid_model_fields}
+
+            # ---------------- create form ----------------
+            form = AdmissionForm.objects.create(**clean_form_data)
+
+            # If this form is active, deactivate other forms for this school
+            if form.is_active:
+                AdmissionForm.objects.filter(school=school).exclude(id=form.id).update(is_active=False)
+
+            # ---------------- sections + fields ----------------
+            for s_idx, section_data in enumerate(sections_data or []):
                 fields_data = section_data.pop("fields", [])
+                s_dict = dict(section_data)
+                s_dict.pop("id", None)
+                s_dict.pop("created_at", None)
+                if "order" not in s_dict or not s_dict["order"]:
+                    s_dict["order"] = s_idx + 1
+
                 section = FormSection.objects.create(
-                    form=form, school=school, **section_data
+                    form=form, school=school, **s_dict
                 )
-                for field_data in fields_data:
+
+                for f_idx, field_data in enumerate(fields_data or []):
+                    f_dict = dict(field_data)
+                    f_dict.pop("id", None)
+                    f_dict.pop("created_at", None)
+
+                    VALID_FIELD_KEYS = {
+                        "label", "field_type", "is_required", "options",
+                        "order", "map_to_student_field", "is_system_field"
+                    }
+                    clean_f = {k: v for k, v in f_dict.items() if k in VALID_FIELD_KEYS}
+                    if "order" not in clean_f or not clean_f["order"]:
+                        clean_f["order"] = f_idx + 1
+                    if "is_required" not in clean_f and "required" in f_dict:
+                        clean_f["is_required"] = bool(f_dict["required"])
+
                     FormField.objects.create(
-                        section=section, school=school, **field_data
+                        section=section, school=school, **clean_f
                     )
 
+            # ---------------- document fields ----------------
             doc_config = document_config or []
-            for idx, label in enumerate(document_fields):
-                required = next(
-                    (item.get("is_required", False) for item in doc_config if item.get("label") == label),
-                    False,
-                )
+            labels = []
+            if document_fields:
+                labels.extend([str(l).strip() for l in document_fields if str(l).strip()])
+            if isinstance(doc_config, list):
+                for item in doc_config:
+                    if isinstance(item, dict):
+                        cfg_lbl = str(item.get("label", "")).strip()
+                        if cfg_lbl and cfg_lbl not in labels:
+                            labels.append(cfg_lbl)
+
+            for idx, label in enumerate(labels):
+                required = False
+                if isinstance(doc_config, list):
+                    for item in doc_config:
+                        if isinstance(item, dict) and str(item.get("label", "")).strip() == label:
+                            required = bool(item.get("is_required", False))
+                            break
                 DocumentField.objects.create(
                     form=form, school=school, label=label, is_required=required, order=idx + 1
                 )
 
-            if form.fee_type == "individual":
+            # ---------------- fee structures ----------------
+            if form.fees_enable and form.fee_type == "individual" and fee_data:
                 for fee in fee_data:
-                    AdmissionFeeStructure.objects.create(
-                        admission_form=form, school=school, **fee
-                    )
+                    fee_dict = dict(fee)
+                    cls_val = fee_dict.get("class_name")
+                    cls_id = getattr(cls_val, "id", cls_val)
+                    clean_fee = {
+                        "class_name_id": cls_id,
+                        "fee_amount": fee_dict.get("fee_amount"),
+                    }
+                    if clean_fee.get("class_name_id"):
+                        AdmissionFeeStructure.objects.create(
+                            admission_form=form, school=school, **clean_fee
+                        )
 
             return form
 
