@@ -782,15 +782,15 @@ def _user_display_name(user):
     # For School Trustee accounts, prioritize the institutional short name
     try:
         is_trustee = getattr(user, "role", "").lower() in ["admin(trustee)", "trustee", "admin"]
-        school = getattr(user, "school", None)
-        if not school:
-            from .models import School
-            school = School.objects.filter(login_id=user).first()
-        if school:
-            sp = getattr(school, "school_profile", None)
-            if sp and sp.school_short_name:
-                return sp.school_short_name
-            if is_trustee:
+        if is_trustee:
+            school = getattr(user, "school", None)
+            if not school:
+                from .models import School
+                school = School.objects.filter(login_id=user).first()
+            if school:
+                sp = getattr(school, "school_profile", None)
+                if sp and sp.school_short_name:
+                    return sp.school_short_name
                 if sp and sp.school_full_name:
                     return sp.school_full_name
                 if school.name:
