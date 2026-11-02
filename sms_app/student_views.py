@@ -90,15 +90,44 @@ class AdmissionFormViewSet(ModelViewSet):
         return super().get_object()
 
     def perform_create(self, serializer):
-        serializer.save(school=self.request.user.school)
+        user = getattr(self.request, "user", None)
+        school = getattr(user, "school", None) if user else None
+        if not school and user and user.is_authenticated:
+            from .models import Staff
+            staff = Staff.objects.filter(user=user).first()
+            if staff and staff.school:
+                school = staff.school
+        if school:
+            serializer.save(school=school)
+        else:
+            serializer.save()
 
     def create(self, request, *args, **kwargs):
-        with transaction.atomic():
-            serializer = self.get_serializer(data=request.data, context=self.get_serializer_context())
-            serializer.is_valid(raise_exception=True)
-            instance = serializer.save()
+        import logging
+        import traceback
+        logger = logging.getLogger(__name__)
 
-        return Response(AdmissionFormViewSerializer(instance, context={"request": request}).data, status=status.HTTP_201_CREATED)
+        try:
+            with transaction.atomic():
+                serializer = self.get_serializer(data=request.data, context=self.get_serializer_context())
+                serializer.is_valid(raise_exception=True)
+                self.perform_create(serializer)
+                instance = serializer.instance
+
+            return Response(
+                AdmissionFormViewSerializer(instance, context={"request": request}).data,
+                status=status.HTTP_201_CREATED
+            )
+        except Exception as exc:
+            from rest_framework.exceptions import APIException
+            if isinstance(exc, APIException):
+                raise exc
+            tb = traceback.format_exc()
+            logger.error("[AdmissionFormViewSet.create] Error: %s\n%s", exc, tb)
+            return Response(
+                {"detail": str(exc), "error": str(exc)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
     def update(self, request, *args, **kwargs):
         import logging

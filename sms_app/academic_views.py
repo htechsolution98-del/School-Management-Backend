@@ -281,7 +281,11 @@ class SetDivisionView(ModelViewSet):
 
     # CREATE
     def create(self, request, *args, **kwargs):
-        division_input = request.data.get("division")
+        division_input = (
+            request.data.get("division")
+            if request.data.get("division") is not None
+            else request.data.get("divisions")
+        )
         school_class = (
             request.data.get("SchoolClass")
             or request.data.get("school_class")
@@ -289,74 +293,111 @@ class SetDivisionView(ModelViewSet):
         )
         capacity = request.data.get("capacity") or request.data.get("student_capacity")
 
-        if not division_input and division_input != 0:
-            return Response({"error": "division is required"}, status=400)
+        if division_input is None or (
+            isinstance(division_input, str) and not division_input.strip()
+        ):
+            return Response(
+                {"error": "division is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         if not school_class:
-            return Response({"error": "SchoolClass is required"}, status=400)
+            return Response(
+                {"error": "SchoolClass is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         if capacity is None or capacity == "":
-            return Response({"error": "capacity is required"}, status=400)
+            return Response(
+                {"error": "capacity is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         try:
             capacity = int(capacity)
         except (ValueError, TypeError):
-            return Response({"error": "capacity must be an integer"}, status=400)
+            return Response(
+                {"error": "capacity must be an integer"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         if capacity <= 0:
-            return Response({"error": "capacity must be greater than zero"}, status=400)
+            return Response(
+                {"error": "capacity must be greater than zero"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-        # Check if division_input is a numeric count for bulk alphabet generation (legacy)
-        is_count = False
-        division_count = 0
-        try:
-            if isinstance(division_input, int) or (
-                isinstance(division_input, str) and division_input.strip().isdigit()
-            ):
-                d_num = int(division_input)
-                existing_count = Division.objects.filter(
-                    school=self.request.user.school,
-                    SchoolClass_id=school_class,
-                ).count()
-                if existing_count == 0 and 1 <= d_num <= 26:
-                    is_count = True
-                    division_count = d_num
-        except Exception:
-            is_count = False
+        # Parse division input:
+        # Case 1: Numeric count input (e.g., 3 or "3" -> ["A", "B", "C"])
+        # Case 2: Comma-separated alphabet input (e.g., "a,b,c" or "A, B" -> ["A", "B", "C"])
+        division_names = []
+        if isinstance(division_input, int) or (
+            isinstance(division_input, str) and division_input.strip().isdigit()
+        ):
+            count = int(division_input)
+            if count <= 0 or count > 26:
+                return Response(
+                    {"error": "Division count must be between 1 and 26."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            division_names = [chr(ord("A") + i) for i in range(count)]
+        elif isinstance(division_input, str):
+            raw_parts = [
+                s.strip().upper()
+                for s in division_input.split(",")
+                if s.strip()
+            ]
+            division_names = list(dict.fromkeys(raw_parts))
+        elif isinstance(division_input, (list, tuple)):
+            raw_parts = [
+                str(s).strip().upper()
+                for s in division_input
+                if str(s).strip()
+            ]
+            division_names = list(dict.fromkeys(raw_parts))
+        else:
+            raw_str = str(division_input).strip().upper()
+            if raw_str:
+                division_names = [raw_str]
 
-        if is_count:
-            alphabet = list(string.ascii_uppercase[:division_count])
-            divisions = []
-            for a in alphabet:
-                obj = Division.objects.create(
+        if not division_names:
+            return Response(
+                {"error": "Please provide valid division names or count."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Check against existing divisions for the selected school class to avoid creating duplicates
+        existing_divs = Division.objects.filter(
+            school=self.request.user.school,
+            SchoolClass_id=school_class,
+        ).values_list("division", flat=True)
+
+        existing_upper = {str(d).strip().upper() for d in existing_divs if d}
+
+        duplicates = [d for d in division_names if d in existing_upper]
+        if duplicates:
+            if len(duplicates) == 1:
+                return Response(
+                    {"error": f"Division '{duplicates[0]}' already exists for this class."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            else:
+                return Response(
+                    {"error": f"Divisions {', '.join(repr(d) for d in duplicates)} already exist for this class."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        # Create divisions atomically
+        with transaction.atomic():
+            created_divisions = [
+                Division.objects.create(
                     SchoolClass_id=school_class,
-                    division=a,
+                    division=name,
                     school=self.request.user.school,
                     capacity=capacity,
                 )
-                divisions.append(obj)
-            serializer = self.get_serializer(divisions, many=True)
-            res_data = serializer.data
-        else:
-            div_name = str(division_input).strip()
-            if Division.objects.filter(
-                school=self.request.user.school,
-                SchoolClass_id=school_class,
-                division__iexact=div_name,
-            ).exists():
-                return Response(
-                    {"error": f"Division '{div_name}' already exists for this class"},
-                    status=400,
-                )
-
-            obj = Division.objects.create(
-                SchoolClass_id=school_class,
-                division=div_name,
-                school=self.request.user.school,
-                capacity=capacity,
-            )
-            serializer = self.get_serializer(obj)
-            res_data = serializer.data
+                for name in division_names
+            ]
 
         from .views import assign_student_divisions
         try:
@@ -370,8 +411,19 @@ class SetDivisionView(ModelViewSet):
         except Exception:
             pass
 
+        serializer = self.get_serializer(
+            created_divisions if len(created_divisions) > 1 else created_divisions[0],
+            many=(len(created_divisions) > 1),
+        )
+
+        success_message = (
+            "Division created Successfully"
+            if len(created_divisions) == 1
+            else f"{len(created_divisions)} divisions created successfully"
+        )
+
         return Response(
-            {"message": "Division created Successfully", "data": res_data},
+            {"message": success_message, "data": serializer.data},
             status=status.HTTP_201_CREATED,
         )
 
