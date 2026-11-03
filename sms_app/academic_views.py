@@ -24,7 +24,7 @@ from django.db import transaction
 from django.db.models import Q
 from channels.layers import get_channel_layer  # type: ignore
 from asgiref.sync import async_to_sync
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.views import APIView
 from rest_framework.decorators import api_view, permission_classes, action
 
@@ -204,6 +204,8 @@ class FormFieldViewSet(RetrieveAPIView):
 # ===================================================
 # for admission form status change
 class Admission_link(APIView):
+    permission_classes = [AllowAny]
+
     def get(self, request, unique_link):
         # Find form by unique_link
         form = AdmissionForm.objects.filter(unique_link=unique_link).first()
@@ -221,14 +223,27 @@ class Admission_link(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Return school details
-        return Response(
-            {
-                "school_id": form.school.id,  # use .id not object
-                "school_slug": form.school.slug,
-            },
-            status=status.HTTP_200_OK,
-        )
+        serializer = AdmissionFormViewSerializer(form)
+        data = serializer.data
+        data["school_id"] = form.school.id
+        data["school_slug"] = form.school.slug
+        data["school_name"] = form.school.name
+        data["school_code"] = form.school.code
+        data["school_email"] = form.school.email
+        data["school_phone"] = form.school.phone
+        data["school_address"] = form.school.address
+        data["school_city"] = form.school.city
+        data["school_state"] = form.school.state
+        data["school_pincode"] = form.school.pincode
+        if getattr(form.school, "logo", None):
+            try:
+                data["school_logo"] = form.school.logo.url
+            except Exception:
+                data["school_logo"] = str(form.school.logo)
+        else:
+            data["school_logo"] = None
+
+        return Response(data, status=status.HTTP_200_OK)
 
 
 
@@ -2221,6 +2236,8 @@ class StudentAttendanceView(APIView):
                 "student_name": f"{s.name or ''} {s.surname or ''}".strip(),
                 "name": s.name or "",
                 "surname": s.surname or "",
+                "father_name": s.father_name or "",
+                "mother_name": s.mother_name or "",
                 "roll_no": s.roll_no or "",
                 "gr_no": s.gr_no or "",
                 "gender": gender,

@@ -92,22 +92,52 @@ class VerifyOTPSerializer(serializers.Serializer):
                 filters["slug"] = school_slug
             school = School.objects.filter(**filters).first()
 
-        user = User.objects.create_user(
-            username=username,
-            email=email,
-            mobile=mobile,
-            password=password,
-            school=school,
-        )
-        
-        TempUser.objects.create(user=user, email=email) #-----------------------CREATE TEMP USER
+        clean_mobile = "".join(filter(str.isdigit, str(mobile or "")))
+        if len(clean_mobile) > 10:
+            clean_mobile = clean_mobile[-10:]
+        clean_pwd = str(password or "").strip()
 
-        # Assign group (optional)
+        existing_user = None
+        if clean_mobile:
+            existing_user = User.objects.filter(Q(mobile=clean_mobile) | Q(username=clean_mobile)).first()
+        if not existing_user and email:
+            existing_user = User.objects.filter(email=email).first()
+
+        if existing_user:
+            user = existing_user
+            user.set_password(clean_pwd)
+            if school and not user.school:
+                user.school = school
+            if not user.role:
+                user.role = "temp_user"
+            user.save()
+        else:
+            base_username = clean_mobile if clean_mobile else (email.split("@")[0][:8] if email else "user")
+            username = base_username
+            counter = 1
+            while User.objects.filter(username=username).exists():
+                username = f"{base_username}_{counter}"
+                counter += 1
+
+            user = User.objects.create_user(
+                username=username,
+                email=email,
+                mobile=clean_mobile or mobile,
+                password=clean_pwd,
+                school=school,
+            )
+            user.role = "temp_user"
+            user.save()
+
+        TempUser.objects.get_or_create(user=user, defaults={"email": email})
         group, _ = Group.objects.get_or_create(name="temp_user")
         user.groups.add(group)
 
-        #  Delete OTP after success
-        otp_obj.delete()
+        if otp_obj:
+            try:
+                otp_obj.delete()
+            except Exception:
+                pass
 
         return user
 

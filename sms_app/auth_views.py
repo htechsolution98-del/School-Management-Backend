@@ -71,6 +71,25 @@ class CookieTokenRefreshView(TokenRefreshView):
                 status=status.HTTP_401_UNAUTHORIZED,
             )
 
+        # Check if user account is active before issuing refreshed tokens
+        from rest_framework_simplejwt.tokens import RefreshToken
+        from django.contrib.auth import get_user_model
+        try:
+            r_token = RefreshToken(refresh_token)
+            uid = r_token.payload.get("user_id")
+            if uid:
+                u = get_user_model().objects.filter(id=uid).first()
+                if not u or not u.is_active:
+                    err_res = Response(
+                        {"detail": "User account is inactive. Please contact administrator.", "code": "user_inactive"},
+                        status=status.HTTP_401_UNAUTHORIZED,
+                    )
+                    err_res.delete_cookie("access_token")
+                    err_res.delete_cookie("refresh_token")
+                    return err_res
+        except Exception:
+            pass
+
         token_data = serializer.validated_data
         access_token = token_data.get("access")
 
@@ -120,28 +139,42 @@ class SendOTPView(APIView):
 
         if email and mobile:
             return Response(
-                {"error": "Just User email or mobile"},
+                {"error": "Provide either email or mobile"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        if email:
-            if User.objects.filter(email=email).exists():
+        clean_mobile = "".join(filter(str.isdigit, str(mobile or "")))
+        if len(clean_mobile) > 10:
+            clean_mobile = clean_mobile[-10:]
+
+        # For administrative staff/principals/trustees, prevent public OTP overwrite
+        if clean_mobile:
+            admin_user = User.objects.filter(
+                Q(mobile=clean_mobile) | Q(username=clean_mobile),
+                Q(is_staff=True) | Q(is_superuser=True) | Q(role__in=["admin(trustee)", "principal", "clerk", "teacher"])
+            ).first()
+            if admin_user:
                 return Response(
-                    {"error": "User with this email already exists"},
+                    {"error": "An administrative account with this mobile already exists. Please sign in."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-
-        if mobile:
-            if User.objects.filter(mobile=mobile).exists():
+        if email:
+            admin_user = User.objects.filter(
+                Q(is_staff=True) | Q(is_superuser=True) | Q(role__in=["admin(trustee)", "principal", "clerk", "teacher"]),
+                email=email,
+            ).first()
+            if admin_user:
                 return Response(
-                    {"error": "User with this mobile already exists"},
+                    {"error": "An administrative account with this email already exists. Please sign in."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
         otp = str(random.randint(100000, 999999))
 
         OTP.objects.create(
-            email=email if email else None, mobile=mobile if mobile else None, otp=otp
+            email=email if email else None,
+            mobile=clean_mobile if clean_mobile else (mobile if mobile else None),
+            otp=otp
         )
 
         # if email:
@@ -210,10 +243,10 @@ class LoginView(APIView):
         serializer.is_valid(raise_exception=True)
 
         user = serializer.validated_data["user"]
-        
+
         # user_block = User.objects.filter(username=user).first()
         # print("...........",user_block)
-        
+
         staff = Staff.objects.filter(user=user).first()
 
         if staff:
@@ -235,7 +268,7 @@ class LoginView(APIView):
         if getattr(user, "is_superuser", False):
             if "super_admin" not in roles:
                 roles.append("super_admin")
-        
+
         if not roles and getattr(user, "role", None):
             roles = [user.role]
         if not roles:
@@ -572,7 +605,6 @@ class InitDatabaseView(APIView):
             return Response({"message": "Database initialized, Superadmin created, and Features seeded successfully!"}, status=status.HTTP_200_OK)
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
 
 
 

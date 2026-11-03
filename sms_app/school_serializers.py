@@ -94,6 +94,21 @@ class SchoolSerializer(serializers.ModelSerializer):
     gst_included = serializers.BooleanField(default=False, write_only=True, required=False)
     gst_percentage = serializers.DecimalField(max_digits=5, decimal_places=2, default=18.00, write_only=True, required=False)
     subscription_details = serializers.SerializerMethodField(read_only=True)
+    staff_count = serializers.SerializerMethodField(read_only=True)
+    student_count = serializers.SerializerMethodField(read_only=True)
+
+    def get_staff_count(self, obj):
+        try:
+            return Staff.objects.filter(school=obj).count()
+        except Exception:
+            return 0
+
+    def get_student_count(self, obj):
+        try:
+            from .models import Student
+            return Student.objects.filter(school=obj).count()
+        except Exception:
+            return 0
 
     def get_subscription_details(self, obj):
         sub = SchoolSubscription.objects.filter(school=obj).first()
@@ -162,10 +177,12 @@ class SchoolSerializer(serializers.ModelSerializer):
             "yearly_price",
             "gst_included",
             "gst_percentage",
-            "subscription_details",
+                        "subscription_details",
+            "staff_count",
+            "student_count",
             "created_at"
         ]
-        read_only_fields = ["slug", "code", "subscription_details"]
+        read_only_fields = ["slug", "code", "subscription_details", "staff_count", "student_count"]
         extra_kwargs = {
             field: {"required": True, "allow_blank": False, "allow_null": False,
                     "error_messages": {"required": f"{label} is required.", "blank": f"{label} is required.", "null": f"{label} is required."}}
@@ -194,13 +211,16 @@ class SchoolSerializer(serializers.ModelSerializer):
     def validate_phone(self, value):
         value = validate_mobile(value, required=True)
         # The school phone doubles as the login user's mobile number, so it has
-        # to stay unique across accounts (CustomUser.mobile is UNIQUE).
+        # to stay unique across accounts (CustomUser.mobile is UNIQUE and School.phone is unique).
         users = User.objects.filter(mobile=value)
+        schools = School.objects.filter(phone=value)
         if self.instance and self.instance.login_id_id:
             users = users.exclude(pk=self.instance.login_id_id)
-        if users.exists():
+        if self.instance:
+            schools = schools.exclude(pk=self.instance.pk)
+        if users.exists() or schools.exists():
             raise serializers.ValidationError(
-                "This mobile number is already used by another account."
+                "This phone number is already used by another school or account."
             )
         return value
 
@@ -210,9 +230,17 @@ class SchoolSerializer(serializers.ModelSerializer):
         return value.strip()
 
     def validate_index_no(self, value):
-        if value and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 /_-]*", value.strip()):
+        if not value:
+            return value
+        val = value.strip()
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 /_-]*", val):
             raise serializers.ValidationError("Use letters, numbers, spaces, hyphens, underscores or slashes for the index number.")
-        return value.strip() if value else value
+        qs = School.objects.filter(index_no__iexact=val)
+        if self.instance:
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.exists():
+            raise serializers.ValidationError("This index number is already registered by another school.")
+        return val
 
     def validate_logo(self, value):
         if value and value.size > 2 * 1024 * 1024:
@@ -255,7 +283,5 @@ class SchoolListSerializer(serializers.ModelSerializer):
         fields = ["id", "name", "logo", "index_no",
             "created_at"
         ]
-
-
 
 

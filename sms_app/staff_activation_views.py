@@ -71,4 +71,33 @@ class StaffActivationViewSet(ReadOnlyModelViewSet):
             member.save(update_fields=['is_active', 'updated_at'])
             if member.user_id:
                 get_user_model().objects.filter(pk=member.user_id).update(is_active=desired)
+                if not desired:
+                    # Revoke tokens for the deactivated user
+                    try:
+                        from rest_framework_simplejwt.token_blacklist.models import OutstandingToken, BlacklistedToken
+                        for t in OutstandingToken.objects.filter(user_id=member.user_id):
+                            BlacklistedToken.objects.get_or_create(token=t)
+                    except Exception:
+                        pass
+
+        # Broadcast real-time status change to force immediate logout if deactivated
+        try:
+            from channels.layers import get_channel_layer
+            from asgiref.sync import async_to_sync
+            channel_layer = get_channel_layer()
+            if channel_layer and member.school_id:
+                async_to_sync(channel_layer.group_send)(
+                    f"school_{member.school_id}_choice_all",
+                    {
+                        "type": "staff_status_changed",
+                        "action": "deactivated" if not desired else "activated",
+                        "user_id": member.user_id,
+                        "staff_id": member.id,
+                        "is_active": desired,
+                        "message": "Your account has been deactivated by the administrator.",
+                    },
+                )
+        except Exception as e:
+            print("Failed to broadcast staff activation change:", e)
+
         return Response(self.get_serializer(member).data)

@@ -88,7 +88,19 @@ class DepartmentViewSet(ModelViewSet):
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
-        if instance.staff_set.exists():
+        has_staff = False
+        try:
+            has_staff = Staff.objects.filter(
+                Q(department=instance) |
+                Q(designation__icontains=f"dept_ids:{instance.id},") |
+                Q(designation__icontains=f",{instance.id},") |
+                Q(designation__endswith=f",{instance.id}") |
+                Q(designation=f"dept_ids:{instance.id}")
+            ).exists()
+        except Exception:
+            has_staff = instance.staff_set.exists()
+
+        if has_staff:
             return Response(
                 {"error": "Cannot delete department with active staff members assigned."},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -121,6 +133,75 @@ class StaffView(ModelViewSet):
         return Staff.objects.filter(school__login_id=user)
 
     def create(self, request, *args, **kwargs):
+        # Support assigning existing staff member to multiple departments
+        email = request.data.get("email")
+        mobile = request.data.get("mobile")
+        user = request.user
+        school = getattr(user, 'school', None) or getattr(user, 'managed_school', None)
+        if not school:
+            staff_rec = Staff.objects.filter(user=user).first()
+            if staff_rec and staff_rec.school:
+                school = staff_rec.school
+        if not school:
+            school = School.objects.filter(login_id=user.id).first()
+
+        clean_email = str(email).strip().lower() if email else None
+        clean_mobile = str(mobile).strip() if mobile else None
+
+        existing_staff = None
+        if clean_email:
+            qs = Staff.objects.filter(email__iexact=clean_email)
+            if school:
+                qs = qs.filter(school=school)
+            existing_staff = qs.first()
+        if not existing_staff and clean_mobile:
+            qs = Staff.objects.filter(mobile=clean_mobile)
+            if school:
+                qs = qs.filter(school=school)
+            existing_staff = qs.first()
+
+        if existing_staff:
+            # Staff already exists in this school!
+            # Instead of failing with "user already exists", assign/update them
+            dept_id = request.data.get("department")
+            depts = request.data.get("departments", [])
+            dept_ids_to_add = []
+            if dept_id:
+                try:
+                    dept_ids_to_add.append(int(dept_id))
+                except Exception:
+                    pass
+            if isinstance(depts, list):
+                for d in depts:
+                    try:
+                        val = int(d)
+                        if val not in dept_ids_to_add:
+                            dept_ids_to_add.append(val)
+                    except Exception:
+                        pass
+            elif isinstance(depts, (str, int)):
+                try:
+                    val = int(depts)
+                    if val not in dept_ids_to_add:
+                        dept_ids_to_add.append(val)
+                except Exception:
+                    pass
+
+            from .staff_serializers import extract_staff_department_ids
+            existing_ids = extract_staff_department_ids(existing_staff)
+            # Combine existing and newly selected departments
+            merged_ids = list(dict.fromkeys(existing_ids + dept_ids_to_add)) if dept_ids_to_add else existing_ids
+
+            data_copy = request.data.copy() if hasattr(request.data, "copy") else dict(request.data)
+            if merged_ids:
+                data_copy["departments"] = merged_ids
+                data_copy["department"] = merged_ids[0]
+
+            serializer = self.get_serializer(existing_staff, data=data_copy, partial=True)
+            serializer.is_valid(raise_exception=True)
+            self.perform_update(serializer)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+
         response = super().create(request, *args, **kwargs)
         return Response(
             {"message": "Staff created successfully"}, status=status.HTTP_201_CREATED
@@ -156,14 +237,18 @@ class StaffView(ModelViewSet):
 
         username = generate_staff_username(name)
 
+                # Final uniqueness check before user creation
+        if email:
+            clean_email = email.strip().lower()
+            if User.objects.filter(email__iexact=clean_email).exists() or Staff.objects.filter(email__iexact=clean_email).exists():
+                raise serializers.ValidationError({"email": ["A user or staff member with this email already exists."]})
+
         with transaction.atomic():
             user = User(username=username)
-            user.school = self.request.user.school
-            user.role = (
-                cat.name
-            )  # ---------------------------------- THIS IS CHANGE ===category
-            user.email = email if email else None
-            user.mobile = mobile if mobile else None
+            user.school = school
+            user.role = cat.name
+            user.email = email.strip().lower() if email else None
+            user.mobile = mobile.strip() if mobile else None
 
             user.set_password("123456")
             user.save()
@@ -208,28 +293,84 @@ class StaffView(ModelViewSet):
                 print("Failed to auto-allocate leaves on staff creation:", e)
 
 
+    def update(self, request, *args, **kwargs):
+        try:
+            return super().update(request, *args, **kwargs)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return Response(
+                {"detail": str(e), "error": str(e)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    def partial_update(self, request, *args, **kwargs):
+        try:
+            return super().partial_update(request, *args, **kwargs)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return Response(
+                {"detail": str(e), "error": str(e)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
     def perform_update(self, serializer):
         category = serializer.validated_data.pop("category", None)
         instance = serializer.save()
+
+        is_active_input = serializer.validated_data.get("is_active")
         if instance.exit_date and instance.exit_date <= timezone.localdate():
-            if instance.is_active:
+            if instance.is_active and is_active_input is not True:
                 instance.is_active = False
                 instance.save(update_fields=["is_active"])
         elif instance.exit_date is None or instance.exit_date > timezone.localdate():
-            if serializer.validated_data.get("is_active") is not False and not instance.is_active:
+            if is_active_input is not False and not instance.is_active:
                 instance.is_active = True
                 instance.save(update_fields=["is_active"])
-        user = instance.user
+
+        user = getattr(instance, "user", None)
         if user:
-            if instance.name:
-                user.first_name = instance.name
-            if instance.email:
-                user.email = instance.email
-            if instance.mobile:
-                user.mobile = instance.mobile
-            if instance.is_active is not None:
-                user.is_active = instance.is_active
-            user.save()
+            try:
+                user_updated = False
+                user_fields = []
+                if instance.is_active is not None and user.is_active != instance.is_active:
+                    user.is_active = instance.is_active
+                    user_fields.append("is_active")
+                    user_updated = True
+
+                req_data = self.request.data if hasattr(self, "request") else {}
+                if "name" in req_data and instance.name:
+                    user.first_name = instance.name
+                    user_fields.append("first_name")
+                    user_updated = True
+                if "email" in req_data and instance.email:
+                    clean_email = instance.email.strip().lower()
+                    if not User.objects.filter(email__iexact=clean_email).exclude(pk=user.pk).exists():
+                        user.email = clean_email
+                        user_fields.append("email")
+                        user_updated = True
+                if "mobile" in req_data and instance.mobile:
+                    clean_mob = instance.mobile.strip()
+                    if not User.objects.filter(mobile=clean_mob).exclude(pk=user.pk).exists():
+                        user.mobile = clean_mob
+                        user_fields.append("mobile")
+                        user_updated = True
+
+                if user_updated and user_fields:
+                    user.save(update_fields=user_fields)
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning("Failed to sync user attributes on staff update: %s", e)
+
+            # If user is deactivated, revoke tokens and force disconnect
+            if user.is_active is False:
+                try:
+                    from rest_framework_simplejwt.token_blacklist.models import OutstandingToken, BlacklistedToken
+                    for t in OutstandingToken.objects.filter(user=user):
+                        BlacklistedToken.objects.get_or_create(token=t)
+                except Exception:
+                    pass
 
         if category is not None:
             try:
@@ -281,7 +422,11 @@ class StaffView(ModelViewSet):
             except Exception as e:
                 print("Failed to auto-allocate leaves on staff update:", e)
 
-        cache.delete(f"staff_list_{self.request.user.id}")
+        try:
+            if hasattr(self.request, "user") and self.request.user.is_authenticated:
+                cache.delete(f"staff_list_{self.request.user.id}")
+        except Exception:
+            pass
 
     # 🔹 Delete staff + clear cache
     def perform_destroy(self, instance):
@@ -441,7 +586,7 @@ class StaffFaceEnrollView(TrusteeStaffReadOnlyMixin, APIView):
         )
         if serializer.is_valid():
             face_obj = serializer.save()
-        
+
             return Response({
                 "message": "Face enroll successfully.",
                 "staff": staff.id,
@@ -449,7 +594,7 @@ class StaffFaceEnrollView(TrusteeStaffReadOnlyMixin, APIView):
             })
 
         return Response(serializer.errors, status=400)
-    
+
 import requests
 import io
 
@@ -618,11 +763,11 @@ class GetRemainingLeavePerStaffView(APIView):
     permission_classes=[IsAuthenticated]
     def get(self,request):
         leave=LeaveRequest.objects.filter(staff=request.user.staff,school=request.user.school).order_by("-created_at")
-        
+
         # leave_template=LeaveTemplate.objects.filter(staff=request.user.staff,school=request.user.school)
         # print(leave_template)
         remaining_leaves=StaffRemainingLeave.objects.filter(staff=request.user.staff,school=request.user.school).order_by("year","month")
-        
+
         leave_request=LeaveRequestSerializer(leave,many=True)
         remaining_leaves_left=StaffRemainingLeaveSerializer(remaining_leaves,many=True)
         return Response({
@@ -803,4 +948,3 @@ class TeacherWorkloadViewSet(TrusteeStaffReadOnlyMixin, ModelViewSet):
 
         updated_count = qs.update(**update_fields)
         return Response({"message": f"Successfully updated {updated_count} teachers.", "count": updated_count})
-

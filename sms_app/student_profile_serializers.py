@@ -34,7 +34,7 @@ class StudentProfileSerializer(StudentGetSerializer):
         school_id = self.instance.school_id if self.instance else getattr(request.user, "school_id", None)
         for key in ("school_class", "academic_year"):
             item = attrs.get(key)
-            if item and item.school_id != school_id:
+            if item and getattr(item, 'school_id', None) and school_id and item.school_id != school_id:
                 raise serializers.ValidationError({key: "This record belongs to another school."})
         return attrs
 
@@ -94,6 +94,27 @@ class StudentProfileSerializer(StudentGetSerializer):
                         if is_aadhaar_field(value.field):
                             value.value = validated_data[key]
                             value.save(update_fields=["value"])
+        if updated.admission_id:
+            if "school_class" in validated_data and updated.school_class:
+                class_str = str(updated.school_class.school_class or getattr(updated.school_class, "name", None) or updated.school_class.id)
+                for fv in updated.admission.field_values.select_related("field"):
+                    if not fv.field:
+                        continue
+                    lbl = (fv.field.label or "").lower()
+                    map_to = (fv.field.map_to_student_field or "").lower()
+                    if map_to == "school_class" or "class" in lbl or "standard" in lbl:
+                        fv.value = class_str
+                        fv.save(update_fields=["value"])
+            if "division" in validated_data and updated.division:
+                div_str = str(updated.division)
+                for fv in updated.admission.field_values.select_related("field"):
+                    if not fv.field:
+                        continue
+                    lbl = (fv.field.label or "").lower()
+                    map_to = (fv.field.map_to_student_field or "").lower()
+                    if map_to == "division" or "division" in lbl or "section" in lbl:
+                        fv.value = div_str
+                        fv.save(update_fields=["value"])
         # Drop prefetched values after mutation so the response reflects the new IDs.
         updated._prefetched_objects_cache = {}
         return updated
