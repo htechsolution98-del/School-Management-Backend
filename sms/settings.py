@@ -68,7 +68,14 @@ INSTALLED_APPS = [
     "drf_yasg",
 ]
 ASGI_APPLICATION = "sms.asgi.application"
-ALLOWED_HOSTS = ['*']  # for testing
+ALLOWED_HOSTS = [
+    h.strip()
+    for h in os.getenv(
+        "ALLOWED_HOSTS",
+        "api.vidyapranali.in,vidyapranali.in,www.vidyapranali.in,localhost,127.0.0.1,school-management-backend",
+    ).split(",")
+    if h.strip()
+]
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
