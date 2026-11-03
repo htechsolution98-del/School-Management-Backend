@@ -1,3 +1,4 @@
+import datetime
 import logging
 from .student_profile_services import AadhaarValidationMixin, DynamicIDValidationMixin, is_aadhaar_field, validate_aadhaar
 import random
@@ -1262,6 +1263,7 @@ class AdmissionUpdateSerializer(serializers.ModelSerializer):
 
         # Safely update or create field values without wiping out existing ones
         if field_values_data is not None:
+            student = Student.objects.filter(admission=instance).first()
             for item in field_values_data:
                 field_obj = item.get("field")
                 val = item.get("value")
@@ -1271,13 +1273,66 @@ class AdmissionUpdateSerializer(serializers.ModelSerializer):
                         field=field_obj,
                         defaults={"value": val},
                     )
-                    id_mapping = "aadhar_number" if is_aadhaar_field(field_obj) else field_obj.map_to_student_field
-                    if id_mapping in {"aadhar_number", "abc_id", "udise_no"}:
-                        Student.objects.filter(admission=instance, school=instance.school).update(**{id_mapping: val})
-                    if field_obj.label and any(k in field_obj.label.lower() for k in ["division", "section", "sec"]):
-                        Student.objects.filter(admission=instance).update(division=val)
 
-        # Handle direct division update in request data
+                    if student:
+                        try:
+                            StudentFieldValue.objects.update_or_create(
+                                student=student,
+                                field=field_obj,
+                                defaults={
+                                    "value": val,
+                                    "school": instance.school,
+                                    "form_id": instance.form,
+                                },
+                            )
+                        except Exception:
+                            pass
+
+                        id_mapping = "aadhar_number" if is_aadhaar_field(field_obj) else getattr(field_obj, "map_to_student_field", None)
+                        label_lower = (field_obj.label or "").lower()
+
+                        if id_mapping == "school_class" or any(k in label_lower for k in ["applying for class", "class", "standard"]):
+                            val_str = str(val).strip() if val is not None else ""
+                            cls_obj = None
+                            if val_str.isdigit():
+                                cls_obj = SchoolClass.objects.filter(id=int(val_str), school=instance.school).first()
+                            if not cls_obj and val_str:
+                                cls_obj = SchoolClass.objects.filter(school=instance.school, school_class__iexact=val_str).first()
+                            if cls_obj:
+                                student.school_class = cls_obj
+                        elif id_mapping in {"aadhar_number", "abc_id", "udise_no"}:
+                            setattr(student, id_mapping, val)
+                        elif id_mapping and hasattr(student, id_mapping):
+                            if id_mapping == "date_of_birth" and val:
+                                for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
+                                    try:
+                                        import datetime as _dt
+                                        student.date_of_birth = _dt.datetime.strptime(val.strip(), fmt).date()
+                                        break
+                                    except (ValueError, TypeError):
+                                        pass
+                            else:
+                                try:
+                                    setattr(student, id_mapping, val)
+                                except Exception:
+                                    pass
+                        elif any(k in label_lower for k in ["division", "section", "sec"]):
+                            student.division = val
+                        elif ("guardian" in label_lower or "mobile" in label_lower or "contact" in label_lower) and not student.mobile:
+                            student.mobile = val
+
+            if student:
+                req = self.context.get("request")
+                if req and hasattr(req, "data"):
+                    div_val = req.data.get("division")
+                    if div_val:
+                        student.division = div_val
+                try:
+                    student.save()
+                except Exception:
+                    pass
+
+        # Handle direct division update in request data if no student object yet
         req = self.context.get("request")
         if req and hasattr(req, "data"):
             div_val = req.data.get("division")
@@ -1348,11 +1403,27 @@ class AdmissionDocumentUpdateSerializer(serializers.ModelSerializer):
                     i += 1
                     continue
 
+                saved_target = file
+                try:
+                    import cloudinary
+                    import cloudinary.uploader
+                    upload_res = cloudinary.uploader.upload(
+                        file,
+                        folder="admission_documents",
+                        resource_type="auto",
+                    )
+                    c_url = upload_res.get("secure_url") or upload_res.get("url")
+                    if c_url:
+                        saved_target = c_url
+                except Exception as c_err:
+                    logger.warning("Direct Cloudinary upload failed during document update: %s", c_err)
+
                 AdmissionDocument.objects.update_or_create(
                     admission=instance,
                     document_field_id=document_field,
                     defaults={
-                        "file": file,
+                        "file": saved_target,
+                        "school": instance.school,
                     },
                 )
 

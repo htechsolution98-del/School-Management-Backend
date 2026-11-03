@@ -2062,11 +2062,28 @@ class ExamRankListView(GenericAPIView):
 
 class StudentResultViewSet(ListAPIView):
     serializer_class = ResultViewSerializer
-    permission_classes = [IsAuthenticated, Isstudent]
+    permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        student = Student.objects.filter(user=self.request.user).first()
-        return Result.objects.filter(student=student, is_published=True).select_related("exam", "exam__subject")
+        user = self.request.user
+        student = Student.objects.filter(user=user).first()
+        if not student:
+            student_id = self.request.query_params.get("student_id")
+            if student_id:
+                parent_rec = Perents.objects.filter(user=user, perents_of_id=student_id).first()
+                if parent_rec:
+                    student = parent_rec.perents_of
+            if not student:
+                parent_rec = Perents.objects.filter(user=user).first()
+                if parent_rec:
+                    student = parent_rec.perents_of
+        if not student:
+            return Result.objects.none()
+        qs = Result.objects.filter(student=student, is_published=True).select_related("exam", "exam__subject", "exam__exam_term")
+        exam_id = self.request.query_params.get("exam_id")
+        if exam_id:
+            qs = qs.filter(exam_id=exam_id)
+        return qs
 
 
 from xhtml2pdf import pisa
@@ -2075,11 +2092,16 @@ from django.http import HttpResponse
 import io
 
 class StudentResultPDFView(APIView):
-    permission_classes = [IsAuthenticated, Isstudent]
+    permission_classes = [IsAuthenticated]
 
     def get(self, request, student_id, *args, **kwargs):
-        student = Student.objects.filter(user=request.user).first()
-        if str(student.id) != str(student_id):
+        user = request.user
+        student = Student.objects.filter(user=user).first()
+        if not student:
+            parent_rec = Perents.objects.filter(user=user, perents_of_id=student_id).first()
+            if parent_rec:
+                student = parent_rec.perents_of
+        if not student or str(student.id) != str(student_id):
             return Response({"detail": "not allowed"}, status=status.HTTP_403_FORBIDDEN)
 
         results = Result.objects.filter(student=student, is_published=True).select_related("exam", "exam__subject", "exam__exam_term")

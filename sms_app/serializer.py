@@ -1,3 +1,21 @@
+
+def extract_staff_department_ids(instance):
+    dept_ids = []
+    if getattr(instance, "department_id", None):
+        dept_ids.append(instance.department_id)
+    desig = getattr(instance, "designation", "") or ""
+    if "dept_ids:" in desig:
+        try:
+            part = desig.split("dept_ids:")[1].split(";")[0]
+            for num in part.split(","):
+                if num.strip().isdigit():
+                    val = int(num.strip())
+                    if val not in dept_ids:
+                        dept_ids.append(val)
+        except Exception:
+            pass
+    return dept_ids
+
 from .student_profile_services import AadhaarValidationMixin, DynamicIDValidationMixin, is_aadhaar_field, validate_aadhaar
 import math
 import calendar
@@ -63,27 +81,18 @@ class SendOTPSerializer(serializers.Serializer):
 
 
 class VerifyOTPSerializer(serializers.Serializer):
-    email = serializers.EmailField(required=False)
-    mobile = serializers.CharField(required=False)
+    email = serializers.EmailField(required=False, allow_null=True)
+    mobile = serializers.CharField(required=False, allow_null=True)
     otp = serializers.CharField(max_length=6)
     password = serializers.CharField(write_only=True)
-    school_id = serializers.CharField(write_only=True, required=False)
-    school_slug = serializers.CharField(write_only=True, required=False)
+    school_id = serializers.CharField(write_only=True, required=False, allow_null=True, allow_blank=True)
+    school_slug = serializers.CharField(write_only=True, required=False, allow_null=True, allow_blank=True)
 
     def validate(self, attrs):
         data = attrs
         email = data.get("email")
         mobile = data.get("mobile")
         otp = data.get("otp")
-        school_id = data.get("school_id")
-        school_slug = data.get("school_slug")
-
-        # print(school_id)
-        # print(school_slug)
-        if not school_id or not school_slug:
-            raise serializers.ValidationError(
-                {"message": "Provide school_id or school_slug"}
-            )
 
         if not email and not mobile:
             raise serializers.ValidationError({"message": "Provide email or mobile"})
@@ -91,18 +100,22 @@ class VerifyOTPSerializer(serializers.Serializer):
         if email and mobile:
             raise serializers.ValidationError({"message": "Provide only one"})
 
+        clean_mobile = "".join(filter(str.isdigit, str(mobile or "")))
+        if len(clean_mobile) > 10:
+            clean_mobile = clean_mobile[-10:]
+
         # OTP check (safe filtering)
         query = OTP.objects.filter(otp=otp)
 
         if email:
             query = query.filter(email=email)
-        if mobile:
-            query = query.filter(mobile=mobile)
+        if clean_mobile:
+            query = query.filter(Q(mobile=clean_mobile) | Q(mobile=mobile))
 
         otp_obj = query.order_by("-created_at").first()
 
         if not otp_obj:
-            raise serializers.ValidationError("Invalid OTP")
+            raise serializers.ValidationError({"message": "Invalid OTP"})
 
         data["otp_obj"] = otp_obj
         return data
@@ -111,41 +124,70 @@ class VerifyOTPSerializer(serializers.Serializer):
         email = validated_data.get("email")
         mobile = validated_data.get("mobile")
         password = validated_data.get("password")
-        otp_obj = validated_data["otp_obj"]
-        school_id = validated_data.pop("school_id")
-        school_slug = validated_data.pop("school_slug")
+        otp_obj = validated_data.get("otp_obj")
+        school_id = validated_data.get("school_id")
+        school_slug = validated_data.get("school_slug")
 
-        # Username generation
-        if email:
-            base_username = email.split("@")[0][:4]
+        clean_mobile = "".join(filter(str.isdigit, str(mobile or "")))
+        if len(clean_mobile) > 10:
+            clean_mobile = clean_mobile[-10:]
+
+        clean_pwd = str(password or "").strip()
+
+        school = None
+        if school_id:
+            try:
+                school = School.objects.filter(id=int(school_id)).first()
+            except Exception:
+                pass
+        if not school and school_slug:
+            school = School.objects.filter(slug=school_slug).first()
+
+        existing_user = None
+        if clean_mobile:
+            existing_user = User.objects.filter(Q(mobile=clean_mobile) | Q(username=clean_mobile)).first()
+        if not existing_user and email:
+            existing_user = User.objects.filter(email=email).first()
+
+        if existing_user:
+            user = existing_user
+            user.set_password(clean_pwd)
+            if school and not user.school:
+                user.school = school
+            if not user.role:
+                user.role = "temp_user"
+            user.save()
         else:
-            base_username = mobile[-4:]
+            base_username = clean_mobile if clean_mobile else (email.split("@")[0][:8] if email else "user")
+            username = base_username
+            counter = 1
+            while User.objects.filter(username=username).exists():
+                username = f"{base_username}_{counter}"
+                counter += 1
 
-        username = base_username
-        counter = 1
+            user = User.objects.create_user(
+                username=username,
+                email=email,
+                mobile=clean_mobile or mobile,
+                password=clean_pwd,
+                school=school,
+            )
+            user.role = "temp_user"
+            user.save()
 
-        while User.objects.filter(username=username).exists():
-            username = f"{base_username}{counter}"
-            counter += 1
+        # Ensure TempUser record exists
+        TempUser.objects.get_or_create(user=user, defaults={"email": email})
 
-        # Create USER (ONLY ONE TABLE: customuser)
-        school = School.objects.filter(id=school_id, slug=school_slug).first()
-        user = User.objects.create_user(
-            username=username,
-            email=email,
-            mobile=mobile,
-            password=password,
-            school=school,
-        )
-        
-        TempUser.objects.create(user = user, email = email) #-----------------------CREATE TEMP USER
-
-        # Assign group (optional)
+        # Ensure temp_user group exists
         group, _ = Group.objects.get_or_create(name="temp_user")
         user.groups.add(group)
 
-        #  Delete OTP after success
-        otp_obj.delete()
+        # Delete OTP after success
+        if otp_obj:
+            try:
+                otp_obj.delete()
+            except Exception:
+                pass
 
         return user
 
@@ -274,53 +316,39 @@ class LoginSerializer(serializers.Serializer):
             )
 
         identifier = str(raw_identifier).strip()
-        normalized_mobile = normalize_mobile(identifier)
-        is_ten_digit = normalized_mobile.isdigit() and len(normalized_mobile) == 10
-
-        # If the client explicitly passed the 'mobile' key and it is not 10 digits, enforce valid mobile format
-        if mobile and not is_ten_digit and not (email or username):
-            raise serializers.ValidationError(
-                {"message": "Mobile number must be exactly 10 digits."}
-            )
+        clean_digits = "".join(filter(str.isdigit, identifier))
+        normalized_mobile = clean_digits[-10:] if len(clean_digits) >= 10 else clean_digits
+        is_ten_digit = len(normalized_mobile) == 10 and normalized_mobile.isdigit()
 
         user = None
         if is_ten_digit:
-            # 1. Check if this mobile belongs to any student.
-            # In previous/current profiles, if student has only one number, it counts as parent number!
+            # 1. Check matching users by mobile or username directly
+            matching_users = list(
+                CustomUser.objects.filter(
+                    Q(mobile=normalized_mobile)
+                    | Q(username__iexact=identifier)
+                    | Q(username__iexact=normalized_mobile)
+                )
+            )
+            for u in matching_users:
+                if u.check_password(clean_pwd):
+                    user = u
+                    break
+
+            # 2. Check if this mobile belongs to any student
             students_with_mobile = list(
                 Student.objects.filter(
                     Q(mobile=normalized_mobile)
                     | Q(admission__field_values__value__icontains=normalized_mobile)
                 ).select_related("school", "user")
             )
-            for st in students_with_mobile:
-                has_sep, sep_phone = student_has_separate_parent_phone(st)
-                if not has_sep:
-                    ensure_parent_for_student(st, normalized_mobile)
-
-            # 2. If password is '123456', check parent users first
-            if clean_pwd == "123456":
-                parent_user = CustomUser.objects.filter(
-                    Q(mobile=normalized_mobile) | Q(username=normalized_mobile),
-                    role="parents",
-                ).first()
-                if parent_user and parent_user.check_password(clean_pwd):
-                    user = parent_user
-
-            # 3. Check matching users by mobile or username
             if not user:
-                matching_users = list(
-                    CustomUser.objects.filter(
-                        Q(mobile=normalized_mobile)
-                        | Q(username__iexact=identifier)
-                    )
-                )
-                for u in matching_users:
-                    if u.check_password(clean_pwd):
-                        user = u
+                for st in students_with_mobile:
+                    if st.user and st.user.check_password(clean_pwd):
+                        user = st.user
                         break
 
-            # 4. Check Perents table
+            # 3. Check Perents table
             if not user:
                 parent_records = list(
                     Perents.objects.filter(
@@ -333,42 +361,47 @@ class LoginSerializer(serializers.Serializer):
                     if pr.user and pr.user.check_password(clean_pwd):
                         user = pr.user
                         break
-                if not user and parent_records and parent_records[0].user:
-                    user = parent_records[0].user
 
-            # 5. Check student accounts if student password was entered
-            if not user and students_with_mobile:
-                for st in students_with_mobile:
-                    if st.user and st.user.check_password(clean_pwd):
-                        user = st.user
-                        break
+            # 4. If password is '123456', check parent users
+            if not user and clean_pwd == "123456":
+                parent_user = CustomUser.objects.filter(
+                    Q(mobile=normalized_mobile) | Q(username=normalized_mobile),
+                    role="parents",
+                ).first()
+                if parent_user and parent_user.check_password(clean_pwd):
+                    user = parent_user
 
-            # 6. Fallback among matching users: prioritize parent role
-            if not user:
-                matching_users = list(
-                    CustomUser.objects.filter(
-                        Q(mobile=normalized_mobile)
-                        | Q(username__iexact=identifier)
-                    )
-                )
-                if matching_users:
-                    parent_u = next((u for u in matching_users if getattr(u, 'role', '') == 'parents' or u.groups.filter(name='parents').exists()), None)
-                    user = parent_u or matching_users[0]
+            # 5. Fallback among matching users: prioritize parent role if found
+            if not user and matching_users:
+                parent_u = next((u for u in matching_users if getattr(u, 'role', '') == 'parents' or u.groups.filter(name='parents').exists()), None)
+                user = parent_u or matching_users[0]
         else:
             # Non-10-digit (e.g. Student GR number, username, or email)
             clean_id = identifier.replace(" ", "")
-            clean_digits = "".join(filter(str.isdigit, identifier))
-            user = CustomUser.objects.filter(
-                Q(username__iexact=identifier)
-                | Q(username__iexact=clean_id)
-                | Q(email__iexact=identifier)
-            ).first()
+            candidates = list(
+                CustomUser.objects.filter(
+                    Q(username__iexact=identifier)
+                    | Q(username__iexact=clean_id)
+                    | Q(email__iexact=identifier)
+                    | (Q(mobile=normalized_mobile) if normalized_mobile else Q(pk__isnull=True))
+                )
+            )
+            for c in candidates:
+                if c.check_password(clean_pwd):
+                    user = c
+                    break
 
             if not user and clean_digits:
-                user = CustomUser.objects.filter(
-                    Q(username__iexact=f"GR-{clean_digits}")
-                    | Q(username__iexact=clean_digits)
-                ).first()
+                gr_candidates = list(
+                    CustomUser.objects.filter(
+                        Q(username__iexact=f"GR-{clean_digits}")
+                        | Q(username__iexact=clean_digits)
+                    )
+                )
+                for c in gr_candidates:
+                    if c.check_password(clean_pwd):
+                        user = c
+                        break
 
             # Fallback: find via Student.gr_no
             if not user:
@@ -378,7 +411,9 @@ class LoginSerializer(serializers.Serializer):
                 )
                 if not student_match and clean_digits:
                     student_match = Student.objects.filter(gr_no__icontains=clean_digits).select_related("user").first()
-                if student_match and student_match.user:
+                if student_match and student_match.user and student_match.user.check_password(clean_pwd):
+                    user = student_match.user
+                elif student_match and student_match.user:
                     user = student_match.user
 
         if user is None:
@@ -688,28 +723,58 @@ from .finance_serializers import RazarDataSerializer
 
 
 class StaffSerializer(serializers.ModelSerializer):
+    departments = serializers.ListField(
+        child=serializers.IntegerField(), required=False, write_only=True
+    )
+
     class Meta:
         model = Staff
         fields = "__all__"
         read_only_fields = ["user", "school"]
 
     def validate_email(self, value):
-        if User.objects.filter(
-            email=value
-        ).exists():  # for filter use User model not staff model because email is in user model
-            raise serializers.ValidationError({"message": "Email is already exists."})
+        if not value:
+            return value
+        val = value.strip().lower()
+        # Check User and Staff tables case-insensitively
+        user_qs = User.objects.filter(email__iexact=val)
+        staff_qs = Staff.objects.filter(email__iexact=val)
+        if self.instance:
+            if self.instance.user_id:
+                user_qs = user_qs.exclude(id=self.instance.user_id)
+            staff_qs = staff_qs.exclude(id=self.instance.id)
 
-        return value
+        if user_qs.exists() or staff_qs.exists():
+            if self.instance and self.instance.email and self.instance.email.strip().lower() == val:
+                return val
+            raise serializers.ValidationError("A user or staff member with this email already exists.")
+
+        try:
+            from .models import Student
+            if Student.objects.filter(email__iexact=val).exists():
+                raise serializers.ValidationError("A student with this email already exists.")
+        except Exception:
+            pass
+
+        return val
 
     def validate_mobile(self, value):
-        if User.objects.filter(
-            mobile=value
-        ).exists():  # for filter use User model not staff model because mobile is in user model
-            raise serializers.ValidationError(
-                {"message": "Mobile number is already exists."}
-            )
+        if not value:
+            return value
+        val = value.strip()
+        user_qs = User.objects.filter(mobile=val)
+        staff_qs = Staff.objects.filter(mobile=val)
+        if self.instance:
+            if self.instance.user_id:
+                user_qs = user_qs.exclude(id=self.instance.user_id)
+            staff_qs = staff_qs.exclude(id=self.instance.id)
 
-        return value
+        if user_qs.exists() or staff_qs.exists():
+            if self.instance and self.instance.mobile == val:
+                return val
+            raise serializers.ValidationError("A user or staff member with this mobile number already exists.")
+
+        return val
 
     def validate_date_of_birth(self, value):
         if value:
@@ -749,8 +814,15 @@ class StaffSerializer(serializers.ModelSerializer):
 
         is_clerk = "CLERK" in role_name.strip().upper()
         department = attrs.get("department") or (self.instance.department if self.instance else None)
-        if not is_clerk and not department:
-            raise serializers.ValidationError({"department": "Department is required for this role."})
+        departments = attrs.get("departments")
+        existing_depts = extract_staff_department_ids(self.instance) if self.instance else []
+        is_partial = getattr(self, "partial", False)
+        dept_provided = ("department" in attrs) or ("departments" in attrs)
+
+        if not is_clerk:
+            if not is_partial or dept_provided:
+                if not department and not departments and not existing_depts:
+                    raise serializers.ValidationError({"department": "Department is required for this role."})
 
         # Auto-deactivate when exit_date is set and <= today; auto-activate when cleared or future
         if "exit_date" in attrs:
@@ -761,11 +833,61 @@ class StaffSerializer(serializers.ModelSerializer):
                 if attrs.get("is_active") is not False:
                     attrs["is_active"] = True
         else:
-            exit_date = self.instance.exit_date if self.instance else None
-            if exit_date and exit_date <= timezone.localdate():
-                attrs["is_active"] = False
+            if attrs.get("is_active") is True:
+                attrs["exit_date"] = None
+            else:
+                exit_date = self.instance.exit_date if self.instance else None
+                if exit_date and exit_date <= timezone.localdate():
+                    attrs["is_active"] = False
 
         return attrs
+
+    def create(self, validated_data):
+        departments = validated_data.pop("departments", None)
+        if departments:
+            primary_id = int(departments[0])
+            validated_data["department"] = Department.objects.filter(id=primary_id).first()
+            all_str = ",".join(str(d) for d in departments)
+            existing_desig = validated_data.get("designation") or ""
+            clean_desig = existing_desig.split("dept_ids:")[0].strip() if "dept_ids:" in existing_desig else existing_desig.strip()
+            validated_data["designation"] = f"dept_ids:{all_str}" if not clean_desig else f"{clean_desig};dept_ids:{all_str}"
+
+        return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        departments = validated_data.pop("departments", None)
+        if departments is not None:
+            if departments:
+                primary_id = int(departments[0])
+                validated_data["department"] = Department.objects.filter(id=primary_id).first()
+                all_str = ",".join(str(d) for d in departments)
+                existing_desig = validated_data.get("designation") or instance.designation or ""
+                clean_desig = existing_desig.split("dept_ids:")[0].strip() if "dept_ids:" in existing_desig else existing_desig.strip()
+                validated_data["designation"] = f"dept_ids:{all_str}" if not clean_desig else f"{clean_desig};dept_ids:{all_str}"
+            else:
+                validated_data["department"] = None
+                existing_desig = validated_data.get("designation") or instance.designation or ""
+                if "dept_ids:" in existing_desig:
+                    validated_data["designation"] = existing_desig.split("dept_ids:")[0].strip() or None
+
+        return super().update(instance, validated_data)
+
+    def to_representation(self, instance):
+        ret = super().to_representation(instance)
+        dept_ids = extract_staff_department_ids(instance)
+        dept_names = []
+        if dept_ids:
+            try:
+                dept_map = {d.id: d.name for d in Department.objects.filter(id__in=dept_ids)}
+                dept_names = [dept_map[d_id] for d_id in dept_ids if d_id in dept_map]
+            except Exception:
+                if instance.department:
+                    dept_names = [instance.department.name]
+
+        ret["departments"] = dept_ids
+        ret["department_names"] = dept_names
+        ret["department_name"] = ", ".join(dept_names) if dept_names else (instance.department.name if instance.department else None)
+        return ret
 
 
 class UserListSerialzer(serializers.ModelSerializer):
@@ -1355,7 +1477,7 @@ class SchoolClassSerializer(serializers.ModelSerializer):
         school = getattr(request.user, "school", None) if request and hasattr(request, "user") else None
 
         return SchoolClass.objects.create(
-            school=school, 
+            school=school,
             school_class=validated_data.get("school_class"),
             category=validated_data.get("category"),
             is_rte_applicable=validated_data.get("is_rte_applicable", False),
@@ -1421,10 +1543,11 @@ class FormSectionSerializer(serializers.ModelSerializer):
 # 3
 class AdmissionFeeStructureSerializer(serializers.ModelSerializer):
     class_name = serializers.PrimaryKeyRelatedField(queryset=SchoolClass.objects.all())
+    class_name_display = serializers.CharField(source="class_name.school_class", read_only=True)
 
     class Meta:
         model = AdmissionFeeStructure
-        fields = ["created_at", "class_name", "fee_amount"]
+        fields = ["created_at", "class_name", "class_name_display", "fee_amount"]
 
 
 class DocumentFieldSerializer(serializers.ModelSerializer):
@@ -1900,7 +2023,7 @@ class AdmissionSubmissionSerializer(serializers.ModelSerializer):
     school_class = serializers.PrimaryKeyRelatedField(
         queryset=SchoolClass.objects.all(),
         required=False,
-        write_only=True,    
+        write_only=True,
     )
 
     # allow input also
@@ -2374,6 +2497,7 @@ class AdmissionUpdateSerializer(serializers.ModelSerializer):
 
         # Safely update or create field values without wiping out existing ones
         if field_values_data is not None:
+            student = Student.objects.filter(admission=instance).first()
             for item in field_values_data:
                 field_obj = item.get("field")
                 val = item.get("value")
@@ -2383,13 +2507,66 @@ class AdmissionUpdateSerializer(serializers.ModelSerializer):
                         field=field_obj,
                         defaults={"value": val},
                     )
-                    id_mapping = "aadhar_number" if is_aadhaar_field(field_obj) else field_obj.map_to_student_field
-                    if id_mapping in {"aadhar_number", "abc_id", "udise_no"}:
-                        Student.objects.filter(admission=instance, school=instance.school).update(**{id_mapping: val})
-                    if field_obj.label and any(k in field_obj.label.lower() for k in ["division", "section", "sec"]):
-                        Student.objects.filter(admission=instance).update(division=val)
 
-        # Handle direct division update in request data
+                    if student:
+                        try:
+                            StudentFieldValue.objects.update_or_create(
+                                student=student,
+                                field=field_obj,
+                                defaults={
+                                    "value": val,
+                                    "school": instance.school,
+                                    "form_id": instance.form,
+                                },
+                            )
+                        except Exception:
+                            pass
+
+                        id_mapping = "aadhar_number" if is_aadhaar_field(field_obj) else getattr(field_obj, "map_to_student_field", None)
+                        label_lower = (field_obj.label or "").lower()
+
+                        if id_mapping == "school_class" or any(k in label_lower for k in ["applying for class", "class", "standard"]):
+                            val_str = str(val).strip() if val is not None else ""
+                            cls_obj = None
+                            if val_str.isdigit():
+                                cls_obj = SchoolClass.objects.filter(id=int(val_str), school=instance.school).first()
+                            if not cls_obj and val_str:
+                                cls_obj = SchoolClass.objects.filter(school=instance.school, school_class__iexact=val_str).first()
+                            if cls_obj:
+                                student.school_class = cls_obj
+                        elif id_mapping in {"aadhar_number", "abc_id", "udise_no"}:
+                            setattr(student, id_mapping, val)
+                        elif id_mapping and hasattr(student, id_mapping):
+                            if id_mapping == "date_of_birth" and val:
+                                for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
+                                    try:
+                                        import datetime as _dt
+                                        student.date_of_birth = _dt.datetime.strptime(val.strip(), fmt).date()
+                                        break
+                                    except (ValueError, TypeError):
+                                        pass
+                            else:
+                                try:
+                                    setattr(student, id_mapping, val)
+                                except Exception:
+                                    pass
+                        elif any(k in label_lower for k in ["division", "section", "sec"]):
+                            student.division = val
+                        elif ("guardian" in label_lower or "mobile" in label_lower or "contact" in label_lower) and not student.mobile:
+                            student.mobile = val
+
+            if student:
+                req = self.context.get("request")
+                if req and hasattr(req, "data"):
+                    div_val = req.data.get("division")
+                    if div_val:
+                        student.division = div_val
+                try:
+                    student.save()
+                except Exception:
+                    pass
+
+        # Handle direct division update in request data if no student object yet
         req = self.context.get("request")
         if req and hasattr(req, "data"):
             div_val = req.data.get("division")
@@ -2460,11 +2637,27 @@ class AdmissionDocumentUpdateSerializer(serializers.ModelSerializer):
                     i += 1
                     continue
 
+                saved_target = file
+                try:
+                    import cloudinary
+                    import cloudinary.uploader
+                    upload_res = cloudinary.uploader.upload(
+                        file,
+                        folder="admission_documents",
+                        resource_type="auto",
+                    )
+                    c_url = upload_res.get("secure_url") or upload_res.get("url")
+                    if c_url:
+                        saved_target = c_url
+                except Exception as c_err:
+                    logger.warning("Direct Cloudinary upload failed during document update: %s", c_err)
+
                 AdmissionDocument.objects.update_or_create(
                     admission=instance,
                     document_field_id=document_field,
                     defaults={
-                        "file": file,
+                        "file": saved_target,
+                        "school": instance.school,
                     },
                 )
 
@@ -2780,8 +2973,8 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
                 is_rte=instance.is_rte,
                 # details_done=True,
             )
-            
-            
+
+
 
             StudentVerify.objects.create(
                 admission_number=instance.admission_number,
@@ -3021,7 +3214,7 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
                 else:
                     base_username = f"parent_{school.id}_{student.id}"
                     username = base_username
-                    counter = 1 
+                    counter = 1
                     while User.objects.filter(username=username).exists():
                         username = f"{base_username}_{counter}"
                         counter += 1
@@ -3685,13 +3878,13 @@ class GetStudentVerifySerializer(serializers.ModelSerializer):
     class Meta:
         model = StudentVerify
         fields = '__all__'
-  
+
 
 class GetStudentExtraDataSerializer(serializers.ModelSerializer):
     class Meta:
         model = StudentExtraData
         fields = '__all__'
-        
+
 
 class GetStudentSerializer(serializers.ModelSerializer):
     studentverify = GetStudentVerifySerializer(read_only = True)
@@ -3795,14 +3988,6 @@ class AttendanceLocationSerializer(serializers.ModelSerializer):
         read_only_fields = ["school"]
 
     def validate(self, attrs):
-        request = self.context.get("request")
-        school = request.user.school
-
-        if AttendanceLocation.objects.filter(school=school).exists():
-            raise serializers.ValidationError(
-                {"massage": "You already add school attendance location"}
-            )
-
         return super().validate(attrs)
 
     def create(self, validated_data):
@@ -3811,22 +3996,82 @@ class AttendanceLocationSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Request user is required.")
 
         school = getattr(request.user, "school", None)
+        if not school and hasattr(request.user, "staff"):
+            school = getattr(request.user.staff, "school", None)
         if not school:
             raise serializers.ValidationError("User school is not configured.")
 
-        
-        time_rule_data = validated_data.pop("time_rule")
-            
+        time_rule_data = validated_data.pop("time_rule", None)
 
-        time_rule = AttendanceTimeRule.objects.create(
-            school=school,
-            start_time=time_rule_data.get("start_time"),
-            end_time=time_rule_data.get("end_time"),
-            half_day_time=time_rule_data.get("half_day_time"),
-        )        
+        existing_location = AttendanceLocation.objects.filter(school=school).first()
 
-        
-        return AttendanceLocation.objects.create(school=school, time_rule= time_rule, **validated_data)
+        if existing_location:
+            existing_location.latitude = validated_data.get("latitude", existing_location.latitude)
+            existing_location.longitude = validated_data.get("longitude", existing_location.longitude)
+            existing_location.radius = validated_data.get("radius", existing_location.radius)
+
+            if time_rule_data:
+                if existing_location.time_rule:
+                    time_rule = existing_location.time_rule
+                    time_rule.start_time = time_rule_data.get("start_time", time_rule.start_time)
+                    time_rule.end_time = time_rule_data.get("end_time", time_rule.end_time)
+                    time_rule.half_day_time = time_rule_data.get("half_day_time", time_rule.half_day_time)
+                    time_rule.save()
+                else:
+                    time_rule = AttendanceTimeRule.objects.create(
+                        school=school,
+                        start_time=time_rule_data.get("start_time"),
+                        end_time=time_rule_data.get("end_time"),
+                        half_day_time=time_rule_data.get("half_day_time"),
+                    )
+                    existing_location.time_rule = time_rule
+
+            existing_location.save()
+            return existing_location
+
+        time_rule = None
+        if time_rule_data:
+            time_rule = AttendanceTimeRule.objects.create(
+                school=school,
+                start_time=time_rule_data.get("start_time"),
+                end_time=time_rule_data.get("end_time"),
+                half_day_time=time_rule_data.get("half_day_time"),
+            )
+
+        return AttendanceLocation.objects.create(
+            school=school, time_rule=time_rule, **validated_data
+        )
+
+    def update(self, instance, validated_data):
+        request = self.context.get("request")
+        school = getattr(request.user, "school", None) if request and hasattr(request, "user") else None
+        if not school and request and hasattr(request.user, "staff"):
+            school = getattr(request.user.staff, "school", None)
+
+        time_rule_data = validated_data.pop("time_rule", None)
+
+        instance.latitude = validated_data.get("latitude", instance.latitude)
+        instance.longitude = validated_data.get("longitude", instance.longitude)
+        instance.radius = validated_data.get("radius", instance.radius)
+
+        if time_rule_data:
+            if instance.time_rule:
+                time_rule = instance.time_rule
+                time_rule.start_time = time_rule_data.get("start_time", time_rule.start_time)
+                time_rule.end_time = time_rule_data.get("end_time", time_rule.end_time)
+                time_rule.half_day_time = time_rule_data.get("half_day_time", time_rule.half_day_time)
+                time_rule.save()
+            else:
+                time_rule = AttendanceTimeRule.objects.create(
+                    school=school or instance.school,
+                    start_time=time_rule_data.get("start_time"),
+                    end_time=time_rule_data.get("end_time"),
+                    half_day_time=time_rule_data.get("half_day_time"),
+                )
+                instance.time_rule = time_rule
+
+        instance.save()
+        return instance
 
 
 def is_inside_radius(lat1, lon1, lat2, lon2, radius_meters):
@@ -5132,7 +5377,7 @@ class GenerateStaffSalaryPaymentSerializer(serializers.ModelSerializer):
         staff = validated_data["staff"]
         salary_month = validated_data["salary_month"]
         year, month = [int(part) for part in salary_month.split("-")]
-        
+
         from sms_app.services.payroll_service import generate_payslip, MissingPunchError
 
         try:
@@ -6448,7 +6693,7 @@ class HomeworkSerializer(serializers.ModelSerializer):
             )
 
         return attrs
-    
+
     def validate_due_date(self, value):
         if value < date.today():
             raise serializers.ValidationError("Due date cannot be in the past.")
@@ -6633,7 +6878,7 @@ class HomeworkSerializer(serializers.ModelSerializer):
 #         #     )
 
 #         # student_division = student_division.lower()
-        
+
 #         homework_division = (homework.division.division or "").strip().lower()
 #         student_division = (student.division.division or "").strip().lower()
 
@@ -6983,7 +7228,7 @@ class StaffFaceSerializer(serializers.ModelSerializer):
         model=StaffFace
         fields = ["created_at", "id","face_image","is_enrolled"]
         read_only_fields=["is_enrolled"]
-      
+
     def validate_face_image(self, image):
         image_bytes = np.asarray(bytearray(image.read()), dtype=np.uint8)
 
@@ -7020,7 +7265,7 @@ class StaffFaceSerializer(serializers.ModelSerializer):
         image.seek(0)
 
         return image
-    
+
     def create(self, validated_data):
             request = self.context["request"]
             staff = Staff.objects.get(user=request.user)
@@ -7032,8 +7277,8 @@ class StaffFaceSerializer(serializers.ModelSerializer):
 
             if not created:
                 face.face_image = validated_data["face_image"]
-                
-            face.is_enrolled = True 
+
+            face.is_enrolled = True
             face.save()
 
             return face
@@ -7059,7 +7304,7 @@ class StaffFaceSerializer(serializers.ModelSerializer):
 
 class StaffFaceVerifySerializer(serializers.Serializer):
     image=serializers.ImageField()
-    
+
 class StudentDocumentSerializer(serializers.ModelSerializer):
     class Meta:
         model=StudentDocument
@@ -7116,7 +7361,7 @@ class HomeworkSubmissionSerializer(serializers.ModelSerializer):
                 attrs["status"] = "submitted"
 
         return attrs
-    
+
 
 class MonthlyProgressReportSerializer(serializers.ModelSerializer):
     grade = serializers.SerializerMethodField()
@@ -7129,7 +7374,7 @@ class MonthlyProgressReportSerializer(serializers.ModelSerializer):
             student=validated_data["student"]
             month=validated_data["month"]
             year=validated_data["year"]
-            
+
             attendance_records=StudentAttendance.objects.filter(
                 student=student,
                 attendance_date__month=month,
@@ -7153,7 +7398,7 @@ class MonthlyProgressReportSerializer(serializers.ModelSerializer):
                  )/6,2)
             validated_data["overall_score"]=overall_score
             return MonthlyProgressReport.objects.create(**validated_data)
-    
+
     def get_grade(self,obj):
             score=obj.overall_score
             if score >=90:
@@ -7164,13 +7409,13 @@ class MonthlyProgressReportSerializer(serializers.ModelSerializer):
                 return "C"
             elif score>=60 and score<70:
                 return "D"
-            
+
 
 class StudyMaterialSerializer(serializers.ModelSerializer):
     class Meta:
         model=StudyMaterial
         fields = ["created_at", "subject","student_class","material_type","title","description","file"]
-        
+
 
 class StockItemsSerializer(serializers.ModelSerializer):
     class Meta:
@@ -7196,24 +7441,24 @@ class StockRequestSerializer(serializers.ModelSerializer):
             filter(
                 None,
                 [
-                    
+
                     obj.teacher.name
-                    
+
                 ],
             )
         )
-        
+
 class AssetSerializer(serializers.ModelSerializer):
     class Meta:
         model=Asset
         fields = ["created_at", "id","asset_name","category","asset_code","quantity","unit_price","purchase_date","total_value"]
-    
+
 class AssetMaintenanceSerializer(serializers.ModelSerializer):
     class Meta:
         model=AssetMaintenance
         fields = ["created_at", "id","asset","issue","maintance_date","status"]
 
-        
+
 class ProcurementSerializer(serializers.ModelSerializer):
     class Meta:
         model=Procurement

@@ -126,25 +126,58 @@ class RazarDataView(ModelViewSet):
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def ShareFormLink(request):
+    school_id = request.query_params.get("school_id")
+    school_slug = request.query_params.get("school_slug")
     user = getattr(request, "user", None)
-    school = getattr(user, "school", None) if user and user.is_authenticated else None
-    if not school:
-        return Response(
-            {"form_link": "", "unique_link": None},
-        )
+    user_school = getattr(user, "school", None) if user and user.is_authenticated else None
 
-    form = AdmissionForm.objects.filter(
-        school=school, is_active=True
-    ).first()
+    school = None
+    if school_id:
+        school = School.objects.filter(id=school_id).first()
+    elif school_slug:
+        school = School.objects.filter(slug=school_slug).first()
+    elif user_school:
+        school = user_school
 
-    if not form:
-        return Response(
-            {"form_link": "", "unique_link": None},
-        )
+    qs = AdmissionForm.objects.filter(is_active=True).select_related("school", "academic_year")
+    if school:
+        qs = qs.filter(school=school)
+    else:
+        # Default: show active forms across active schools
+        qs = qs.filter(Q(school__isnull=False) & Q(school__is_active=True))
 
-    form_link = f"/api/admission/{form.unique_link}/"
+    forms_list = []
+    seen_unique = set()
+    for f in qs.order_by("-id"):
+        if f.unique_link in seen_unique:
+            continue
+        seen_unique.add(f.unique_link)
+        s = f.school
+        s_name = s.name if s else "School"
+        forms_list.append({
+            "id": f.id,
+            "title": f.title,
+            "unique_link": str(f.unique_link),
+            "form_link": f"/form/{f.unique_link}",
+            "api_form_link": f"/api/admission/{f.unique_link}/",
+            "school_id": s.id if s else None,
+            "school_name": s_name,
+            "school_slug": s.slug if s else "",
+            "academic_year": getattr(f.academic_year, "name", None) or "2026-27",
+        })
 
-    return Response({"form_link": form_link, "unique_link": str(form.unique_link)})
+    first_form = forms_list[0] if forms_list else None
+    first_link = first_form["form_link"] if first_form else ""
+    first_unique = first_form["unique_link"] if first_form else None
+    first_school = first_form["school_name"] if first_form else ""
+
+    return Response({
+        "form_link": first_link,
+        "unique_link": first_unique,
+        "school_name": first_school,
+        "forms": forms_list,
+        "count": len(forms_list),
+    })
 
 
 FRONTEND_LOGIN_URL = "https://edunet-one.vercel.app/login"
