@@ -27,7 +27,7 @@ SECRET_KEY = os.getenv(
 )
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.getenv("DEBUG", "True").lower() in ["true", "1", "yes"]
+DEBUG = os.getenv("DEBUG", "False").lower() in ["true", "1", "yes"]
 
 # ALLOWED_HOSTS = []
 
@@ -68,7 +68,14 @@ INSTALLED_APPS = [
     "drf_yasg",
 ]
 ASGI_APPLICATION = "sms.asgi.application"
-ALLOWED_HOSTS = ['*']  # for testing
+ALLOWED_HOSTS = [
+    h.strip()
+    for h in os.getenv(
+        "ALLOWED_HOSTS",
+        "api.vidyapranali.in,vidyapranali.in,www.vidyapranali.in,localhost,127.0.0.1,school-management-backend",
+    ).split(",")
+    if h.strip()
+]
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
@@ -441,4 +448,4 @@ FACEPP_API_KEY = os.getenv("FACEPP_API_KEY", "bjE_bVqsDDgX6ekpuqdDjwZnnydn27zG")
 FACEPP_API_SECRET = os.getenv("FACEPP_API_SECRET", "waQF9vWlZyH-HQtqKJezJlX7vAAjNYY4")
 
 # Biometric Verification Development Bypass Flag
-ALLOW_BIOMETRIC_BYPASS = os.getenv("ALLOW_BIOMETRIC_BYPASS", "True").lower() in ["true", "1", "yes"]
+ALLOW_BIOMETRIC_BYPASS = os.getenv("ALLOW_BIOMETRIC_BYPASS", "False").lower() in ["true", "1", "yes"]
