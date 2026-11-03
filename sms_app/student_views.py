@@ -614,10 +614,16 @@ class DocumentSubmissionView(ModelViewSet):
     def create(self, request, *args, **kwargs):
         data = request.data
 
+        raw_adm = str(data.get("admission_number") or "").strip()
+        if (not raw_adm or raw_adm in ["undefined", "null", "none"]) and request.user and request.user.is_authenticated:
+            latest = Admission.objects.filter(temp_user=request.user).order_by("-created_at").first()
+            if latest:
+                raw_adm = str(latest.admission_number)
+
         documents = self._get_uploaded_documents(request)
 
         final_data = {
-            "admission_number": data.get("admission_number"),
+            "admission_number": raw_adm,
             "documents": documents,
         }
 
@@ -634,18 +640,29 @@ class DocumentSubmissionView(ModelViewSet):
         fee_amount = 0
 
         admission = None
-        if admission_number:
+        raw_adm = str(admission_number or "").strip()
+        if raw_adm:
             admission = (
-                Admission.objects.select_related("form")
-                .filter(admission_number=admission_number)
+                Admission.objects.select_related("form", "school")
+                .filter(
+                    Q(admission_number=raw_adm)
+                    | (Q(id=int(raw_adm)) if raw_adm.isdigit() else Q(pk=-1))
+                )
+                .first()
+            )
+        if not admission and request.user and request.user.is_authenticated:
+            admission = (
+                Admission.objects.select_related("form", "school")
+                .filter(temp_user=request.user)
+                .order_by("-created_at")
                 .first()
             )
 
-            if not admission:
-                return Response(
-                    {"error": "Admission not found"},
-                    status=status.HTTP_404_NOT_FOUND,
-                )
+        if not admission:
+            return Response(
+                {"error": "Admission record not found. Please complete Step 1 first."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
 
             if admission.is_rte:
                 fee_amount = 0.0

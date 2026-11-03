@@ -6,14 +6,31 @@ import unicodedata
 
 
 def validate_admission_upload(file):
+    if not file:
+        return "File is required"
     extension = str(getattr(file, "name", "")).rsplit(".", 1)[-1].lower()
-    content_type = getattr(file, "content_type", "")
-    if extension not in ("pdf", "png", "jpg", "jpeg", "webp") or content_type not in ("", "application/pdf", "image/png", "image/jpeg", "image/webp"):
+    content_type = str(getattr(file, "content_type", "") or "").lower()
+    if extension not in ("pdf", "png", "jpg", "jpeg", "webp"):
+        return "Upload PDF, JPG, PNG or WebP files only"
+    valid_mime_types = (
+        "",
+        "application/pdf",
+        "application/x-pdf",
+        "application/octet-stream",
+        "binary/octet-stream",
+        "image/png",
+        "image/jpeg",
+        "image/pjpeg",
+        "image/webp",
+    )
+    if content_type and content_type not in valid_mime_types:
         return "Upload PDF, JPG, PNG or WebP files only"
     size = getattr(file, "size", 0)
-    limit = (3 if extension == "pdf" else 1) * 1024 * 1024
-    if size <= 0 or size > limit:
-        return "PDF must be up to 3 MB and images up to 1 MB; empty files are not allowed"
+    limit = (5 if extension == "pdf" else 3) * 1024 * 1024
+    if size <= 0:
+        return "The uploaded file is empty"
+    if size > limit:
+        return f"File size exceeds maximum limit ({limit // (1024 * 1024)} MB)"
     return ""
 
 
