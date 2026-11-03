@@ -29,7 +29,7 @@ from django.utils import timezone
 from rest_framework import serializers
 from django.db import transaction
 from rest_framework import serializers
-from .models import FormField
+from .models import FormField, Admission
 import re
 from rest_framework import serializers
 from django.contrib.auth.hashers import check_password
@@ -64,7 +64,7 @@ class SendOTPSerializer(serializers.Serializer):
     def validate_mobile(self, value):
         return validate_mobile(value)
 
-    def validate(self, attrs):
+    def validate(self, attrs):  # pyrefly: ignore[bad-override-param-name]
         data = attrs
         email = data.get("email")
         mobile = data.get("mobile")
@@ -88,7 +88,7 @@ class VerifyOTPSerializer(serializers.Serializer):
     school_id = serializers.CharField(write_only=True, required=False, allow_null=True, allow_blank=True)
     school_slug = serializers.CharField(write_only=True, required=False, allow_null=True, allow_blank=True)
 
-    def validate(self, attrs):
+    def validate(self, attrs):  # pyrefly: ignore[bad-override-param-name]
         data = attrs
         email = data.get("email")
         mobile = data.get("mobile")
@@ -300,7 +300,7 @@ class LoginSerializer(serializers.Serializer):
     username = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     password = serializers.CharField(write_only=True)
 
-    def validate(self, attrs):
+    def validate(self, attrs):  # pyrefly: ignore[bad-override-param-name]
         data = attrs
         email = data.get("email")
         mobile = data.get("mobile")
@@ -465,7 +465,7 @@ class CustomeLoginSerializer(TokenObtainPairSerializer):
             self.fields[username_field].required = False
             self.fields[username_field].allow_blank = True
 
-    def validate(self, attrs):
+    def validate(self, attrs):  # pyrefly: ignore[bad-override-param-name]
         raw_identifier = (
             attrs.get("username")
             or attrs.get("mobile")
@@ -674,7 +674,7 @@ class SchoolFeatureSerializer(serializers.ModelSerializer):
         fields = ["created_at", "id", "school", "feature", "feature_name", "is_enabled"]
         read_only_fields = ["is_enabled", "feature_name"]
 
-    def validate(self, attrs):
+    def validate(self, attrs):  # pyrefly: ignore[bad-override-param-name]
         data = attrs
         school = data.get("school")
         feature = data.get("feature")
@@ -791,7 +791,7 @@ class StaffSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError("Enter a valid joining date.")
         return value
 
-    def validate(self, attrs):
+    def validate(self, attrs):  # pyrefly: ignore[bad-override-param-name]
         attrs = super().validate(attrs)
         dob = attrs.get("date_of_birth") or (self.instance.date_of_birth if self.instance else None)
         joining = attrs.get("joining_date") or (self.instance.joining_date if self.instance else None)
@@ -1306,7 +1306,7 @@ class ManualStudentSerializer(AadhaarValidationMixin, serializers.ModelSerialize
         fields = "__all__"
         read_only_fields = ["school", "user", "admission"]
 
-    def validate(self, attrs):
+    def validate(self, attrs):  # pyrefly: ignore[bad-override-param-name]
         gr_no = attrs.get("gr_no")
         academic_year = attrs.get("academic_year")
         request = self.context.get("request")
@@ -1456,7 +1456,7 @@ class SchoolClassSerializer(serializers.ModelSerializer):
         model = SchoolClass
         fields = ['id', 'school_class', 'category', 'is_rte_applicable', 'created_at']
 
-    def validate(self, attrs):
+    def validate(self, attrs):  # pyrefly: ignore[bad-override-param-name]
         data = attrs
         request = self.context.get("request")
         school = getattr(request.user, "school", None) if request and hasattr(request, "user") else None
@@ -1595,7 +1595,7 @@ class AdmissionFormSerializer(serializers.ModelSerializer):
         read_only_fields = ["unique_link"]
 
     # ================= VALIDATION =================
-    def validate(self, attrs):
+    def validate(self, attrs):  # pyrefly: ignore[bad-override-param-name]
         data = attrs
         fees_enable = data.get("fees_enable", getattr(self.instance, "fees_enable", False))
         fee_type = data.get("fee_type", getattr(self.instance, "fee_type", None))
@@ -2073,7 +2073,7 @@ class AdmissionSubmissionSerializer(serializers.ModelSerializer):
 
         return super().to_internal_value(data)
 
-    def validate(self, attrs):
+    def validate(self, attrs):  # pyrefly: ignore[bad-override-param-name]
         data = attrs
         form = data["form"]
         field_values = data["field_values"]
@@ -2334,7 +2334,7 @@ class AdmissionDocumentSubmissionSerializer(serializers.ModelSerializer):
         fields = ["created_at", "admission_number", "documents"]
         read_only_fields = ["school"]
 
-    def validate(self, attrs):
+    def validate(self, attrs):  # pyrefly: ignore[bad-override-param-name]
         data = attrs
         admission_number = data.get("admission_number")
         documents = data.get("documents") or []
@@ -2901,7 +2901,7 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
             "documents",
         ]
 
-    def validate(self, attrs):
+    def validate(self, attrs):  # pyrefly: ignore[bad-override-param-name]
         if self.instance:
             for field_value in self.instance.field_values.select_related("field"):
                 if is_aadhaar_field(field_value.field):
@@ -3321,7 +3321,7 @@ class AssignClassSerializer(serializers.ModelSerializer):
 
         read_only_fields = ["teacher_name", "subject_name", "division_name", "class_name"]
 
-    def validate(self, attrs):
+    def validate(self, attrs):  # pyrefly: ignore[bad-override-param-name]
         data = attrs
         request = self.context.get("request")
         school = request.user.school if request and hasattr(request.user, "school") else None
@@ -3622,7 +3622,7 @@ class Tt_yearSerializer(serializers.ModelSerializer):
 
         read_only_fields = ["year"]
 
-    def validate(self, attrs):
+    def validate(self, attrs):  # pyrefly: ignore[bad-override-param-name]
         data = attrs
         start = data.get("start_year")
         end = data.get("end_year")
@@ -3696,7 +3696,7 @@ class Time_tableSerializer(serializers.ModelSerializer):
         ]
         # read_only_fields = ["year"]
 
-    def validate(self, attrs):
+    def validate(self, attrs):  # pyrefly: ignore[bad-override-param-name]
         data = attrs
         slot_data = data.get("slot", [])
         class_div = data.get("class_div") or data.get("division")
@@ -3984,7 +3984,7 @@ class AttendanceLocationSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["school"]
 
-    def validate(self, attrs):
+    def validate(self, attrs):  # pyrefly: ignore[bad-override-param-name]
         return super().validate(attrs)
 
     def create(self, validated_data):
@@ -4172,7 +4172,7 @@ class AttendanceSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Longitude must be between -180 and 180.")
         return val
 
-    def validate(self, attrs):
+    def validate(self, attrs):  # pyrefly: ignore[bad-override-param-name]
         request = self.context.get("request")
         if not request or not hasattr(request, "user"):
             raise serializers.ValidationError(
@@ -4409,7 +4409,7 @@ class LeaveTemplateSerializer(serializers.ModelSerializer):
             )
         return value.strip()
 
-    def validate(self, attrs):
+    def validate(self, attrs):  # pyrefly: ignore[bad-override-param-name]
         request = self.context.get("request")
 
         if not request or not hasattr(request, "user"):
@@ -4603,7 +4603,7 @@ class ChangeLeavePerDaySerializer(serializers.ModelSerializer):
             )
         return value
 
-    def validate(self, attrs):
+    def validate(self, attrs):  # pyrefly: ignore[bad-override-param-name]
         request = self.context.get("request")
         if not request or not hasattr(request, "user"):
             raise serializers.ValidationError("Request user is required.")
@@ -4762,7 +4762,7 @@ class FeeTypeSerializer(serializers.ModelSerializer):
 
         return " ".join(normalized_words)
 
-    def validate(self, attrs):
+    def validate(self, attrs):  # pyrefly: ignore[bad-override-param-name]
         name = attrs.get("name", getattr(self.instance, "name", None))
         billing_cycle = attrs.get(
             "billing_cycle", getattr(self.instance, "billing_cycle", None)
@@ -4815,7 +4815,7 @@ class AcademicYearSerializer(serializers.ModelSerializer):
     def get_billing_periods(self, obj):
         return obj.get_billing_periods()
 
-    def validate(self, attrs):
+    def validate(self, attrs):  # pyrefly: ignore[bad-override-param-name]
         start_month = attrs.get(
             "start_month", getattr(self.instance, "start_month", None)
         )
@@ -4928,7 +4928,7 @@ class FeeWiseClassSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["school", "feetype_name", "school_class_name"]
 
-    def validate(self, attrs):
+    def validate(self, attrs):  # pyrefly: ignore[bad-override-param-name]
         request = self.context.get("request")
         school = getattr(request.user, "school", None) if request else None
         feetype = attrs.get("feetype", getattr(self.instance, "feetype", None))
@@ -5021,7 +5021,7 @@ class SalaryComponentSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Component name cannot be empty.")
         return value
 
-    def validate(self, attrs):
+    def validate(self, attrs):  # pyrefly: ignore[bad-override-param-name]
         request = self.context.get("request")
         school = getattr(request.user, "school", None) if request else None
         name = attrs.get("name", getattr(self.instance, "name", None))
@@ -5067,7 +5067,7 @@ class StaffSalaryComponentSerializer(serializers.ModelSerializer):
             "is_active",
         ]
 
-    def validate(self, attrs):
+    def validate(self, attrs):  # pyrefly: ignore[bad-override-param-name]
         request = self.context.get("request")
         school = getattr(request.user, "school", None) if request else None
         staff = attrs.get("staff", getattr(self.instance, "staff", None))
@@ -5182,7 +5182,7 @@ class StaffSalaryPaymentSerializer(serializers.ModelSerializer):
 
         return value
 
-    def validate(self, attrs):
+    def validate(self, attrs):  # pyrefly: ignore[bad-override-param-name]
         request = self.context.get("request")
         school = getattr(request.user, "school", None) if request else None
         staff = attrs.get("staff", getattr(self.instance, "staff", None))
@@ -5323,7 +5323,7 @@ class GenerateStaffSalaryPaymentSerializer(serializers.ModelSerializer):
 
         return value
 
-    def validate(self, attrs):
+    def validate(self, attrs):  # pyrefly: ignore[bad-override-param-name]
         request = self.context.get("request")
         school = getattr(request.user, "school", None) if request else None
         staff = attrs.get("staff")
@@ -5555,7 +5555,7 @@ class StudentFeeSerializer(serializers.ModelSerializer):
             payments, many=True, context=self.context
         ).data
 
-    def validate(self, attrs):
+    def validate(self, attrs):  # pyrefly: ignore[bad-override-param-name]
         request = self.context.get("request")
         school = getattr(request.user, "school", None) if request else None
 
@@ -5944,7 +5944,7 @@ class StudentFeePaymentSerializer(serializers.ModelSerializer):
     def get_balance_after_payment(self, obj):
         return obj.student_fee.balance_amount
 
-    def validate(self, attrs):
+    def validate(self, attrs):  # pyrefly: ignore[bad-override-param-name]
         request = self.context.get("request")
         school = getattr(request.user, "school", None) if request else None
         student_fee = attrs.get(
@@ -6189,7 +6189,7 @@ class ClassDivSerializer(serializers.ModelSerializer):
     #         model = TimetableEntry
     #         fields = "__all__"
 
-    #     def validate(self, attrs):
+    #     def validate(self, attrs):  # pyrefly: ignore[bad-override-param-name]
     #         request = self.context.get("request")
     #         school = getattr(getattr(request, "user", None), "school", None)
 
@@ -6332,7 +6332,7 @@ class SlotSerializer(serializers.ModelSerializer):
         model = Slot
         exclude = ["timetable", "school"]
 
-    def validate(self, attrs):
+    def validate(self, attrs):  # pyrefly: ignore[bad-override-param-name]
 
         is_lecture = attrs.get("is_lecture")
         is_break = attrs.get("is_break")
@@ -6394,7 +6394,7 @@ class TimeTableSerializer(serializers.ModelSerializer):
     #         )
 
     #     return
-    def validate(self, attrs):
+    def validate(self, attrs):  # pyrefly: ignore[bad-override-param-name]
 
         start_time = attrs.get("start_time") or getattr(
             self.instance, "start_time", None
@@ -6569,7 +6569,7 @@ class StudentAttendanceSerializer(serializers.ModelSerializer):
             "created_at",
         ]
 
-    def validate(self, attrs):
+    def validate(self, attrs):  # pyrefly: ignore[bad-override-param-name]
 
         is_present = attrs.get("is_present", False)
         is_absent = attrs.get("is_absent", False)
@@ -6676,7 +6676,7 @@ class HomeworkSerializer(serializers.ModelSerializer):
         # return obj.submissions.count()
         return HomeworkSubmissions.objects.all().count()
 
-    def validate(self, attrs):
+    def validate(self, attrs):  # pyrefly: ignore[bad-override-param-name]
         request = self.context.get("request")
         school = getattr(request.user, "school", None) if request else None
         division = attrs.get("division", getattr(self.instance, "division", None))
@@ -6843,7 +6843,7 @@ class HomeworkSerializer(serializers.ModelSerializer):
 #         """Format submission date"""
 #         return obj.submitted_at.date() if obj.submitted_at else None
 
-#     def validate(self, attrs):
+#     def validate(self, attrs):  # pyrefly: ignore[bad-override-param-name]
 #         request = self.context.get("request")
 #         school = getattr(request.user, "school", None) if request else None
 #         homework = attrs.get("homework", getattr(self.instance, "homework", None))
@@ -6991,7 +6991,7 @@ class HomeworkSerializer(serializers.ModelSerializer):
 #                 raise serializers.ValidationError("Marks must be between 0 and 100.")
 #         return value
 
-#     def validate(self, attrs):
+#     def validate(self, attrs):  # pyrefly: ignore[bad-override-param-name]
 #         status = attrs.get("status", getattr(self.instance, "status", None))
 
 #         if status == "checked" and not attrs.get("marks"):
@@ -7343,7 +7343,7 @@ class HomeworkSubmissionSerializer(serializers.ModelSerializer):
             return " ".join(parts) if parts else str(obj.student)
         return "Student"
 
-    def validate(self, attrs):
+    def validate(self, attrs):  # pyrefly: ignore[bad-override-param-name]
         if "file" not in attrs and "attachment" in attrs:
             attrs["file"] = attrs["attachment"]
 

@@ -2,7 +2,7 @@ from decimal import Decimal
 from django.utils import timezone
 from django.core.exceptions import ValidationError as DjangoValidationError, PermissionDenied as DjangoPermissionDenied
 from django.db import IntegrityError, transaction
-from .models import StaffRemainingLeave
+from .models import StaffRemainingLeave, Perents
 from .models import *
 from rest_framework.viewsets import ModelViewSet, ViewSet
 from rest_framework.permissions import IsAuthenticated
