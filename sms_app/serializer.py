@@ -7310,7 +7310,7 @@ class StudentDocumentSerializer(serializers.ModelSerializer):
 class StudentNotificationSerializer(serializers.ModelSerializer):
     class Meta:
         model=StudentNotification
-        fields = ["created_at", "notification_type","title","message"]
+        fields = ["id", "is_read", "created_at", "notification_type", "title", "message"]
 
 class ExamSerializer(serializers.ModelSerializer):
     class Meta:

@@ -1368,10 +1368,13 @@ class AnnouncementMarkReadView(APIView):
         if not target_ids:
             return Response({"error": "No valid announcement ID provided."}, status=status.HTTP_400_BAD_REQUEST)
 
-        reads = [AnnouncementRead(user=user, announcement_id=tid) for tid in target_ids]
-        AnnouncementRead.objects.bulk_create(reads, ignore_conflicts=True)
+        existing_ids = set(Announcement.objects.filter(id__in=target_ids).values_list("id", flat=True))
+        valid_targets = [tid for tid in target_ids if tid in existing_ids]
+        if valid_targets:
+            reads = [AnnouncementRead(user=user, announcement_id=tid) for tid in valid_targets]
+            AnnouncementRead.objects.bulk_create(reads, ignore_conflicts=True)
 
-        return Response({"message": "Marked as read successfully.", "read_ids": target_ids}, status=status.HTTP_200_OK)
+        return Response({"message": "Marked as read successfully.", "read_ids": valid_targets}, status=status.HTTP_200_OK)
 
 
 class HolidayCalendarView(APIView):

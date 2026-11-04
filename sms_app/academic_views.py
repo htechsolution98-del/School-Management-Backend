@@ -3122,14 +3122,11 @@ class StudentListView(APIView):
 class StudentNotificationView(APIView):
 
     def get_permissions(self):
-
-        if self.request.method == "GET":
+        if self.request.method in ["GET", "POST", "PATCH"]:
             return [IsAuthenticated(), Isparent()]
-
         return [IsAuthenticated(), Isteacher()]
 
     def get(self, request):
-
         student_ids = (
             Perents.objects.filter(
                 user=request.user
@@ -3153,6 +3150,35 @@ class StudentNotificationView(APIView):
         )
 
         return Response(serializer.data)
+
+    def post(self, request):
+        student_ids = Perents.objects.filter(user=request.user).values_list("perents_of_id", flat=True)
+        all_read = request.data.get("all", False)
+        nid = request.data.get("id")
+        nids = request.data.get("ids", [])
+        qs = StudentNotification.objects.filter(student_id__in=student_ids)
+
+        if all_read:
+            qs.update(is_read=True)
+            return Response({"message": "All attendance notifications marked as read.", "read_ids": list(qs.values_list("id", flat=True))}, status=status.HTTP_200_OK)
+
+        target_ids = []
+        if nid:
+            target_ids.append(nid)
+        if isinstance(nids, list):
+            target_ids.extend(nids)
+
+        clean_ids = []
+        for tid in target_ids:
+            s = str(tid).replace("sn_", "").replace("att_", "")
+            if s.isdigit():
+                clean_ids.append(int(s))
+
+        if clean_ids:
+            qs.filter(id__in=clean_ids).update(is_read=True)
+            return Response({"message": "Marked as read.", "read_ids": clean_ids}, status=status.HTTP_200_OK)
+
+        return Response({"error": "No valid notification ID provided."}, status=status.HTTP_400_BAD_REQUEST)
 
 
 

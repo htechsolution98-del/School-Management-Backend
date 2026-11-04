@@ -2370,9 +2370,7 @@ class StudentDocumentSerializer(serializers.ModelSerializer):
 class StudentNotificationSerializer(serializers.ModelSerializer):
     class Meta:
         model=StudentNotification
-        fields=["notification_type","title","message",
-            "created_at"
-        ]
+        fields = ["id", "is_read", "notification_type", "title", "message", "created_at"]
 
 class RTEDocumentSerializer(serializers.ModelSerializer):
     def validate_document_file(self, value):
