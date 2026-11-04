@@ -680,11 +680,35 @@ class SyllabusView(ModelViewSet):
                         pass
                 old.delete()
 
+        file_obj = request.FILES.get("syllabus_file")
+        cloud_url = None
+        if file_obj:
+            try:
+                import cloudinary
+                import cloudinary.uploader
+                school_id = request.user.school.id if (request.user and getattr(request.user, "school", None)) else "common"
+                folder = f"school_{school_id}/syllabus"
+                upload_res = cloudinary.uploader.upload(
+                    file_obj,
+                    folder=folder,
+                    resource_type="auto",
+                    use_filename=True,
+                    unique_filename=True,
+                )
+                cloud_url = upload_res.get("secure_url") or upload_res.get("url")
+            except Exception:
+                cloud_url = None
+
         instance = serializer.save(school=request.user.school)
+        if cloud_url:
+            instance.syllabus_file = cloud_url
+            instance.save(update_fields=["syllabus_file"])
+
         self._clear_cache(request.user.school.id)
+        out_serializer = self.get_serializer(instance)
 
         return Response(
-            {"message": "Syllabus uploaded successfully", "data": serializer.data},
+            {"message": "Syllabus uploaded successfully", "data": out_serializer.data},
             status=status.HTTP_201_CREATED,
         )
 
@@ -2266,16 +2290,22 @@ class StudentAttendanceView(APIView):
         student_id = request.data.get("student")
         req_date = request.data.get("attendance_date")
         today_date = timezone.now().date()
+        target_date = None
+
         if req_date:
-            try:
-                from datetime import datetime
-                if isinstance(req_date, str):
-                    target_date = datetime.strptime(req_date.split("T")[0], "%Y-%m-%d").date()
-                else:
-                    target_date = req_date
-            except Exception:
-                target_date = today_date
-        else:
+            from datetime import datetime
+            if isinstance(req_date, str):
+                cleaned_date = req_date.split("T")[0].strip()
+                for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y"):
+                    try:
+                        target_date = datetime.strptime(cleaned_date, fmt).date()
+                        break
+                    except ValueError:
+                        pass
+            elif hasattr(req_date, "year"):
+                target_date = req_date
+
+        if not target_date:
             target_date = today_date
 
         if target_date > today_date:
@@ -2284,6 +2314,13 @@ class StudentAttendanceView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        # Resolve user school
+        school = getattr(request.user, "school", None)
+        if not school:
+            staff = getattr(request.user, "staff", None)
+            if staff and staff.school:
+                school = staff.school
+
         # Ensure mutually exclusive flags
         data = request.data.copy() if hasattr(request.data, "copy") else dict(request.data)
         if data.get("is_present"):
@@ -2291,27 +2328,35 @@ class StudentAttendanceView(APIView):
         elif data.get("is_absent"):
             data["is_present"] = False
 
+        data["attendance_date"] = target_date
+        data["student"] = student_id
+
         existing_attendance = StudentAttendance.objects.filter(
-            school=request.user.school,
+            school=school,
             student_id=student_id,
             attendance_date=target_date
         ).first()
 
         if existing_attendance:
-            serializer = StudentAttendanceSerializer(
-                existing_attendance,
-                data=data,
-                context={"request": request},
-                partial=True
-            )
+            existing_attendance.is_present = bool(data.get("is_present"))
+            existing_attendance.is_absent = bool(data.get("is_absent"))
+            staff_user = getattr(request.user, "staff", None)
+            if staff_user:
+                existing_attendance.attendance_by = staff_user
+            existing_attendance.save()
+            attendance = existing_attendance
         else:
-            serializer = StudentAttendanceSerializer(
-                data=data,
-                context={"request": request}
+            # Create/update cleanly with target attendance_date
+            attendance, _ = StudentAttendance.objects.update_or_create(
+                school=school,
+                student_id=student_id,
+                attendance_date=target_date,
+                defaults={
+                    "is_present": bool(data.get("is_present")),
+                    "is_absent": bool(data.get("is_absent")),
+                    "attendance_by": getattr(request.user, "staff", None),
+                }
             )
-
-        serializer.is_valid(raise_exception=True)
-        attendance = serializer.save()
 
         if attendance.is_present:
             status_text = "Present"

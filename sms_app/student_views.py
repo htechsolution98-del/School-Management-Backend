@@ -901,7 +901,13 @@ class AdmissionUpdateViewSet(ModelViewSet):
     permission_classes = [IsAuthenticated, IsCLerk]
 
     def get_queryset(self):
-        return Admission.objects.filter(school=self.request.user.school)
+        user = self.request.user
+        school = getattr(user, "school", None)
+        if not school:
+            staff = getattr(user, "staff", None)
+            if staff and staff.school:
+                school = staff.school
+        return Admission.objects.filter(school=school)
 
     def get_serializer_class(self):
         # if self.action in ["update", "partial_update"]:

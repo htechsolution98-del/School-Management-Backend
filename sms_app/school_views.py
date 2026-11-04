@@ -211,13 +211,15 @@ class SchoolView(ModelViewSet):
             # ✅ Create school with generated code
             school = serializer.save(login_id=user, code=school_code)
 
-            # ✅ Bulk create school features
-            school_features = [
-                SchoolFeature(school=school, feature=feature, is_enabled=True)
-                for feature in features
-            ]
-
-            SchoolFeature.objects.bulk_create(school_features, ignore_conflicts=True)
+            # ✅ Create school features: Enable ONLY selected features, disable unselected
+            selected_fids = set(f.id for f in features)
+            all_features = Feature.objects.all()
+            for feat in all_features:
+                SchoolFeature.objects.update_or_create(
+                    school=school,
+                    feature=feat,
+                    defaults={"is_enabled": (feat.id in selected_fids)}
+                )
 
             # ✅ Link user to school
             user.school = school  # if field exists
@@ -897,6 +899,9 @@ class AnnouncementView(APIView):
                 "SUPER_ADMIN",
                 "PRINCIPAL",
                 "VICE PRINCIPAL",
+                "CLERK",
+                "ASSISTANT CLERK",
+                "ASSISTANT_CLERK",
             ]
         )
 
@@ -915,8 +920,6 @@ class AnnouncementView(APIView):
                     | models.Q(announcement_for__icontains="STUDENT")
                     | models.Q(announcement_for__iexact="STUDENTS_PARENTS")
                     | models.Q(announcement_for__iexact="STUDENT_PARENT")
-                    | models.Q(announcement_for__isnull=True)
-                    | models.Q(announcement_for="")
                 )
             )
             if student:
@@ -946,8 +949,6 @@ class AnnouncementView(APIView):
                     | models.Q(announcement_for__icontains="PARENT")
                     | models.Q(announcement_for__iexact="STUDENTS_PARENTS")
                     | models.Q(announcement_for__iexact="STUDENT_PARENT")
-                    | models.Q(announcement_for__isnull=True)
-                    | models.Q(announcement_for="")
                 )
             )
             if student:
@@ -1012,8 +1013,6 @@ class AnnouncementView(APIView):
                 & (
                     models.Q(is_everyone=True)
                     | models.Q(announcement_for__iexact="ALL")
-                    | models.Q(announcement_for__isnull=True)
-                    | models.Q(announcement_for="")
                     | role_target_q
                 )
             )

@@ -71,7 +71,7 @@ def validate_admission_value(field, raw_value, today=None):
         if re.fullmatch(r"\+91\d{10}", value):
             value = value[3:]
         if not re.fullmatch(r"[6-9]\d{9}", value):
-            return value, "Enter a valid 10-digit mobile number"
+            return value, "Enter a valid 10-digit mobile number starting with 6, 7, 8, or 9"
     if kind == "email" or re.search(r"email|e-mail", descriptor):
         value = value.lower()
         if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]{2,}", value):
