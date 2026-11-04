@@ -609,3 +609,193 @@ class InitDatabaseView(APIView):
 
 
 
+
+
+# ==========================================
+# FORGOT PASSWORD WITH SMTP EMAIL & OTP
+# ==========================================
+from django.core.mail import send_mail
+from django.utils import timezone
+from datetime import timedelta
+import random
+
+class ForgotPasswordSendOTPView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        email = (request.data.get("email") or "").strip()
+        if not email:
+            return Response({"error": "Please provide an email address."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 1. Check if user exists with this email
+        user = User.objects.filter(email__iexact=email).first()
+        if not user:
+            staff = Staff.objects.filter(email__iexact=email).first()
+            if staff and staff.user:
+                user = staff.user
+            else:
+                student = Student.objects.filter(user__email__iexact=email).first()
+                if student and student.user:
+                    user = student.user
+                else:
+                    parent = Perents.objects.filter(user__email__iexact=email).first()
+                    if parent and parent.user:
+                        user = parent.user
+
+        if not user:
+            return Response(
+                {"error": "No account found registered with this email address."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # 2. Generate 6-digit OTP
+        otp = str(random.randint(100000, 999999))
+
+        # Clear existing OTPs for this email
+        OTP.objects.filter(email__iexact=email).delete()
+
+        # Save new OTP
+        OTP.objects.create(email=email, otp=otp)
+
+        # 3. Send email using SMTP
+        display_name = user.first_name or user.username or "User"
+        subject = f"{otp} is your verification code to reset your password"
+        body = (
+            f"Dear {display_name},\n\n"
+            f"We received a request to reset your password for your School Management account.\n\n"
+            f"Your 6-digit OTP verification code is:\n\n"
+            f"    {otp}\n\n"
+            f"This code will expire in 10 minutes.\n\n"
+            f"If you did not request this password reset, please ignore this email or contact your school administrator.\n\n"
+            f"Warm regards,\n"
+            f"School Management Administration"
+        )
+
+        sent = False
+        last_error = None
+
+        # 1st attempt: Standard Django send_mail
+        try:
+            from django.conf import settings
+            from_email = getattr(settings, "DEFAULT_FROM_EMAIL", "yash.error.1@gmail.com")
+            send_mail(
+                subject=subject,
+                message=body,
+                from_email=from_email,
+                recipient_list=[email],
+                fail_silently=False,
+            )
+            sent = True
+        except Exception as e:
+            last_error = str(e)
+            # 2nd attempt: Automatic fallback to Port 465 (Direct SSL)
+            try:
+                from django.conf import settings
+                from django.core.mail import EmailMessage, get_connection
+                ssl_conn = get_connection(
+                    backend="django.core.mail.backends.smtp.EmailBackend",
+                    host=getattr(settings, "EMAIL_HOST", "smtp.gmail.com"),
+                    port=465,
+                    username=getattr(settings, "EMAIL_HOST_USER", "yash.error.1@gmail.com"),
+                    password=getattr(settings, "EMAIL_HOST_PASSWORD", ""),
+                    use_ssl=True,
+                    use_tls=False,
+                    timeout=15,
+                )
+                fallback_msg = EmailMessage(
+                    subject=subject,
+                    body=body,
+                    from_email=getattr(settings, "DEFAULT_FROM_EMAIL", "yash.error.1@gmail.com"),
+                    to=[email],
+                    connection=ssl_conn,
+                )
+                fallback_msg.send(fail_silently=False)
+                sent = True
+            except Exception as e2:
+                last_error = f"{last_error} | SSL Fallback: {str(e2)}"
+
+        if not sent:
+            return Response(
+                {
+                    "error": f"Failed to send verification email via SMTP: {last_error}",
+                    "help": "Please verify your Gmail App Password at myaccount.google.com/apppasswords and check if your local network or firewall allows outbound SMTP on port 465/587."
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        return Response(
+            {"message": "Verification code has been sent to your email successfully."},
+            status=status.HTTP_200_OK,
+        )
+
+
+class ForgotPasswordResetView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        email = (request.data.get("email") or "").strip()
+        otp = (request.data.get("otp") or "").strip()
+        new_password = (request.data.get("new_password") or "").strip()
+
+        if not email or not otp or not new_password:
+            return Response(
+                {"error": "Email, OTP, and new password are all required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            from .validators import validate_strong_password
+            validate_strong_password(new_password)
+        except Exception as ve:
+            err_msg = ve.detail[0] if hasattr(ve, "detail") and isinstance(ve.detail, list) else str(ve)
+            return Response(
+                {"error": err_msg},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # 1. Verify OTP within 10 minutes
+        ten_minutes_ago = timezone.now() - timedelta(minutes=10)
+        otp_record = OTP.objects.filter(
+            email__iexact=email,
+            otp=otp,
+            created_at__gte=ten_minutes_ago,
+        ).order_by("-created_at").first()
+
+        if not otp_record:
+            return Response(
+                {"error": "Invalid or expired OTP code. Please request a new one."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # 2. Find user
+        user = User.objects.filter(email__iexact=email).first()
+        if not user:
+            staff = Staff.objects.filter(email__iexact=email).first()
+            if staff and staff.user:
+                user = staff.user
+            else:
+                student = Student.objects.filter(user__email__iexact=email).first()
+                if student and student.user:
+                    user = student.user
+                else:
+                    parent = Perents.objects.filter(user__email__iexact=email).first()
+                    if parent and parent.user:
+                        user = parent.user
+
+        if not user:
+            return Response(
+                {"error": "User account could not be found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # 3. Reset password
+        user.set_password(new_password)
+        user.save()
+
+        # Delete used OTP
+        OTP.objects.filter(email__iexact=email).delete()
+
+        return Response(
+            {"message": "Your password has been reset successfully. Please log in with your new password."},
+            status=status.HTTP_200_OK,
+        )

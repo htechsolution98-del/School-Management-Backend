@@ -1326,12 +1326,107 @@ class AdmissionUpdateSerializer(serializers.ModelSerializer):
                 except Exception:
                     pass
 
-        # Handle direct division update in request data if no student object yet
+        # Handle direct core student field updates from request data
         req = self.context.get("request")
-        if req and hasattr(req, "data"):
-            div_val = req.data.get("division")
-            if div_val:
-                Student.objects.filter(admission=instance).update(division=div_val)
+        data = req.data if (req and hasattr(req, "data")) else (getattr(self, "initial_data", {}) or {})
+        student = Student.objects.filter(admission=instance).first()
+
+        if student:
+            if "surname" in data:
+                student.surname = str(data.get("surname") or "").strip()
+            if "name" in data:
+                student.name = str(data.get("name") or "").strip()
+            if "student_name" in data and not data.get("name"):
+                student.name = str(data.get("student_name") or "").strip()
+            if "father_name" in data:
+                student.father_name = str(data.get("father_name") or "").strip()
+            if "mother_name" in data:
+                student.mother_name = str(data.get("mother_name") or "").strip()
+            if "gender" in data:
+                student.gender = str(data.get("gender") or "").strip()
+            if "mobile" in data:
+                student.mobile = str(data.get("mobile") or "").strip()
+            if "roll_no" in data:
+                student.roll_no = str(data.get("roll_no") or "").strip()
+            if "aadhar_number" in data:
+                student.aadhar_number = str(data.get("aadhar_number") or "").strip()
+            if "address" in data:
+                student.address = str(data.get("address") or "").strip()
+            if "division" in data:
+                student.division = str(data.get("division") or "").strip()
+
+            dob_val = data.get("date_of_birth")
+            if dob_val:
+                for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
+                    try:
+                        import datetime as _dt
+                        student.date_of_birth = _dt.datetime.strptime(str(dob_val).strip(), fmt).date()
+                        break
+                    except (ValueError, TypeError):
+                        pass
+
+            class_val = data.get("school_class") or data.get("class")
+            if class_val:
+                cls_obj = None
+                if str(class_val).isdigit():
+                    cls_obj = SchoolClass.objects.filter(id=int(class_val), school=instance.school).first()
+                if not cls_obj:
+                    cls_obj = SchoolClass.objects.filter(school=instance.school, school_class__iexact=str(class_val).strip()).first()
+                if cls_obj:
+                    student.school_class = cls_obj
+
+            try:
+                student.save()
+            except Exception as e:
+                logger.warning("Failed saving student updates: %s", e)
+
+        # Synchronize matching AdmissionFieldValue records so admission view reflects the updates
+        for fv in instance.field_values.select_related("field"):
+            if not fv.field:
+                continue
+            lbl = (fv.field.label or "").lower()
+            map_to = (getattr(fv.field, "map_to_student_field", None) or "").lower()
+
+            if any(k in lbl for k in ["surname", "last name", "lastname"]) or map_to == "surname":
+                if "surname" in data:
+                    fv.value = str(data.get("surname") or "").strip()
+                    fv.save(update_fields=["value"])
+            elif any(k in lbl for k in ["first name", "student name", "candidate name"]) or map_to == "name":
+                if "name" in data or "student_name" in data:
+                    fv.value = str(data.get("name") or data.get("student_name") or "").strip()
+                    fv.save(update_fields=["value"])
+            elif any(k in lbl for k in ["father name", "middle name"]) or map_to == "father_name":
+                if "father_name" in data:
+                    fv.value = str(data.get("father_name") or "").strip()
+                    fv.save(update_fields=["value"])
+            elif any(k in lbl for k in ["mother name"]) or map_to == "mother_name":
+                if "mother_name" in data:
+                    fv.value = str(data.get("mother_name") or "").strip()
+                    fv.save(update_fields=["value"])
+            elif any(k in lbl for k in ["class", "standard", "applying for class"]) or map_to == "school_class":
+                if "school_class" in data or "class" in data:
+                    cval = data.get("school_class") or data.get("class")
+                    if student and student.school_class:
+                        fv.value = student.school_class.school_class
+                    else:
+                        fv.value = str(cval)
+                    fv.save(update_fields=["value"])
+            elif any(k in lbl for k in ["division", "section", "sec"]) or map_to == "division":
+                if "division" in data:
+                    fv.value = str(data.get("division") or "").strip()
+                    fv.save(update_fields=["value"])
+            elif any(k in lbl for k in ["mobile", "phone", "contact"]) or map_to == "mobile":
+                if "mobile" in data:
+                    fv.value = str(data.get("mobile") or "").strip()
+                    fv.save(update_fields=["value"])
+            elif any(k in lbl for k in ["birth", "dob"]) or map_to == "date_of_birth":
+                if "date_of_birth" in data:
+                    fv.value = str(data.get("date_of_birth") or "").strip()
+                    fv.save(update_fields=["value"])
+            elif any(k in lbl for k in ["aadhaar", "aadhar"]) or map_to == "aadhar_number":
+                if "aadhar_number" in data:
+                    fv.value = str(data.get("aadhar_number") or "").strip()
+                    fv.save(update_fields=["value"])
 
         instance.save()
         return instance
@@ -1346,7 +1441,7 @@ class AdmissionUpdateSerializer(serializers.ModelSerializer):
 
 class AdmissionDocumentSerializer(serializers.ModelSerializer):
     documents = AdmissionDocumentItemSerializer(
-        source="admission_documents", many=True  # related_name
+        source="documents", many=True  # related_name is "documents"
     )
 
     class Meta:
@@ -1386,7 +1481,7 @@ class AdmissionDocumentUpdateSerializer(serializers.ModelSerializer):
                 document_field = request.data.get(f"documents[{i}][document_field]")
 
                 # documents[0][file]
-                file = request.FILES.get(f"documents[{i}][file]")
+                file = request.FILES.get(f"documents[{i}][file]") or request.data.get(f"documents[{i}][file]")
 
                 # stop loop when no more documents
                 if not document_field:
@@ -1401,12 +1496,14 @@ class AdmissionDocumentUpdateSerializer(serializers.ModelSerializer):
                 try:
                     import cloudinary
                     import cloudinary.uploader
-                    upload_res = cloudinary.uploader.upload(
+                    upload_res = None
+                    if hasattr(file, "read"):
+                        upload_res = cloudinary.uploader.upload(
                         file,
                         folder="admission_documents",
                         resource_type="auto",
                     )
-                    c_url = upload_res.get("secure_url") or upload_res.get("url")
+                    c_url = (upload_res.get("secure_url") or upload_res.get("url")) if upload_res else None
                     if c_url:
                         saved_target = c_url
                 except Exception as c_err:
@@ -1941,6 +2038,34 @@ class GetAdmissionDataSerializer(serializers.ModelSerializer):
     gr_no = serializers.SerializerMethodField()
     division = serializers.SerializerMethodField()
     rte_documents = serializers.SerializerMethodField()
+    student_id = serializers.SerializerMethodField()
+    student_details = serializers.SerializerMethodField()
+
+    def get_student_id(self, obj):
+        st = getattr(obj, "student", None) or Student.objects.filter(admission=obj).first()
+        return st.id if st else None
+
+    def get_student_details(self, obj):
+        st = getattr(obj, "student", None) or Student.objects.filter(admission=obj).select_related("school_class").first()
+        if st:
+            return {
+                "id": st.id,
+                "surname": st.surname or "",
+                "name": st.name or "",
+                "father_name": st.father_name or "",
+                "mother_name": st.mother_name or "",
+                "date_of_birth": str(st.date_of_birth) if st.date_of_birth else "",
+                "gender": st.gender or "",
+                "mobile": st.mobile or "",
+                "school_class": st.school_class_id,
+                "school_class_name": st.school_class.school_class if st.school_class else "",
+                "division": str(st.division.division if hasattr(st.division, "division") else (st.division or "")),
+                "roll_no": st.roll_no or "",
+                "aadhar_number": st.aadhar_number or "",
+                "address": st.address or "",
+                "gr_no": st.gr_no or "",
+            }
+        return None
 
     def get_gr_no(self, obj):
         sv = StudentVerify.objects.filter(admission_number=obj.admission_number).first()
@@ -1982,13 +2107,13 @@ class GetAdmissionDataSerializer(serializers.ModelSerializer):
             "status",
             "gr_no",
             "division",
+            "student_id",
+            "student_details",
             "submitted_at",
             "field_values",
             "documents",
-            "created_at"
+            "created_at",
             "is_rte",
-            "field_values",
-            "documents",
             "rte_documents",
         ]
         read_only_fields = ["submitted_at"]
@@ -2370,9 +2495,7 @@ class StudentDocumentSerializer(serializers.ModelSerializer):
 class StudentNotificationSerializer(serializers.ModelSerializer):
     class Meta:
         model=StudentNotification
-        fields=["notification_type","title","message",
-            "created_at"
-        ]
+        fields = ["id", "is_read", "notification_type", "title", "message", "created_at"]
 
 class RTEDocumentSerializer(serializers.ModelSerializer):
     def validate_document_file(self, value):

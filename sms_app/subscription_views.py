@@ -109,7 +109,16 @@ class SchoolSubscriptionViewSet(viewsets.ModelViewSet):
         # Refresh overdue statuses
         subs = SchoolSubscription.objects.select_related("school", "plan").all()
         for sub in subs:
-            if sub.status in ["TRIAL", "ACTIVE", "EXPIRING"] and sub.due_date < today:
+            # 1. If subscription was suspended/expired but due date is now in the future -> reactivate
+            if sub.due_date and sub.due_date >= today and sub.status in ["SUSPENDED", "EXPIRED", "TRIAL_EXPIRED"]:
+                sub.status = "ACTIVE" if sub.plan_type == "PAID" else "TRIAL"
+                sub.save(update_fields=["status"])
+                if sub.school and not sub.school.is_active:
+                    sub.school.is_active = True
+                    sub.school.save(update_fields=["is_active"])
+
+            # 2. If subscription has passed due date
+            elif sub.due_date and sub.status in ["TRIAL", "ACTIVE", "EXPIRING"] and sub.due_date < today:
                 grace_days = sub.grace_period_days
                 if today <= (sub.due_date + timedelta(days=grace_days)):
                     if sub.status != "GRACE_PERIOD":
@@ -122,6 +131,20 @@ class SchoolSubscriptionViewSet(viewsets.ModelViewSet):
                         if sub.school.is_active:
                             sub.school.is_active = False
                             sub.school.save(update_fields=["is_active"])
+                            try:
+                                from channels.layers import get_channel_layer
+                                from asgiref.sync import async_to_sync
+                                channel_layer = get_channel_layer()
+                                if channel_layer:
+                                    async_to_sync(channel_layer.group_send)(
+                                        f"school_{sub.school.id}_choice_all",
+                                        {
+                                            "type": "school_deactivated",
+                                            "message": "School subscription has expired and account is deactivated.",
+                                        },
+                                    )
+                            except Exception:
+                                pass
                     sub.status = new_status
                     sub.save(update_fields=["status"])
 
@@ -278,9 +301,9 @@ class SchoolSubscriptionViewSet(viewsets.ModelViewSet):
         if custom_next_due:
             from datetime import datetime
             next_due = datetime.strptime(custom_next_due, "%Y-%m-%d").date()
+            base_date = subscription.due_date or today
         else:
-            base_date = subscription.due_date if (subscription.due_date and subscription.due_date > today and subscription.status in ["ACTIVE", "TRIAL", "GRACE_PERIOD"]) else today
-            next_due = base_date + relativedelta(months=months_count)
+            base_date, next_due, overdue_days = SubscriptionBillingService.calculate_renewal_period(subscription, months_count)
 
         bill_calc = SubscriptionBillingService.calculate_bill(
             school=subscription.school,
@@ -306,9 +329,9 @@ class SchoolSubscriptionViewSet(viewsets.ModelViewSet):
 
             subscription.plan_type = "PAID"
             subscription.status = "ACTIVE"
-            subscription.subscription_start_date = today
+            subscription.subscription_start_date = base_date
             subscription.subscription_end_date = next_due
-            subscription.start_date = today
+            subscription.start_date = base_date
             subscription.due_date = next_due
             subscription.billing_cycle = billing_cycle
             subscription.student_count_at_purchase = bill_calc["student_count"]
@@ -337,7 +360,7 @@ class SchoolSubscriptionViewSet(viewsets.ModelViewSet):
                 tax_amount=Decimal(str(bill_calc["tax_amount"])),
                 discount_amount=Decimal(str(bill_calc["discount_amount"])),
                 total_amount=Decimal(str(amount)),
-                billing_period_start=today,
+                billing_period_start=base_date,
                 billing_period_end=next_due,
                 due_date=today,
                 status="PAID",
@@ -510,6 +533,20 @@ class SchoolSubscriptionViewSet(viewsets.ModelViewSet):
             school.is_active = False
             subscription.status = "SUSPENDED"
             msg = "School locked/suspended successfully."
+            try:
+                from channels.layers import get_channel_layer
+                from asgiref.sync import async_to_sync
+                channel_layer = get_channel_layer()
+                if channel_layer:
+                    async_to_sync(channel_layer.group_send)(
+                        f"school_{school.id}_choice_all",
+                        {
+                            "type": "school_deactivated",
+                            "message": "School account is deactivated. Contact administrator.",
+                        },
+                    )
+            except Exception:
+                pass
         else:
             school.is_active = True
             subscription.status = "ACTIVE" if subscription.plan_type == "PAID" else "TRIAL"
@@ -794,8 +831,7 @@ class SubscriptionPaymentViewSet(viewsets.ModelViewSet):
 
         # Calculate expanded period
         today = timezone.now().date()
-        base_date = sub.due_date if (sub.due_date and sub.due_date > today and sub.status in ["ACTIVE", "TRIAL", "GRACE_PERIOD"]) else today
-        next_due = base_date + relativedelta(months=months_count)
+        base_date, next_due, overdue_days = SubscriptionBillingService.calculate_renewal_period(sub, months_count)
         cycle_display = f"{months_count}_MONTHS" if months_count not in [1, 3, 6, 12] else billing_cycle
 
         # Check if any pending invoice already exists for this school (do not create multiple pending)
@@ -926,8 +962,7 @@ class SubscriptionPaymentViewSet(viewsets.ModelViewSet):
             billing_cycle = payment.metadata.get("billing_cycle", "MONTHLY")
 
             today = timezone.now().date()
-            base_date = sub.due_date if (sub and sub.due_date and sub.due_date > today and sub.status in ["ACTIVE", "TRIAL", "GRACE_PERIOD"]) else today
-            next_due = base_date + relativedelta(months=months_count)
+            base_date, next_due, overdue_days = SubscriptionBillingService.calculate_renewal_period(sub, months_count)
 
             if payment.invoice:
                 payment.invoice.status = "PAID"
@@ -947,10 +982,9 @@ class SubscriptionPaymentViewSet(viewsets.ModelViewSet):
                 sub.plan_type = "PAID"
                 sub.status = "ACTIVE"
                 sub.billing_cycle = billing_cycle
-                if not sub.subscription_start_date or sub.due_date <= today:
-                    sub.subscription_start_date = today
+                sub.subscription_start_date = base_date
                 sub.subscription_end_date = next_due
-                sub.start_date = today
+                sub.start_date = base_date
                 sub.due_date = next_due
                 sub.save()
 

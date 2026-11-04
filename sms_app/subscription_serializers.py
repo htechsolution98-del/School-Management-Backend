@@ -162,6 +162,27 @@ class SchoolSubscriptionSerializer(serializers.ModelSerializer):
     def get_is_valid(self, obj):
         return obj.is_valid_now()
 
+    def update(self, instance, validated_data):
+        from django.utils import timezone
+        if "start_date" in validated_data and not validated_data.get("subscription_start_date"):
+            validated_data["subscription_start_date"] = validated_data["start_date"]
+        if "due_date" in validated_data and not validated_data.get("subscription_end_date"):
+            validated_data["subscription_end_date"] = validated_data["due_date"]
+
+        new_status = validated_data.get("status", instance.status)
+        new_due_date = validated_data.get("due_date", instance.due_date)
+        today = timezone.now().date()
+        if new_status in ["ACTIVE", "TRIAL"] and new_due_date and new_due_date >= today:
+            if instance.school and not instance.school.is_active:
+                instance.school.is_active = True
+                instance.school.save(update_fields=["is_active"])
+        elif new_status == "SUSPENDED":
+            if instance.school and instance.school.is_active:
+                instance.school.is_active = False
+                instance.school.save(update_fields=["is_active"])
+
+        return super().update(instance, validated_data)
+
 
 class SchoolInvoiceSerializer(serializers.ModelSerializer):
     school_name = serializers.CharField(source="school.name", read_only=True)
