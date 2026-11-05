@@ -87,6 +87,10 @@ class GetFeatureView(ModelViewSet):
         if not school:
             school = School.objects.filter(login_id=user.id).first()
         if not school:
+            staff = Staff.objects.filter(user=user).select_related("school").first()
+            if staff and staff.school:
+                school = staff.school
+        if not school:
             return SchoolFeature.objects.none()
 
         qs = SchoolFeature.objects.filter(school=school, is_enabled=True, feature__is_active=True)
