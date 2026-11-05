@@ -955,7 +955,8 @@ class Syllabus(models.Model):
         School, on_delete=models.CASCADE, null=True, blank=True, db_index=True
     )
 
-    division = models.ForeignKey("Division", on_delete=models.CASCADE, related_name="syllabi")
+    division = models.ForeignKey("Division", on_delete=models.CASCADE, related_name="syllabi", null=True, blank=True)
+    class_group = models.ForeignKey("SchoolClass", on_delete=models.CASCADE, null=True, blank=True, related_name="syllabi")
     
     subject = models.ForeignKey("Subject", on_delete=models.CASCADE, related_name="syllabi")
     syllabus_file = models.FileField(upload_to="syllabus/", storage=get_raw_document_storage)
@@ -1928,7 +1929,6 @@ class StudentFee(models.Model):
         return self.fine_amount
 
     def refresh_payment_status(self):
-        from django.db.models import Q
         from django.db.models import Sum
         from django.utils import timezone
 
@@ -1942,7 +1942,7 @@ class StudentFee(models.Model):
             # Calculate government payments received
             total_govt_paid = (
                 self.payments.filter(payer_type="government", is_bounced=False)
-                .filter(Q(is_verified=True) | ~Q(payment_mode="cheque"))
+                .filter(is_verified=True)
                 .aggregate(total=Sum("amount"))["total"]
                 or Decimal("0.00")
             )
@@ -1995,7 +1995,7 @@ class StudentFee(models.Model):
 
         total_paid = (
             self.payments.filter(payer_type="student", is_bounced=False)
-            .filter(Q(is_verified=True) | ~Q(payment_mode="cheque"))
+            .filter(is_verified=True)
             .aggregate(total=Sum("amount"))["total"]
             or Decimal("0.00")
         )
@@ -2013,7 +2013,7 @@ class StudentFee(models.Model):
 
         latest_payment = (
             self.payments.filter(payer_type="student", is_bounced=False)
-            .filter(Q(is_verified=True) | ~Q(payment_mode="cheque"))
+            .filter(is_verified=True)
             .order_by("-payment_date", "-created_at")
             .first()
         )

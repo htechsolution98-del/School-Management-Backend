@@ -3302,8 +3302,21 @@ class SetSubjectSerializer(serializers.ModelSerializer):
         read_only_fields = ["school"]
 
 
-class SyllabusSerializer(serializers.ModelSerializer):
-
+class CloudinaryAwareFileField(serializers.FileField):
+    def to_representation(self, value):
+        if not value:
+            return None
+        name = getattr(value, "name", "")
+        if isinstance(name, str) and name.startswith(("https://", "http://")):
+            return name
+        return super().to_representation(value)
+
+
+class SyllabusSerializer(serializers.ModelSerializer):
+    syllabus_file = CloudinaryAwareFileField()
+
+
+
     class Meta:
         model = Syllabus
         fields = "__all__"
@@ -6014,12 +6027,12 @@ class StudentFeePaymentSerializer(serializers.ModelSerializer):
                 )
             paid_govt_except_this = (
                 student_fee.payments.filter(payer_type="government", is_bounced=False)
-                .filter(Q(is_verified=True) | ~Q(payment_mode="cheque"))
+                .filter(is_verified=True)
                 .aggregate(total=Sum("amount"))["total"]
                 or Decimal("0.00")
             )
             if self.instance and self.instance.payer_type == "government":
-                if self.instance.is_verified or self.instance.payment_mode != "cheque":
+                if self.instance.is_verified and not self.instance.is_bounced:
                     paid_govt_except_this -= self.instance.amount
 
             remaining_govt = student_fee.rte_govt_claim_amount - paid_govt_except_this
@@ -6030,11 +6043,11 @@ class StudentFeePaymentSerializer(serializers.ModelSerializer):
                     }
                 )
         else:
-            paid_except_this = student_fee.payments.filter(payer_type="student", is_verified=True).aggregate(
+            paid_except_this = student_fee.payments.filter(payer_type="student", is_verified=True, is_bounced=False).aggregate(
                 total=Sum("amount")
             )["total"] or Decimal("0.00")
             if self.instance:
-                if self.instance.is_verified:
+                if self.instance.is_verified and not self.instance.is_bounced:
                     paid_except_this -= self.instance.amount
 
             remaining_amount = student_fee.payable_amount - paid_except_this

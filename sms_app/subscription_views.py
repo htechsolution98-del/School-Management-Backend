@@ -34,9 +34,8 @@ from .subscription_services import (
     PaymentService,
     AuditLogService,
 )
-from django.conf import settings
 from .permissions import Is_super_admin
-from .razorpay_client import client as razorpay_client
+from .razorpay_client import get_school_razorpay
 import hmac
 import hashlib
 
@@ -824,6 +823,7 @@ class SubscriptionPaymentViewSet(viewsets.ModelViewSet):
             }
         }
 
+        razorpay_client, razorpay_key_id, _ = get_school_razorpay(school)
         try:
             order = razorpay_client.order.create(data=order_data)
         except Exception as e:
@@ -915,7 +915,7 @@ class SubscriptionPaymentViewSet(viewsets.ModelViewSet):
             "order_id": order["id"],
             "amount": calc["final_amount"],
             "currency": "INR",
-            "key": getattr(settings, "RAZOR_PAY_KEY_ID", "rzp_test_SFctsjgfvcrQ6h"),
+            "key": razorpay_key_id,
             "payment_id": payment.payment_id,
             "invoice_number": invoice.invoice_number,
             "months_count": months_count,
@@ -934,22 +934,20 @@ class SubscriptionPaymentViewSet(viewsets.ModelViewSet):
         if not (razorpay_order_id and razorpay_payment_id and razorpay_signature):
             return Response({"error": "Missing Razorpay payment parameters."}, status=400)
 
-        # Signature verification
-        body = f"{razorpay_order_id}|{razorpay_payment_id}".encode("utf-8")
-        secret_key = getattr(settings, "RAZOR_PAY_SECRET_KEY", "dummy_secret")
-        generated_signature = hmac.new(
-            secret_key.encode("utf-8"), body, hashlib.sha256
-        ).hexdigest()
-
-        if generated_signature != razorpay_signature and razorpay_signature != "mock_signature_test":
-            return Response({"error": "Invalid payment signature."}, status=400)
-
         payment = SubscriptionPayment.objects.filter(transaction_id=razorpay_order_id).first()
         if not payment:
             payment = SubscriptionPayment.objects.filter(metadata__razorpay_order_id=razorpay_order_id).first()
 
         if not payment:
             return Response({"error": "Payment record not found."}, status=404)
+
+        _, _, secret_key = get_school_razorpay(payment.school)
+        body = f"{razorpay_order_id}|{razorpay_payment_id}".encode("utf-8")
+        generated_signature = hmac.new(
+            secret_key.encode("utf-8"), body, hashlib.sha256
+        ).hexdigest()
+        if not hmac.compare_digest(generated_signature, razorpay_signature):
+            return Response({"error": "Invalid payment signature."}, status=400)
 
         with transaction.atomic():
             payment.status = "SUCCESS"

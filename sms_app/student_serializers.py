@@ -229,7 +229,10 @@ class FeesVerifySerializer(serializers.ModelSerializer):
 
     def get_fee_data(self, obj):
 
-        fee = AdmissionFee.objects.filter(admission_number=obj.admission_number).first()
+        fee = AdmissionFee.objects.filter(
+            admission_number=obj.admission_number,
+            paid_at__isnull=False,
+        ).order_by("-paid_at", "-id").first()
 
         if fee:
             return AdmissionFeeVerifySerializer(fee).data
@@ -1375,6 +1378,18 @@ class AdmissionUpdateSerializer(serializers.ModelSerializer):
                 if cls_obj:
                     student.school_class = cls_obj
 
+            placement_changed = any(key in data for key in ("school_class", "class", "division"))
+            if placement_changed and (not student.school_class or not student.division):
+                raise serializers.ValidationError({"school_class": "Choose a class and one of its divisions before saving placement."})
+            if student.division and not student.school_class:
+                raise serializers.ValidationError({"division": "A division cannot be assigned before a class."})
+            if student.school_class and student.division and not Division.objects.filter(
+                school=student.school,
+                SchoolClass=student.school_class,
+                division__iexact=student.division,
+            ).exists():
+                raise serializers.ValidationError({"division": "The selected division does not belong to the selected class."})
+
             try:
                 student.save()
             except Exception as e:
@@ -1667,6 +1682,8 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
     field_values = AdmissionFieldValueReadSerializer(many=True, read_only=True)
     documents = AdmissionDocumentReadSerializer(many=True, read_only=True)
     gr_no = serializers.CharField(write_only=True, required=False)
+    school_class_id = serializers.IntegerField(write_only=True, required=False)
+    division = serializers.CharField(write_only=True, required=False, allow_blank=True)
 
     class Meta:
         model = Admission
@@ -1674,6 +1691,8 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
             "id",
             "admission_number",
             "gr_no",
+            "school_class_id",
+            "division",
             # "school_class",
             # "division",
             # "clerk_verified",
@@ -1703,6 +1722,8 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
 
         request = self.context.get("request")
         gr_no = validated_data.pop("gr_no")
+        school_class_id = validated_data.pop("school_class_id", None)
+        division = str(validated_data.pop("division", "") or "").strip()
         # g = instance.status
         # print(g)
         with transaction.atomic():  # pyrefly: ignore[bad-context-manager]
@@ -1712,11 +1733,15 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
             # =========================
 
             # Generate GR number
+            student = Student.objects.filter(admission=instance, school=request.user.school).first()
             # Check Aadhaar uniqueness before creating student
             for fv in instance.field_values.all():
                 if fv.field and (fv.field.map_to_student_field == "aadhar_number" or is_aadhaar_field(fv.field)):
                     val = re.sub(r"[\s-]", "", str(fv.value or "").strip())
-                    if val and Student.objects.filter(aadhar_number=val).exists():
+                    existing_aadhaar = Student.objects.filter(aadhar_number=val) if val else Student.objects.none()
+                    if student:
+                        existing_aadhaar = existing_aadhaar.exclude(id=student.id)
+                    if val and existing_aadhaar.exists():
                         raise serializers.ValidationError(
                             {"message": "A student with this Aadhaar number already exists."}
                         )
@@ -1728,17 +1753,42 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
                     {"message":"This Student already created"}
                 )
 
-            student = Student.objects.create(
-                school=self.context["request"].user.school,
-                # form=instance.form,
-                # temp_user=instance.temp_user,
-                # division=instance.division,
-                academic_year = instance.form.academic_year,
-                admission=instance,
-                gr_no=gr_no,
-                is_rte=instance.is_rte,
-                # details_done=True,
-            )
+            if not student:
+                student = Student.objects.create(
+                    school=self.context["request"].user.school,
+                    academic_year=instance.form.academic_year if instance.form_id else None,
+                    admission=instance,
+                    gr_no=gr_no,
+                    is_rte=instance.is_rte,
+                )
+            else:
+                student.gr_no = gr_no
+
+            school_class = None
+            for field_value in instance.field_values.select_related("field"):
+                field = field_value.field
+                if not field:
+                    continue
+                label = (field.label or "").lower()
+                if field.map_to_student_field == "school_class" or any(key in label for key in ["applying for class", "class", "standard", "grade"]):
+                    value = str(field_value.value or "").strip()
+                    school_class = SchoolClass.objects.filter(school=student.school, school_class__iexact=value).first()
+                    if not school_class and value.isdigit():
+                        school_class = SchoolClass.objects.filter(school=student.school, id=int(value)).first()
+                    if school_class:
+                        break
+            selected_class = SchoolClass.objects.filter(id=school_class_id, school=student.school).first() if school_class_id else None
+            if selected_class and school_class and selected_class.id != school_class.id:
+                raise serializers.ValidationError({"school_class": "The selected class must match the class requested on the admission form."})
+            school_class = school_class or selected_class
+            if not school_class:
+                raise serializers.ValidationError({"school_class": "The admission form must include a valid applying class before confirmation."})
+            if not division:
+                raise serializers.ValidationError({"division": "Select a division before confirming this admission."})
+            if not Division.objects.filter(school=student.school, SchoolClass=school_class, division__iexact=division).exists():
+                raise serializers.ValidationError({"division": "Select a valid division for the student's class."})
+            student.school_class = school_class
+            student.division = division
             
             
 
