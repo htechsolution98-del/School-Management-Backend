@@ -1196,14 +1196,14 @@ class StudentFeePaymentSerializer(serializers.ModelSerializer):
                 )
             paid_govt_except_this = (
                 student_fee.payments.filter(payer_type="government", is_bounced=False)
-                .filter(Q(is_verified=True) | ~Q(payment_mode="cheque"))
+                .filter(is_verified=True)
                 .aggregate(total=Sum("amount"))["total"]
                 or Decimal("0.00")
             )
             if self.instance and self.instance.payer_type == "government":
                 instance_counts = (
                     not self.instance.is_bounced
-                    and (self.instance.is_verified or self.instance.payment_mode != "cheque")
+                    and self.instance.is_verified
                 )
                 if instance_counts:
                     paid_govt_except_this -= self.instance.amount
@@ -1218,14 +1218,14 @@ class StudentFeePaymentSerializer(serializers.ModelSerializer):
         else:
             paid_except_this = (
                 student_fee.payments.filter(payer_type="student", is_bounced=False)
-                .filter(Q(is_verified=True) | ~Q(payment_mode="cheque"))
+                .filter(is_verified=True)
                 .aggregate(total=Sum("amount"))["total"]
                 or Decimal("0.00")
             )
             if self.instance and self.instance.payer_type == "student":
                 instance_counts_as_paid = (
                     not self.instance.is_bounced
-                    and (self.instance.is_verified or self.instance.payment_mode != "cheque")
+                    and self.instance.is_verified
                 )
                 if instance_counts_as_paid:
                     paid_except_this -= self.instance.amount

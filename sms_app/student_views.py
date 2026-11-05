@@ -1222,6 +1222,137 @@ class ClerkVerifyView(ModelViewSet):
             {"message": "Clerk updated successfully"}, status=status.HTTP_200_OK
         )
 
+    @action(detail=True, methods=["patch"], url_path="division")
+    def division(self, request, admission_number=None):
+        admission = self.get_object()
+        division_name = str(request.data.get("division") or "").strip()
+        student = Student.objects.filter(admission=admission, school=admission.school).select_related("school_class").first()
+        if not student or not student.school_class_id:
+            return Response(
+                {"detail": "Assign the student to a class before assigning a division."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        division = Division.objects.filter(
+            school=admission.school,
+            SchoolClass_id=student.school_class_id,
+            division__iexact=division_name,
+        ).first()
+        if not division:
+            return Response(
+                {"division": ["Select a division belonging to the student's assigned class."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        with transaction.atomic():
+            student.division = division.division
+            student.save(update_fields=["division"])
+            for field_value in admission.field_values.select_related("field"):
+                field = field_value.field
+                if field and any(key in (field.label or "").lower() for key in ("division", "section", "sec")):
+                    field_value.value = division.division
+                    field_value.save(update_fields=["value"])
+                    break
+
+        return Response({
+            "message": "Student division updated.",
+            "student_id": student.id,
+            "school_class_id": student.school_class_id,
+            "division": division.division,
+        })
+
+    @action(detail=True, methods=["patch"], url_path="placement")
+    def placement(self, request, admission_number=None):
+        admission = self.get_object()
+        school = admission.school
+        class_id = request.data.get("school_class_id")
+        division_name = str(request.data.get("division") or "").strip()
+        if not class_id:
+            return Response({"school_class_id": ["Select a class before assigning a division."]}, status=status.HTTP_400_BAD_REQUEST)
+        if not division_name:
+            return Response({"division": ["Select a division for the chosen class."]}, status=status.HTTP_400_BAD_REQUEST)
+
+        school_class = SchoolClass.objects.filter(id=class_id, school=school).first()
+        if not school_class:
+            return Response({"school_class_id": ["Select a valid class for this school."]}, status=status.HTTP_400_BAD_REQUEST)
+
+        requested_class = None
+        for field_value in admission.field_values.select_related("field"):
+            field = field_value.field
+            if not field:
+                continue
+            label = (field.label or "").lower()
+            if field.map_to_student_field == "school_class" or any(key in label for key in ("applying for class", "class", "standard", "grade")):
+                value = str(field_value.value or "").strip()
+                requested_class = SchoolClass.objects.filter(school=school, school_class__iexact=value).first()
+                if not requested_class and value.isdigit():
+                    requested_class = SchoolClass.objects.filter(school=school, id=int(value)).first()
+                if requested_class:
+                    break
+        if requested_class and requested_class.id != school_class.id:
+            return Response({"school_class_id": ["The assigned class must match the class requested on the admission form."]}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not Division.objects.filter(school=school, SchoolClass=school_class, division__iexact=division_name).exists():
+            return Response({"division": ["Select a division that belongs to the chosen class."]}, status=status.HTTP_400_BAD_REQUEST)
+
+        with transaction.atomic():
+            student = Student.objects.filter(admission=admission, school=school).first()
+            if not student:
+                student = Student.objects.create(
+                    school=school,
+                    admission=admission,
+                    academic_year=admission.form.academic_year if admission.form_id else None,
+                    is_rte=admission.is_rte,
+                )
+
+            field_mapping = {
+                "surname": "surname",
+                "name": "name",
+                "father_name": "father_name",
+                "mother_name": "mother_name",
+                "mobile": "mobile",
+                "aadhar_number": "aadhar_number",
+                "abc_id": "abc_id",
+                "udise_no": "udise_no",
+                "roll_no": "roll_no",
+            }
+            for field_value in admission.field_values.select_related("field"):
+                field = field_value.field
+                if not field:
+                    continue
+                mapping = field.map_to_student_field
+                label = (field.label or "").lower()
+                if mapping in field_mapping:
+                    setattr(student, field_mapping[mapping], str(field_value.value or "").strip())
+                elif mapping == "school_class":
+                    continue
+                elif mapping == "date_of_birth" and field_value.value:
+                    for date_format in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
+                        try:
+                            student.date_of_birth = datetime.datetime.strptime(str(field_value.value).strip(), date_format).date()
+                            break
+                        except (ValueError, TypeError):
+                            continue
+                elif not mapping and not student.name and "name" in label and not any(key in label for key in ("father", "mother", "surname")):
+                    student.name = str(field_value.value or "").strip()
+
+            student.school_class = school_class
+            student.division = division_name
+            student.is_rte = admission.is_rte
+            student.save()
+
+            if admission.status == "pending":
+                admission.status = "approved"
+                admission.save(update_fields=["status"])
+
+        return Response({
+            "message": "Student class placement saved. A GR number can be assigned later.",
+            "student_id": student.id,
+            "school_class_id": school_class.id,
+            "school_class": school_class.school_class,
+            "division": division_name,
+            "gr_no": student.gr_no or None,
+        }, status=status.HTTP_200_OK)
+
 
 # class PrincipleVerifyView(ModelViewSet):
 #     queryset = Student.objects.all()
@@ -1270,9 +1401,7 @@ class GetStudentView(ModelViewSet):
                 Q(division__iexact=div_val) |
                 Q(division__iexact=f"Div {div_val}") |
                 Q(division__iexact=f"Div ({div_val})") |
-                Q(division__iexact=f"({div_val})") |
-                Q(division__isnull=True) |
-                Q(division="")
+                Q(division__iexact=f"({div_val})")
             )
 
         return queryset

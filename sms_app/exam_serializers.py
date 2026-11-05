@@ -117,6 +117,17 @@ class ExamFullSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["school", "created_by"]
 
+    def validate(self, attrs):
+        school_class = attrs.get("class_group", getattr(self.instance, "class_group", None))
+        subject = attrs.get("subject", getattr(self.instance, "subject", None))
+        if school_class and subject:
+            division = subject.division
+            if division.SchoolClass_id != school_class.id:
+                raise serializers.ValidationError({
+                    "subject": "Choose a subject assigned to the selected class."
+                })
+        return attrs
+
 
 class SeatingAllocationSerializer(serializers.ModelSerializer):
     student_name = serializers.SerializerMethodField()

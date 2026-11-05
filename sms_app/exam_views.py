@@ -307,6 +307,21 @@ class ExamFullViewSet(viewsets.ModelViewSet):
         subject_id = data.get("subject")
         title = data.get("title", "").strip()
 
+        if not SchoolClass.objects.filter(id=class_group_id, school=school).exists():
+            return Response(
+                {"error": "Select a class from your school."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not Subject.objects.filter(
+            id=subject_id,
+            division__SchoolClass_id=class_group_id,
+            division__SchoolClass__school=school,
+        ).exists():
+            return Response(
+                {"error": "Select a subject assigned to the selected class."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         # 1. Timetable Clash Validation Helper: Same Class, Same Date, Overlapping Time Slot
         parsed_date = exam_date
         if isinstance(exam_date, str) and "-" in exam_date:

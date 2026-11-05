@@ -663,15 +663,72 @@ class SyllabusView(ModelViewSet):
         serializer.is_valid(raise_exception=True)
 
         division = serializer.validated_data.get("division")
+        class_group = serializer.validated_data.get("class_group")
         subject = serializer.validated_data.get("subject")
 
-        # Automatically replace/delete previous syllabus for same division & subject
-        if division and subject:
-            old_records = Syllabus.objects.filter(
-                school=request.user.school,
-                division=division,
-                subject=subject,
+        if class_group and subject and subject.division.SchoolClass_id != class_group.id:
+            return Response({"subject": ["Select a subject belonging to the chosen class."]}, status=status.HTTP_400_BAD_REQUEST)
+
+        file_obj = request.FILES.get("syllabus_file")
+        if not file_obj:
+            return Response({"syllabus_file": ["Select a PDF or image document."]}, status=status.HTTP_400_BAD_REQUEST)
+
+        from django.conf import settings
+        if not getattr(settings, "is_cloudinary_configured", False):
+            return Response({"detail": "Cloudinary storage is not configured."}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        import io
+        import os
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        from PIL import Image
+
+        original_name = os.path.basename(file_obj.name or "syllabus")
+        extension = os.path.splitext(original_name)[1].lower()
+        file_bytes = file_obj.read()
+        if file_bytes.startswith(b"%PDF"):
+            pdf_bytes = file_bytes
+        elif extension in {".jpg", ".jpeg", ".png", ".webp"}:
+            try:
+                image = Image.open(io.BytesIO(file_bytes)).convert("RGB")
+                pdf_buffer = io.BytesIO()
+                image.save(pdf_buffer, format="PDF", resolution=150)
+                pdf_bytes = pdf_buffer.getvalue()
+            except Exception:
+                return Response({"syllabus_file": ["The selected image could not be converted to PDF."]}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            return Response({"syllabus_file": ["Upload a PDF or a JPG, PNG, or WEBP image. Office documents are not supported."]}, status=status.HTTP_400_BAD_REQUEST)
+
+        pdf_name = os.path.splitext(original_name)[0] + ".pdf"
+        cloud_file = SimpleUploadedFile(pdf_name, pdf_bytes, content_type="application/pdf")
+        try:
+            import cloudinary.uploader
+            import cloudinary.utils
+            school_id = request.user.school.id if getattr(request.user, "school", None) else "common"
+            upload_res = cloudinary.uploader.upload(
+                cloud_file,
+                folder=f"school_{school_id}/syllabus",
+                resource_type="raw",
+                use_filename=True,
+                unique_filename=True,
+                overwrite=False,
             )
+            cloud_url, _ = cloudinary.utils.cloudinary_url(
+                upload_res.get("public_id"),
+                resource_type="raw",
+                secure=True,
+                sign_url=True,
+                version=upload_res.get("version"),
+            )
+            cloud_url = cloud_url or upload_res.get("secure_url") or upload_res.get("url")
+            if not cloud_url:
+                raise RuntimeError("Cloudinary did not return a document URL.")
+        except Exception as exc:
+            return Response({"detail": f"Cloudinary upload failed: {exc}"}, status=status.HTTP_502_BAD_GATEWAY)
+
+        # Replace the prior copy only after Cloudinary confirms the new upload.
+        if subject and (class_group or division):
+            old_records = Syllabus.objects.filter(school=request.user.school, subject=subject)
+            old_records = old_records.filter(class_group=class_group) if class_group else old_records.filter(division=division)
             for old in old_records:
                 if old.syllabus_file:
                     try:
@@ -680,29 +737,7 @@ class SyllabusView(ModelViewSet):
                         pass
                 old.delete()
 
-        file_obj = request.FILES.get("syllabus_file")
-        cloud_url = None
-        if file_obj:
-            try:
-                import cloudinary
-                import cloudinary.uploader
-                school_id = request.user.school.id if (request.user and getattr(request.user, "school", None)) else "common"
-                folder = f"school_{school_id}/syllabus"
-                upload_res = cloudinary.uploader.upload(
-                    file_obj,
-                    folder=folder,
-                    resource_type="auto",
-                    use_filename=True,
-                    unique_filename=True,
-                )
-                cloud_url = upload_res.get("secure_url") or upload_res.get("url")
-            except Exception:
-                cloud_url = None
-
-        instance = serializer.save(school=request.user.school)
-        if cloud_url:
-            instance.syllabus_file = cloud_url
-            instance.save(update_fields=["syllabus_file"])
+        instance = serializer.save(school=request.user.school, syllabus_file=cloud_url)
 
         self._clear_cache(request.user.school.id)
         out_serializer = self.get_serializer(instance)
@@ -727,7 +762,8 @@ class SyllabusView(ModelViewSet):
         queryset = self.get_queryset()
 
         if school_class:
-            queryset = queryset.filter(SchoolClass_id=school_class)
+            from django.db.models import Q
+            queryset = queryset.filter(Q(class_group_id=school_class) | Q(division__SchoolClass_id=school_class))
 
         serializer = self.get_serializer(queryset, many=True)
 
@@ -773,6 +809,28 @@ class SyllabusView(ModelViewSet):
         from django.conf import settings
 
         filename = os.path.basename(syllabus.syllabus_file.name) or "syllabus_document"
+        stored_name = getattr(syllabus.syllabus_file, "name", "")
+        if request.query_params.get("download") == "1" and isinstance(stored_name, str) and stored_name.startswith(("https://", "http://")):
+            try:
+                remote = requests.get(stored_name, timeout=25)
+                if remote.status_code != 200:
+                    return Response({"error": "The document could not be downloaded from Cloudinary."}, status=status.HTTP_502_BAD_GATEWAY)
+                pdf_bytes = remote.content
+                if not pdf_bytes.startswith(b"%PDF"):
+                    try:
+                        from PIL import Image
+                        image = Image.open(io.BytesIO(pdf_bytes)).convert("RGB")
+                        pdf_buffer = io.BytesIO()
+                        image.save(pdf_buffer, format="PDF", resolution=150)
+                        pdf_bytes = pdf_buffer.getvalue()
+                    except Exception:
+                        return Response({"error": "This syllabus is not a PDF or supported image."}, status=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE)
+                pdf_name = (os.path.splitext(filename)[0] + ".pdf").replace('"', "")
+                response = HttpResponse(pdf_bytes, content_type="application/pdf")
+                response["Content-Disposition"] = f'attachment; filename="{pdf_name}"'
+                return response
+            except requests.RequestException:
+                return Response({"error": "Cloudinary could not be reached."}, status=status.HTTP_502_BAD_GATEWAY)
 
         def sniff_mimetype(magic_bytes, name="", header_type=None):
             if magic_bytes:
@@ -807,6 +865,22 @@ class SyllabusView(ModelViewSet):
             f.seek(0)
             c_type, ext = sniff_mimetype(magic, name=filename)
             disp_name = filename if (ext and filename.lower().endswith(ext)) else f"{filename}{ext}"
+            if request.query_params.get("download") == "1":
+                local_bytes = f.read()
+                f.close()
+                if not local_bytes.startswith(b"%PDF"):
+                    try:
+                        from PIL import Image
+                        image = Image.open(io.BytesIO(local_bytes)).convert("RGB")
+                        pdf_buffer = io.BytesIO()
+                        image.save(pdf_buffer, format="PDF", resolution=150)
+                        local_bytes = pdf_buffer.getvalue()
+                    except Exception:
+                        return Response({"error": "This syllabus is not a PDF or supported image."}, status=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE)
+                pdf_name = (os.path.splitext(filename)[0] + ".pdf").replace('"', "")
+                response = HttpResponse(local_bytes, content_type="application/pdf")
+                response["Content-Disposition"] = f'attachment; filename="{pdf_name}"'
+                return response
             resp = FileResponse(f, content_type=c_type)
             resp["Content-Disposition"] = f'inline; filename="{disp_name}"'
             return resp
@@ -2068,23 +2142,30 @@ class AttendanceStudentAPIView(APIView):
             )
 
         requested_div_id = request.query_params.get("division_id")
-        assign_class = None
-
         if requested_div_id:
             assign_class = class_teacher_assignments.filter(division_id=requested_div_id).first()
-
-        if not assign_class:
+            if not assign_class:
+                return Response(
+                    {"success": False, "message": "The selected division is not assigned to you as a class teacher."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+        else:
             assign_class = class_teacher_assignments.first()
 
         div = assign_class.division
 
         # GET STUDENTS FOR THIS DIVISION ROBUSTLY
+        division_name = str(div.division or "").strip()
         student_qs = Student.objects.filter(
-            Q(school=school) & (
-                Q(division=div) |
-                Q(division=str(div.id)) |
-                (Q(school_class=div.SchoolClass) & Q(division__iexact=div.division))
-            )
+            school=school,
+            school_class_id=div.SchoolClass_id,
+        ).filter(
+            Q(division__iexact=division_name)
+            | Q(division__iexact=f"Div {division_name}")
+            | Q(division__iexact=f"Div ({division_name})")
+            | Q(division__iexact=f"({division_name})")
+            # Legacy rows stored the Division primary key in Student.division.
+            | Q(division=str(div.id))
         )
 
         students_list = list(student_qs)
@@ -2187,10 +2268,15 @@ class StudentAttendanceView(APIView):
             from .models import Division
             div_obj = Division.objects.filter(id=division_id, school=school).first()
             if div_obj:
+                division_name = str(div_obj.division or "").strip()
                 queryset = queryset.filter(
-                    Q(student__division=div_obj.division) |
-                    Q(student__division=str(div_obj.id)) |
-                    (Q(student__school_class=div_obj.SchoolClass) & Q(student__division__iexact=div_obj.division))
+                    student__school_class_id=div_obj.SchoolClass_id,
+                ).filter(
+                    Q(student__division__iexact=division_name)
+                    | Q(student__division__iexact=f"Div {division_name}")
+                    | Q(student__division__iexact=f"Div ({division_name})")
+                    | Q(student__division__iexact=f"({division_name})")
+                    | Q(student__division=str(div_obj.id))
                 )
 
         status_filter = params.get("status")
