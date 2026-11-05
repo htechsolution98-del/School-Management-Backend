@@ -109,8 +109,10 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
             "start_date",
             "end_date",
             "total_days",
+            "days_count",
             "is_half_day",
             "half_day_session",
+            "half_day_period",
             "reason",
             "created_at",
             "updated_at",
@@ -139,6 +141,7 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
             "school",
             "staff",
             "total_days",
+            "days_count",
             "is_paid",
             "status",
             "approved_by",
@@ -328,9 +331,12 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
         # IF requested_days > available_balance AND the LeaveType does not explicitly allow unpaid/LOP overdrafts,
         # raise a serializers.ValidationError("Insufficient leave balance")
         if leave_type.is_paid and not getattr(leave_type, "allow_negative_balance", False) and requested_days > available_balance:
-            raise serializers.ValidationError(
-                f"Insufficient leave balance. You have {available_balance} days available, but requested {requested_days} days."
-            )
+            if is_half_day:
+                attrs["_is_lwp"] = True
+            else:
+                raise serializers.ValidationError(
+                    f"Insufficient leave balance. You have {available_balance} days available, but requested {requested_days} days."
+                )
 
         # Strip protected workflow fields if submitted in payload
         for protected_field in [
@@ -376,7 +382,8 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
         end_date = validated_data.get("end_date")
         reason = validated_data.get("reason", "")
         is_half_day = validated_data.get("is_half_day", False)
-        half_day_session = validated_data.get("half_day_session", "FULL_DAY")
+        half_day_session = validated_data.get("half_day_session") or validated_data.get("half_day_period") or ("FIRST_HALF" if is_half_day else "FULL_DAY")
+        half_day_period = validated_data.get("half_day_period") or (half_day_session if is_half_day else None)
 
         if not staff or not school:
             raise serializers.ValidationError("Valid staff profile and school context required.")
@@ -391,6 +398,7 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
                 reason=reason,
                 is_half_day=is_half_day,
                 half_day_session=half_day_session,
+                half_day_period=half_day_period,
                 requested_by=user,
             )
         except DjangoValidationError as e:
@@ -521,11 +529,51 @@ class GetLeaveRequestSerializer(serializers.ModelSerializer):
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
-        # Ensure leave_type is represented as a name string if expected by frontend
+        lt = instance.dynamic_leave_type or instance.leave_type
         if instance.dynamic_leave_type:
             data["leave_type"] = instance.dynamic_leave_type.name or instance.dynamic_leave_type.leave_type
         elif instance.leave_type:
             data["leave_type"] = getattr(instance.leave_type, "leave_type", str(instance.leave_type))
+
+        staff = instance.staff
+        if staff:
+            data["staff_role"] = getattr(getattr(staff, "user", None), "role", None) or getattr(staff, "category", None) or "Staff"
+            data["staff_category"] = getattr(staff, "category", None) or data["staff_role"]
+            dept = getattr(staff, "department", None)
+            if not dept and hasattr(staff, "department_obj") and staff.department_obj:
+                dept = getattr(staff.department_obj, "name", None)
+            data["staff_department"] = dept or getattr(staff, "role", None) or "General"
+        else:
+            data["staff_role"] = "Staff"
+            data["staff_category"] = "General"
+            data["staff_department"] = "General"
+
+        if lt:
+            data["leave_type_code"] = getattr(lt, "short_name", None) or getattr(lt, "code", None) or getattr(lt, "name", None) or str(lt)
+
+        current_rem = 0.0
+        current_total = 0.0
+        if lt and staff:
+            from sms_app.models import AcademicYear, StaffRemainingLeave, LeaveBalance
+            ay = AcademicYear.objects.filter(school=instance.school, is_active=True).first()
+            if ay:
+                srl = StaffRemainingLeave.objects.filter(staff=staff, academic_year=ay, leave_type=lt).first()
+                if srl:
+                    current_rem = float(srl.remaining_leaves if srl.remaining_leaves is not None else (srl.total_levaes or 0))
+                    current_total = float(srl.total_levaes or 0)
+            if current_total == 0.0:
+                lb = LeaveBalance.objects.filter(staff=staff, leave_type=lt).first()
+                if lb:
+                    current_rem = float(lb.remaining)
+                    current_total = float(lb.allocated)
+                else:
+                    current_total = float(getattr(lt, "allocation_count", None) or getattr(lt, "leave_num", None) or 0)
+                    current_rem = current_total
+
+        data["current_leave_remaining"] = current_rem
+        data["current_leave_total"] = current_total
+        data["days_count"] = float(instance.days_count or instance.total_days or 0)
+        data["half_day_period"] = instance.half_day_period or instance.half_day_session
         return data
 
     def get_remaining_leaves(self, obj):
@@ -1142,6 +1190,10 @@ class CertificateDetailSerializer(serializers.ModelSerializer):
 class NewLeaveTypeSerializer(serializers.ModelSerializer):
     category_name = serializers.SerializerMethodField(read_only=True)
  
+    academic_year = serializers.SerializerMethodField(read_only=True)
+    academic_year_name = serializers.SerializerMethodField(read_only=True)
+    session_dates = serializers.SerializerMethodField(read_only=True)
+
     class Meta:
         model = LeaveType
         fields = [
@@ -1149,14 +1201,17 @@ class NewLeaveTypeSerializer(serializers.ModelSerializer):
             "leave_type",
             "name",
             "code",
+            "leave_unit",
             "leave_template",
+            "academic_year",
+            "academic_year_name",
+            "session_dates",
             "leave_num",
             "allocation_count",
             "allocation_period",
             "is_paid",
             "carry_forward",
             "max_carry_forward",
-            "allow_encashment",
             "category",
             "category_name",
             "created_at",
@@ -1170,6 +1225,26 @@ class NewLeaveTypeSerializer(serializers.ModelSerializer):
                 return obj.category.feature.name
             return getattr(obj.category, "feature_name", None)
         return "All Staff"
+
+    def get_academic_year(self, obj):
+        if obj.leave_template:
+            return obj.leave_template.academic_year_id
+        return None
+
+    def get_academic_year_name(self, obj):
+        if obj.leave_template and obj.leave_template.academic_year:
+            return obj.leave_template.academic_year.name
+        return None
+
+    def get_session_dates(self, obj):
+        if obj.leave_template:
+            data = obj.leave_template.get_cycle_engine_data()
+            return {
+                "start": data.get("session_start"),
+                "end": data.get("session_end"),
+                "range": data.get("academic_year_range"),
+            }
+        return None
  
     def get_fields(self):
         fields = super().get_fields()
@@ -1236,27 +1311,64 @@ class NewLeaveTypeSerializer(serializers.ModelSerializer):
  
 class NewLeaveTemplateSerializer(serializers.ModelSerializer):
     leave_types = NewLeaveTypeSerializer(many=True, read_only=True, source="leavetype_set")
- 
+    academic_year_name = serializers.CharField(source="academic_year.name", read_only=True, default=None)
+    academic_year_range = serializers.SerializerMethodField()
+    current_cycle = serializers.SerializerMethodField()
+    cycle_blocks = serializers.SerializerMethodField()
+
     class Meta:
         model = LeaveTemplate
-        fields = ["created_at", "id", "name", "time_line", "is_active", "school", "leave_types"]
+        fields = [
+            "created_at",
+            "id",
+            "name",
+            "time_line",
+            "is_active",
+            "school",
+            "academic_year",
+            "academic_year_name",
+            "academic_year_range",
+            "current_cycle",
+            "cycle_blocks",
+            "leave_types",
+        ]
         read_only_fields = ["id", "school"]
- 
+
+    def get_academic_year_range(self, obj):
+        data = obj.get_cycle_engine_data()
+        return data.get("academic_year_range")
+
+    def get_current_cycle(self, obj):
+        data = obj.get_cycle_engine_data()
+        return data.get("current_cycle")
+
+    def get_cycle_blocks(self, obj):
+        data = obj.get_cycle_engine_data()
+        return data.get("cycle_blocks")
+
     def validate(self, attrs):
         instance = self.instance
         time_line = attrs.get("time_line") or (instance.time_line if instance else None)
         school    = attrs.get("school")    or (instance.school    if instance else None)
- 
+        academic_year = attrs.get("academic_year") or (instance.academic_year if instance else None)
+        if not academic_year and school:
+            from sms_app.models import AcademicYear
+            ay = AcademicYear.objects.filter(school=school, is_active=True).first() or AcademicYear.objects.filter(school=school).order_by("-id").first()
+            if ay:
+                attrs["academic_year"] = ay
+                academic_year = ay
+
         qs = LeaveTemplate.objects.filter(time_line=time_line, school=school)
+        if academic_year:
+            qs = qs.filter(academic_year=academic_year)
         if instance:
             qs = qs.exclude(pk=instance.pk)
         if qs.exists():
             raise serializers.ValidationError(
-                {"time_line": "A leave template with this timeline already exists for this school."}
+                {"time_line": "A leave template with this timeline already exists for this school and academic year."}
             )
         return attrs
- 
- 
+
 class LeaveTemplateBulkCreateSerializer(serializers.Serializer):
     """
     Create a LeaveTemplate and all its LeaveTypes in one shot.

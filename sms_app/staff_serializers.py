@@ -101,24 +101,10 @@ class StaffSerializer(serializers.ModelSerializer):
         if dob and joining and joining < dob:
             raise serializers.ValidationError({"joining_date": "Joining date cannot be earlier than date of birth."})
 
-        # Role-based department check: Optional for Clerk, Mandatory for others
-        category_val = attrs.get("category") or (self.instance.category if self.instance else None)
-        role_name = ""
-        if category_val is not None:
-            try:
-                cat_id = int(category_val)
-                feat = Feature.objects.filter(id=cat_id).first()
-                if feat:
-                    role_name = feat.name
-                else:
-                    role_name = str(category_val)
-            except (ValueError, TypeError):
-                role_name = str(category_val)
-
-        is_clerk = "CLERK" in role_name.strip().upper()
+        # Department is mandatory for all roles
         department = attrs.get("department") or (self.instance.department if self.instance else None)
-        if not is_clerk and not department:
-            raise serializers.ValidationError({"department": "Department is required for this role."})
+        if not department:
+            raise serializers.ValidationError({"department": "Department is required."})
 
         # Auto-deactivate when exit_date is set and <= today; auto-activate when cleared or future
         if "exit_date" in attrs:
@@ -714,8 +700,8 @@ class TeacherWorkloadSerializer(serializers.ModelSerializer):
         return value
 
     def validate_max_consecutive_periods(self, value):
-        if value < 1 or value > 10:
-            raise serializers.ValidationError("Max consecutive periods must be between 1 and 10.")
+        if value < 2 or value > 10:
+            raise serializers.ValidationError("Max consecutive periods must be between 2 and 10 to prevent timetable generation deadlocks.")
         return value
 
     def validate(self, attrs):
@@ -728,15 +714,6 @@ class TeacherWorkloadSerializer(serializers.ModelSerializer):
                     field: "Daily period limit must be between 0 and 15."
                 })
 
-        weekly = attrs.get(
-            "max_weekly_periods",
-            getattr(self.instance, "max_weekly_periods", 25) if self.instance else 25,
-        )
-        consecutive = attrs.get(
-            "max_consecutive_periods",
-            getattr(self.instance, "max_consecutive_periods", 3) if self.instance else 3,
-        )
-
         daily_vals = [
             attrs.get(f, getattr(self.instance, f, 5) if self.instance else 5)
             for f in self.DAY_FIELDS
@@ -744,14 +721,36 @@ class TeacherWorkloadSerializer(serializers.ModelSerializer):
         max_daily_allowed = max(daily_vals) if daily_vals else 5
         total_daily_sum = sum(daily_vals)
 
+        consecutive = attrs.get(
+            "max_consecutive_periods",
+            getattr(self.instance, "max_consecutive_periods", 3) if self.instance else 3,
+        )
+
+        if consecutive < 2:
+            raise serializers.ValidationError({
+                "max_consecutive_periods": "Consecutive periods limit must be at least 2 (recommended: 3)."
+            })
+
         if consecutive > max_daily_allowed and max_daily_allowed > 0:
             raise serializers.ValidationError({
                 "max_consecutive_periods": f"Consecutive periods limit ({consecutive}) cannot exceed highest daily periods limit ({max_daily_allowed})."
             })
-        if weekly > total_daily_sum:
-            raise serializers.ValidationError({
-                "max_weekly_periods": f"Weekly limit ({weekly}) cannot exceed the sum of all daily limits ({total_daily_sum})."
-            })
+
+        # Mathematical Integrity: Derive weekly ceiling purely from sum of all 6 daily limits
+        attrs["max_weekly_periods"] = total_daily_sum
         return attrs
+
+    def to_representation(self, instance):
+        ret = super().to_representation(instance)
+        # Mathematical Integrity & Initial Load Consistency:
+        # Guarantee max_weekly_periods is 100% synchronized with sum of exact daily limits
+        mon = ret.get("max_periods_mon") if ret.get("max_periods_mon") is not None else 5
+        tue = ret.get("max_periods_tue") if ret.get("max_periods_tue") is not None else 5
+        wed = ret.get("max_periods_wed") if ret.get("max_periods_wed") is not None else 5
+        thu = ret.get("max_periods_thu") if ret.get("max_periods_thu") is not None else 5
+        fri = ret.get("max_periods_fri") if ret.get("max_periods_fri") is not None else 5
+        sat = ret.get("max_periods_sat") if ret.get("max_periods_sat") is not None else 3
+        ret["max_weekly_periods"] = mon + tue + wed + thu + fri + sat
+        return ret
 
 

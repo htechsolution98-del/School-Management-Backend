@@ -733,24 +733,10 @@ class StaffSerializer(serializers.ModelSerializer):
         if dob and joining and joining < dob:
             raise serializers.ValidationError({"joining_date": "Joining date cannot be earlier than date of birth."})
 
-        # Role-based department check: Optional for Clerk, Mandatory for others
-        category_val = attrs.get("category") or (self.instance.category if self.instance else None)
-        role_name = ""
-        if category_val is not None:
-            try:
-                cat_id = int(category_val)
-                feat = Feature.objects.filter(id=cat_id).first()
-                if feat:
-                    role_name = feat.name
-                else:
-                    role_name = str(category_val)
-            except (ValueError, TypeError):
-                role_name = str(category_val)
-
-        is_clerk = "CLERK" in role_name.strip().upper()
+        # Department is mandatory for all roles
         department = attrs.get("department") or (self.instance.department if self.instance else None)
-        if not is_clerk and not department:
-            raise serializers.ValidationError({"department": "Department is required for this role."})
+        if not department:
+            raise serializers.ValidationError({"department": "Department is required."})
 
         # Auto-deactivate when exit_date is set and <= today; auto-activate when cleared or future
         if "exit_date" in attrs:
@@ -1727,7 +1713,7 @@ class AdmissionFormSerializer(serializers.ModelSerializer):
                         )
                         if not is_core:
                             has_matching_id = str(db_f.id) in incoming_field_ids
-                            has_matching_label = db_f.label and str(db_f.label).strip().lower() in incoming_field_labels
+                            has_matching_label = bool(db_f.label and db_f.label.strip().lower() in incoming_field_labels)
                             if not has_matching_id and not has_matching_label:
                                 _logger.warning("[update] Deleting orphan FormField id=%s label='%s'", db_f.id, db_f.label)
                                 AdmissionFieldValue.objects.filter(field=db_f).delete()
@@ -4546,8 +4532,8 @@ class FeeTypeSerializer(serializers.ModelSerializer):
         return attrs
 
 class AcademicYearSerializer(serializers.ModelSerializer):
-    start_year = serializers.IntegerField(write_only=True, required=False)
-    end_year = serializers.IntegerField(write_only=True, required=False)
+    start_year = serializers.IntegerField(required=False)
+    end_year = serializers.IntegerField(required=False)
 
     month_numbers = serializers.SerializerMethodField()
     billing_periods = serializers.SerializerMethodField()
@@ -4566,6 +4552,13 @@ class AcademicYearSerializer(serializers.ModelSerializer):
             "is_active",
         ]
         read_only_fields = ["school", "name"]
+
+    def to_representation(self, instance):
+        ret = super().to_representation(instance)
+        start_year = instance.get_start_year()
+        ret["start_year"] = start_year
+        ret["end_year"] = (start_year + 1) if start_year else None
+        return ret
 
     def get_month_numbers(self, obj):
         return obj.get_month_numbers()
@@ -4599,7 +4592,11 @@ class AcademicYearSerializer(serializers.ModelSerializer):
                 )
 
         request = self.context.get("request")
-        school = getattr(request.user, "school", None) if request else None
+        school = getattr(self.instance, "school", None) if self.instance else (
+            getattr(request.user, "school", None) if request and hasattr(request, "user") else None
+        )
+        if not school and request and hasattr(request, "user"):
+            school = getattr(request.user, "school", None)
 
         start_year = attrs.get("start_year")
         end_year = attrs.get("end_year")
@@ -4629,13 +4626,15 @@ class AcademicYearSerializer(serializers.ModelSerializer):
         name = attrs.get("name", getattr(self.instance, "name", None))
 
         if school and name:
-            queryset = AcademicYear.objects.filter(school=school, name=name)
-            if self.instance:
-                queryset = queryset.exclude(pk=self.instance.pk)
-            if queryset.exists():
-                raise serializers.ValidationError(
-                    {"name": "This academic year already exists for this school."}
-                )
+            # When updating, if the academic year name has not changed, skip uniqueness check
+            if not self.instance or self.instance.name != name:
+                queryset = AcademicYear.objects.filter(school=school, name=name)
+                if self.instance and self.instance.pk:
+                    queryset = queryset.exclude(pk=self.instance.pk)
+                if queryset.exists():
+                    raise serializers.ValidationError(
+                        {"name": "This academic year already exists for this school."}
+                    )
 
 
 
@@ -4655,6 +4654,10 @@ class AcademicYearSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         validated_data.pop("start_year", None)
         validated_data.pop("end_year", None)
+
+        name = validated_data.get("name")
+        if name:
+            instance.name = name
 
         is_active = validated_data.get("is_active", None)
         if is_active is True and instance.school:
@@ -4811,6 +4814,9 @@ class StaffSalaryComponentSerializer(serializers.ModelSerializer):
     component_type = serializers.CharField(
         source="component.component_type", read_only=True
     )
+    calc_base = serializers.CharField(
+        source="component.calc_base", required=False, allow_blank=True, allow_null=True
+    )
 
     class Meta:
         model = StaffSalaryComponent
@@ -4821,6 +4827,7 @@ class StaffSalaryComponentSerializer(serializers.ModelSerializer):
             "component_name",
             "component_type",
             "calculation_type",
+            "calc_base",
             "value",
             "is_active",
         ]

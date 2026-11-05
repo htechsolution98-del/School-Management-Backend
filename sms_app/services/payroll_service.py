@@ -325,41 +325,119 @@ def check_missing_punches(staff, effective_start, effective_end):
     return sorted(missing_dates)
 
 
+class LeaveCalculationResult(tuple):
+    def __new__(cls, paid_leaves, unpaid_leaves, full_unpaid_days=Decimal("0.0"), half_unpaid_days=Decimal("0.0")):
+        return super(LeaveCalculationResult, cls).__new__(cls, (paid_leaves, unpaid_leaves))
+
+    def __init__(self, paid_leaves, unpaid_leaves, full_unpaid_days=Decimal("0.0"), half_unpaid_days=Decimal("0.0")):
+        self.paid_leaves = paid_leaves
+        self.unpaid_leaves = unpaid_leaves
+        self.full_unpaid_days = full_unpaid_days
+        self.half_unpaid_days = half_unpaid_days
+
+
 def calculate_leaves(staff, effective_start, effective_end):
     """
     Priority 3 (Leaves):
-    Sum Approved Paid Leaves and Approved Unpaid Leaves (LOP).
+    Verify leaves against active AcademicYear and specific month.
+    If an approved leave exceeds the remaining balance or is marked paid_leave=False,
+    calculates exact unpaid days (LWP).
     """
     if not effective_start or not effective_end:
         return Decimal("0.0"), Decimal("0.0")
+
+    from sms_app.models import AcademicYear, StaffRemainingLeave
 
     approved_leave_days = LeavePerDay.objects.filter(
         leave__staff=staff,
         status="APPROVED",
         date__range=(effective_start, effective_end),
-    ).select_related("leave")
+    ).select_related("leave", "leave__leave_type", "leave__dynamic_leave_type")
+
+    academic_year = None
+    if staff and staff.school:
+        academic_year = AcademicYear.objects.filter(
+            school=staff.school, is_active=True
+        ).first() or AcademicYear.objects.filter(
+            school=staff.school
+        ).order_by("-id").first()
 
     paid_leaves = Decimal("0.0")
     unpaid_leaves = Decimal("0.0")
+    full_unpaid_days = Decimal("0.0")
+    half_unpaid_days = Decimal("0.0")
+    leave_type_balances = {}
 
     for ld in approved_leave_days:
-        if getattr(ld, "day_weight", None) is not None:
-            day_weight = Decimal(str(ld.day_weight))
-        elif (
-            ld.leave is not None
-            and hasattr(ld.leave, "total_days")
-            and ld.leave.total_days == Decimal("0.5")
-        ):
+        l_req = ld.leave
+        lt_obj = (getattr(l_req, "dynamic_leave_type", None) or getattr(l_req, "leave_type", None)) if l_req else None
+
+        is_half_day = False
+        if lt_obj and getattr(lt_obj, "leave_unit", "") == "HALF_DAY":
+            is_half_day = True
+        elif l_req and (getattr(l_req, "is_half_day", False) or getattr(l_req, "total_days", None) == Decimal("0.5") or getattr(l_req, "days_count", None) == Decimal("0.5")):
+            is_half_day = True
+        elif getattr(ld, "day_weight", None) == Decimal("0.5"):
+            is_half_day = True
+
+        if is_half_day:
             day_weight = Decimal("0.5")
+        elif getattr(ld, "day_weight", None) is not None:
+            day_weight = Decimal(str(ld.day_weight))
         else:
             day_weight = Decimal("1.0")
 
-        if ld.leave and ld.leave.is_paid:
-            paid_leaves += day_weight
-        else:
-            unpaid_leaves += day_weight
+        is_paid = True
+        if l_req and getattr(l_req, "is_paid", True) is False:
+            is_paid = False
+        elif lt_obj and getattr(lt_obj, "is_paid", True) is False:
+            is_paid = False
 
-    return paid_leaves, unpaid_leaves
+        if not is_paid:
+            unpaid_leaves += day_weight
+            if is_half_day:
+                half_unpaid_days += Decimal("1.0")
+            else:
+                full_unpaid_days += day_weight
+            continue
+
+        if lt_obj and academic_year and staff:
+            lt_id = lt_obj.id
+            if lt_id not in leave_type_balances:
+                srl = StaffRemainingLeave.objects.filter(
+                    staff=staff,
+                    academic_year=academic_year,
+                    leave_type=lt_obj,
+                ).first()
+                if srl:
+                    leave_type_balances[lt_id] = Decimal(str(srl.remaining_leaves if srl.remaining_leaves is not None else (srl.total_levaes or 0)))
+                else:
+                    leave_type_balances[lt_id] = Decimal(str(lt_obj.leave_num if lt_obj.leave_num is not None else (lt_obj.allocation_count or 0)))
+
+            available = leave_type_balances[lt_id]
+            if available >= day_weight:
+                paid_leaves += day_weight
+                leave_type_balances[lt_id] = available - day_weight
+            elif available > Decimal("0.0"):
+                paid_portion = available
+                unpaid_portion = day_weight - available
+                paid_leaves += paid_portion
+                unpaid_leaves += unpaid_portion
+                if is_half_day:
+                    half_unpaid_days += Decimal("1.0")
+                else:
+                    full_unpaid_days += unpaid_portion
+                leave_type_balances[lt_id] = Decimal("0.0")
+            else:
+                unpaid_leaves += day_weight
+                if is_half_day:
+                    half_unpaid_days += Decimal("1.0")
+                else:
+                    full_unpaid_days += day_weight
+        else:
+            paid_leaves += day_weight
+
+    return LeaveCalculationResult(paid_leaves, unpaid_leaves, full_unpaid_days, half_unpaid_days)
 
 
 def calculate_attendance_days(staff, effective_start, effective_end):
@@ -436,6 +514,7 @@ def generate_payslip(
     payment_data=None,
     raise_on_missing_punch=True,
     preserve_payment_details=False,
+    preview_only=False,
 ):
     """
     Core calculation function: generate_payslip(staff, month, year)
@@ -496,7 +575,11 @@ def generate_payslip(
         }
 
     # 3. Priority 3 (Leaves)
-    paid_leaves, unpaid_leaves = calculate_leaves(staff, effective_start, effective_end)
+    leave_calc = calculate_leaves(staff, effective_start, effective_end)
+    paid_leaves = leave_calc.paid_leaves
+    unpaid_leaves = leave_calc.unpaid_leaves
+    full_unpaid_days = getattr(leave_calc, "full_unpaid_days", Decimal("0.0"))
+    half_unpaid_days = getattr(leave_calc, "half_unpaid_days", Decimal("0.0"))
 
     # 4. Priority 4 (Attendance & Absence)
     full_day_present, half_days, late_count = calculate_attendance_days(
@@ -515,13 +598,17 @@ def generate_payslip(
     raw_payable = base_eligible_days - deduction_days
     payable_days = max(Decimal("0.0"), min(base_eligible_days, raw_payable))
 
-    # Calculate ProRataMultiplier = Payable Days / Total Working Days (Calendar Days in Month)
+    # Calculate eligible pro-rata multiplier based on joining/exit (Priority 1)
     total_working_days_dec = Decimal(str(total_working_days))
     if total_working_days_dec > Decimal("0.0"):
+        eligible_pro_rata = (base_eligible_days / total_working_days_dec).quantize(
+            Decimal("0.0001")
+        )
         pro_rata_multiplier = (payable_days / total_working_days_dec).quantize(
             Decimal("0.0001")
         )
     else:
+        eligible_pro_rata = Decimal("1.0000")
         pro_rata_multiplier = Decimal("0.0000")
 
     # 5. Salary Component Math
@@ -540,7 +627,7 @@ def generate_payslip(
         )
 
     # Two-pass calculation:
-    # Pass 1: Fixed components
+    # Pass 1: Fixed components (scaled by joining/exit eligibility; LWP/absences are deducted itemized in deductions)
     has_fixed_basic = False
     for comp in components:
         c_type = comp.type.capitalize()
@@ -548,7 +635,7 @@ def generate_payslip(
         val = Decimal(str(comp.value or 0))
 
         if c_calc == "Fixed":
-            amount = (val * pro_rata_multiplier).quantize(Decimal("0.01"))
+            amount = (val * eligible_pro_rata).quantize(Decimal("0.01"))
             norm_name = comp.name.strip().lower()
             calculated_map[norm_name] = amount
             if "basic" in norm_name:
@@ -572,7 +659,7 @@ def generate_payslip(
 
     # If no Fixed component represents basic salary, use staff.salary
     if not has_fixed_basic and base_salary_val > Decimal("0.00"):
-        basic_amount = (base_salary_val * pro_rata_multiplier).quantize(Decimal("0.01"))
+        basic_amount = (base_salary_val * eligible_pro_rata).quantize(Decimal("0.01"))
         calculated_map["basic"] = basic_amount
         calculated_map["basic salary"] = basic_amount
         earnings_list.insert(
@@ -604,13 +691,19 @@ def generate_payslip(
 
         if c_calc_lower == "percentage":
             calc_base_str = (comp.calc_base or "basic").strip().lower()
-            base_amount = calculated_map.get(calc_base_str)
-            if base_amount is None:
-                base_amount = (
-                    calculated_map.get("basic salary")
-                    or calculated_map.get("basic")
-                    or (base_salary_val * pro_rata_multiplier)
-                )
+            if "gross" in calc_base_str:
+                current_gross = sum(Decimal(str(e["amount"])) for e in earnings_list)
+                if current_gross <= Decimal("0.00"):
+                    current_gross = base_salary_val * pro_rata_multiplier
+                base_amount = current_gross
+            else:
+                base_amount = calculated_map.get(calc_base_str)
+                if base_amount is None:
+                    base_amount = (
+                        calculated_map.get("basic salary")
+                        or calculated_map.get("basic")
+                        or (base_salary_val * pro_rata_multiplier)
+                    )
 
             amount = (
                 Decimal(str(base_amount)) * (val / Decimal("100.0"))
@@ -754,9 +847,16 @@ def generate_payslip(
             c_type = c.type.capitalize() if c.type else "Earning"
 
             if calc_type_lower == "percentage":
-                base_amount = calculated_map.get("basic") or (
-                    base_salary_val * pro_rata_multiplier
-                )
+                calc_base_str = (getattr(sc, "calc_base", None) or getattr(c, "calc_base", "") or "basic").strip().lower()
+                if "gross" in calc_base_str:
+                    current_gross = sum(Decimal(str(e["amount"])) for e in earnings_list)
+                    if current_gross <= Decimal("0.00"):
+                        current_gross = base_salary_val * pro_rata_multiplier
+                    base_amount = current_gross
+                else:
+                    base_amount = calculated_map.get("basic") or (
+                        base_salary_val * pro_rata_multiplier
+                    )
                 amount = (
                     Decimal(str(base_amount)) * (val / Decimal("100.0"))
                 ).quantize(Decimal("0.01"))
@@ -800,6 +900,68 @@ def generate_payslip(
             else:
                 deductions_list.append(item)
 
+    # Calculate LOP (Unpaid Leave) & Absent deduction snapshot
+    # Mandated formula:
+    # Unpaid Daily Wage = (Base Salary / 30)
+    # Half-Day LWP Deduction = Unpaid Daily Wage * 0.5
+    # Total Leave Deduction = (Total Full Unpaid Days * Unpaid Daily Wage) + (Total Half-Day Unpaid * 0.5 * Unpaid Daily Wage)
+    # Display itemized deduction breakdown in Payslip generation view and PDF summary (e.g., "LWP Deduction: 1 Half Day (0.5) - ₹500").
+    unpaid_daily_wage = (base_salary_val / Decimal("30")).quantize(Decimal("0.01"))
+    half_day_lwp_deduction = (unpaid_daily_wage * Decimal("0.5")).quantize(Decimal("0.01"))
+
+    full_day_lwp_total = (full_unpaid_days * unpaid_daily_wage).quantize(Decimal("0.01"))
+    half_day_lwp_total = (half_unpaid_days * half_day_lwp_deduction).quantize(Decimal("0.01"))
+
+    if full_unpaid_days > Decimal("0.0") or half_unpaid_days > Decimal("0.0"):
+        lop_amount = (full_day_lwp_total + half_day_lwp_total).quantize(Decimal("0.01"))
+    else:
+        lop_amount = (unpaid_leaves * unpaid_daily_wage).quantize(Decimal("0.01"))
+
+    per_day_base_30 = unpaid_daily_wage
+    per_day_working = (
+        (base_salary_val / total_working_days_dec).quantize(Decimal("0.01"))
+        if total_working_days_dec > Decimal("0")
+        else Decimal("0.00")
+    )
+    absent_deduction_amount = (absent_days * per_day_working).quantize(Decimal("0.01"))
+
+    # Itemized LWP Deductions
+    if half_unpaid_days > Decimal("0.0"):
+        half_count = int(half_unpaid_days) if half_unpaid_days == int(half_unpaid_days) else half_unpaid_days
+        half_days_equiv = float(half_unpaid_days * Decimal("0.5"))
+        deductions_list.append({
+            "component_id": None,
+            "name": f"LWP Deduction: {half_count} Half Day ({half_days_equiv}) - ₹{half_day_lwp_total}",
+            "type": "Deduction",
+            "calc_type": "Per Day",
+            "calc_base": f"({base_salary_val} / 30) * 0.5 * {half_count}",
+            "value": str(half_day_lwp_deduction),
+            "amount": str(half_day_lwp_total),
+        })
+
+    if full_unpaid_days > Decimal("0.0"):
+        full_count = int(full_unpaid_days) if full_unpaid_days == int(full_unpaid_days) else full_unpaid_days
+        deductions_list.append({
+            "component_id": None,
+            "name": f"LWP Deduction: {full_count} Full Day ({float(full_unpaid_days)}) - ₹{full_day_lwp_total}",
+            "type": "Deduction",
+            "calc_type": "Per Day",
+            "calc_base": f"({base_salary_val} / 30) * {full_count}",
+            "value": str(unpaid_daily_wage),
+            "amount": str(full_day_lwp_total),
+        })
+
+    if half_unpaid_days == Decimal("0.0") and full_unpaid_days == Decimal("0.0") and lop_amount > Decimal("0.00"):
+        deductions_list.append({
+            "component_id": None,
+            "name": "Leave Without Pay (LWP)",
+            "type": "Deduction",
+            "calc_type": "Per Day",
+            "calc_base": f"({base_salary_val} / 30) * {unpaid_leaves} days",
+            "value": str(base_salary_val),
+            "amount": str(lop_amount),
+        })
+
     # Calculate Totals
     gross_earnings = sum(
         (Decimal(e["amount"]) for e in earnings_list), Decimal("0.00")
@@ -811,31 +973,30 @@ def generate_payslip(
         Decimal("0.01")
     )
 
-    # Calculate LOP (Unpaid Leave) & Absent deduction snapshot
-    per_day_base = (
-        (base_salary_val / total_working_days_dec).quantize(Decimal("0.01"))
-        if total_working_days_dec > Decimal("0")
-        else Decimal("0.00")
-    )
-    lop_amount = (unpaid_leaves * per_day_base).quantize(Decimal("0.01"))
-    absent_deduction_amount = (absent_days * per_day_base).quantize(Decimal("0.01"))
-
     # Construct Component Breakdown JSON
     component_breakdown = {
         "working_days": total_working_days,
         "eligible_working_days": eligible_working_days,
         "effective_start": effective_start.strftime("%Y-%m-%d"),
         "effective_end": effective_end.strftime("%Y-%m-%d"),
-        "present_days": float(full_day_present),
+        "present_days": float(full_day_present + (half_days * Decimal("0.5"))),
         "late_days": late_count,
         "half_days": float(half_days),
         "paid_leaves": float(paid_leaves),
         "unpaid_leaves": float(unpaid_leaves),
+        "lwp_days": float(unpaid_leaves),
+        "full_unpaid_days": float(full_unpaid_days),
+        "half_unpaid_days": float(half_unpaid_days),
+        "unpaid_daily_wage": str(unpaid_daily_wage),
+        "per_day_salary": str(unpaid_daily_wage),
+        "half_day_lwp_deduction": str(half_day_lwp_deduction),
         "absent_days": float(absent_days),
         "lop_deduction_amount": str(lop_amount),
+        "lwp_deduction": str(lop_amount),
         "absent_deduction_amount": str(absent_deduction_amount),
         "payable_days": float(payable_days),
-        "pro_rata_multiplier": str(pro_rata_multiplier),
+        "pro_rata_multiplier": str(eligible_pro_rata),
+        "basic_salary": str(base_salary_val),
         "earnings": earnings_list,
         "deductions": deductions_list,
         "gross_earnings": str(gross_earnings),
@@ -843,6 +1004,30 @@ def generate_payslip(
         "net_salary": str(net_salary),
         "calculated_at": timezone.now().isoformat(),
     }
+
+    if preview_only:
+        return {
+            "status": "success",
+            "staff_id": staff.id,
+            "staff_name": staff.name,
+            "staff_category": staff.category,
+            "salary_month": f"{year}-{month:02d}",
+            "working_days": total_working_days,
+            "eligible_working_days": eligible_working_days,
+            "present_days": float(full_day_present + (half_days * Decimal("0.5"))),
+            "paid_leaves": float(paid_leaves),
+            "unpaid_leaves": float(unpaid_leaves),
+            "lwp_days": float(unpaid_leaves),
+            "per_day_salary": str(unpaid_daily_wage),
+            "lwp_deduction": str(lop_amount),
+            "absent_days": float(absent_days),
+            "payable_days": float(payable_days),
+            "basic_salary": str(base_salary_val),
+            "gross_earnings": str(gross_earnings),
+            "total_deductions": str(total_deductions),
+            "net_salary": str(net_salary),
+            "breakdown": component_breakdown,
+        }
 
     # 6. Database Persistence
     with transaction.atomic():
@@ -1047,3 +1232,43 @@ def generate_payroll_run(school, month, year, staff_id=None):
         "processed": processed_list,
         "skipped": skipped_list,
     }
+
+
+def get_salary_preview(staff_id, salary_month, school):
+    """
+    Returns calculated preview of salary, attendance, leaves, LWP deduction, and net payable.
+    Does not persist to database.
+    """
+    try:
+        parts = str(salary_month).strip().split("-")
+        year = int(parts[0])
+        month = int(parts[1])
+    except Exception:
+        raise ValidationError("Invalid salary_month format. Use YYYY-MM.")
+
+    staff = Staff.objects.filter(school=school, id=staff_id).first()
+    if not staff:
+        raise ValidationError("Staff member not found for this school.")
+
+    try:
+        return generate_payslip(
+            staff=staff,
+            month=month,
+            year=year,
+            raise_on_missing_punch=True,
+            preview_only=True,
+        )
+    except MissingPunchError as e:
+        m_start, m_end, total_days = get_month_date_range(month, year)
+        return {
+            "status": "warning",
+            "requires_regularization": True,
+            "message": f"Requires Regularization: Staff has unregularized missing check-out punch on {', '.join(d.strftime('%Y-%m-%d') for d in e.dates)}.",
+            "missing_punch_dates": [d.strftime("%Y-%m-%d") for d in e.dates],
+            "staff_id": staff.id,
+            "staff_name": staff.name,
+            "salary_month": f"{year}-{month:02d}",
+            "working_days": total_days,
+            "basic_salary": str(staff.salary or "0.00"),
+        }
+

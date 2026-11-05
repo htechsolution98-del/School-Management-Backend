@@ -66,8 +66,6 @@ from sms_app.dynamic_hr_views import (
     LeaveBalanceViewSet,
     LeaveTransactionViewSet,
     LeaveReportViewSet,
-    LeaveTemplateViewSet,
-    LeaveTypeViewSet,
     DynamicSalaryComponentViewSet,
     SalaryStructureViewSet,
     PayrollRunViewSet,
@@ -90,9 +88,10 @@ from sms_app.trustee_inventory_report import TrusteeInventoryReport
 from sms_app.trustee_library_report import TrusteeLibraryReport
 from sms_app.trustee_student_report import TrusteeStudentReport
 from sms_app.trustee_staff_report import TrusteeStaffReport
-from sms_app.school_profile_views import SchoolProfileView, SchoolProfileAssetUploadView
+from sms_app.school_profile_views import SchoolProfileView, SchoolProfileAssetUploadView, SchoolBankAccountViewSet
 from sms_app.support_views import SupportTicketViewSet
 from sms_app.tutorial_views import PageTutorialViewSet
+from sms_app.payroll_views import BulkSalaryGenerateAPIView, BulkSalaryDisburseAPIView, SalaryPreviewAPIView, PayslipDocumentView
 
 router = DefaultRouter()
 router.register(r'page-tutorials', PageTutorialViewSet, basename='page-tutorials')
@@ -105,6 +104,9 @@ router.register(r'school-invoices', SchoolInvoiceViewSet, basename='school-invoi
 router.register(r'subscription-payments', SubscriptionPaymentViewSet, basename='subscription-payments')
 router.register(r'subscription-audit-logs', SubscriptionAuditLogViewSet, basename='subscription-audit-logs')
 router.register(r'subscription-settings', SubscriptionSettingViewSet, basename='subscription-settings')
+router.register(r'school-bank-accounts', SchoolBankAccountViewSet, basename='school-bank-accounts')
+router.register(r'school-profile/bank-accounts', SchoolBankAccountViewSet, basename='school-profile-bank-accounts')
+router.register(r'trustee/school-profile/bank-accounts', SchoolBankAccountViewSet, basename='trustee-school-profile-bank-accounts')
 
 router.register(r'schoolfeature',SchoolFeatureView, basename='schoolfeature')
 router.register(r'getfeature',GetFeatureView, basename='getfeature')
@@ -518,6 +520,17 @@ urlpatterns = [
     path('api/school-profile/upload-asset/', SchoolProfileAssetUploadView.as_view(), name='school-profile-upload-asset'),
     path('api/trustee/school-profile/', SchoolProfileView.as_view(), name='trustee-school-profile'),
     path('api/trustee/school-profile/upload-asset/', SchoolProfileAssetUploadView.as_view(), name='trustee-school-profile-upload-asset'),
+    # Payroll & Attendance Integration Endpoints
+    path('api/payroll/bulk-generate/', BulkSalaryGenerateAPIView.as_view(), name='payroll-bulk-generate'),
+    path('payroll/bulk-generate/', BulkSalaryGenerateAPIView.as_view()),
+    path('api/payroll/bulk-disburse/', BulkSalaryDisburseAPIView.as_view(), name='payroll-bulk-disburse'),
+    path('payroll/bulk-disburse/', BulkSalaryDisburseAPIView.as_view()),
+    path('api/payroll/preview/', SalaryPreviewAPIView.as_view(), name='payroll-preview'),
+    path('payroll/preview/', SalaryPreviewAPIView.as_view()),
+    path('api/payroll/payslip/<int:pk>/', PayslipDocumentView.as_view(), name='payroll-payslip-doc'),
+    path('payroll/payslip/<int:pk>/', PayslipDocumentView.as_view()),
+    path('api/staff-salary-payment/<int:pk>/payslip/', PayslipDocumentView.as_view()),
+    path('staff-salary-payment/<int:pk>/payslip/', PayslipDocumentView.as_view()),
     path('api/rte/summary/', RTESummaryView.as_view()),
     path('api/duefeesview/',DueFeesView.as_view()),
     path('api/payment-history/',PaymentHistoryView.as_view()),

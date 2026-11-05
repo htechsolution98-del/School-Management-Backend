@@ -911,7 +911,7 @@ def get_clerk_school(request):
 # LeaveTemplate ViewSet
 from .trustee_staff_access import TrusteeStaffReadOnlyMixin
 
-class LeaveTemplateViewSet(TrusteeStaffReadOnlyMixin, ModelViewSet):
+class LeaveTemplateViewSet(ModelViewSet):
     permission_classes = [IsAuthenticated, IsClerkOrAdmin]
     serializer_class = NewLeaveTemplateSerializer
  
@@ -921,7 +921,10 @@ class LeaveTemplateViewSet(TrusteeStaffReadOnlyMixin, ModelViewSet):
  
     def perform_create(self, serializer):
         school = get_clerk_school(self.request)
-        serializer.save(school=school)
+        ay = serializer.validated_data.get("academic_year")
+        if not ay and school:
+            ay = AcademicYear.objects.filter(school=school, is_active=True).first() or AcademicYear.objects.filter(school=school).order_by("-id").first()
+        serializer.save(school=school, academic_year=ay)
  
     def perform_update(self, serializer):
         school = get_clerk_school(self.request)
@@ -944,7 +947,62 @@ class LeaveTemplateViewSet(TrusteeStaffReadOnlyMixin, ModelViewSet):
  
  
  
-class LeaveTypeViewSet(TrusteeStaffReadOnlyMixin, ModelViewSet):
+def _sync_staff_remaining_leave(lt_rec, school, academic_year=None):
+    """
+    Synchronize remaining leave records for all active staff in the category,
+    guaranteeing calculations and balances are immediately available for the active Academic Year.
+    """
+    try:
+        if not school or not lt_rec:
+            return
+        category_name = None
+        if lt_rec.category and hasattr(lt_rec.category, "feature") and lt_rec.category.feature:
+            category_name = lt_rec.category.feature.name
+        elif lt_rec.category and getattr(lt_rec.category, "feature_name", None):
+            category_name = lt_rec.category.feature_name
+
+        if not category_name:
+            return
+
+        ay = academic_year
+        if not ay and lt_rec.leave_template:
+            ay = lt_rec.leave_template.academic_year
+        if not ay:
+            ay = AcademicYear.objects.filter(school=school, is_active=True).first() or AcademicYear.objects.filter(school=school).order_by("-id").first()
+
+        now = timezone.now()
+        quota = lt_rec.leave_num if lt_rec.leave_num is not None else int(lt_rec.allocation_count or 0)
+        staff_qs = Staff.objects.filter(school=school, category__iexact=category_name, is_active=True)
+        for staff_member in staff_qs:
+            srl, created = StaffRemainingLeave.objects.get_or_create(
+                school=school,
+                staff=staff_member,
+                academic_year=ay,
+                leave_type=lt_rec,
+                defaults={
+                    "leave_template": lt_rec.leave_template,
+                    "total_levaes": quota,
+                    "remaining_leaves": quota,
+                    "month": now.month,
+                    "year": now.year,
+                }
+            )
+            if not created:
+                old_total = srl.total_levaes or 0
+                diff = quota - old_total
+                srl.total_levaes = quota
+                if diff > 0:
+                    srl.remaining_leaves = (srl.remaining_leaves or 0) + diff
+                elif diff < 0:
+                    srl.remaining_leaves = max(0, (srl.remaining_leaves or 0) + diff)
+                srl.leave_template = lt_rec.leave_template
+                srl.save()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"Error syncing StaffRemainingLeave: {e}")
+
+
+class LeaveTypeViewSet(ModelViewSet):
  
     permission_classes = [IsAuthenticated, IsClerkOrAdmin]
     serializer_class = NewLeaveTypeSerializer
@@ -968,15 +1026,12 @@ class LeaveTypeViewSet(TrusteeStaffReadOnlyMixin, ModelViewSet):
         return qs
  
     def perform_create(self, serializer):
-
-        
         school = get_clerk_school(self.request)
-        # Ensure the chosen template belongs to the clerk's school
         template = serializer.validated_data.get("leave_template")
         if template and template.school != school:
             raise PermissionDenied("That leave template does not belong to your school.")
-        
-        serializer.save()
+        instance = serializer.save()
+        _sync_staff_remaining_leave(instance, school, template.academic_year if template else None)
 
     @action(detail=False, methods=["post"], url_path="bulk-manage")
     def bulk_manage(self, request):
@@ -989,12 +1044,21 @@ class LeaveTypeViewSet(TrusteeStaffReadOnlyMixin, ModelViewSet):
         data = request.data
 
         template_id = data.get("leave_template")
-        if not template_id:
-            return Response({"error": "leave_template is required."}, status=400)
-
-        template = LeaveTemplate.objects.filter(id=template_id, school=school).first()
-        if not template:
-            return Response({"error": "Leave template not found or does not belong to your school."}, status=404)
+        existing_type_ids = data.get("existing_type_ids") or []
+        template = None
+        if template_id:
+            template = LeaveTemplate.objects.filter(id=template_id, school=school).first()
+            if not template:
+                return Response({"error": "Leave template not found or does not belong to your school."}, status=404)
+        else:
+            if existing_type_ids:
+                first_existing = LeaveType.objects.filter(id__in=existing_type_ids, leave_template__school=school).first()
+                if first_existing:
+                    template = first_existing.leave_template
+            if not template:
+                template = LeaveTemplate.objects.filter(school=school, is_active=True).first() or LeaveTemplate.objects.filter(school=school).first()
+            if not template:
+                return Response({"error": "No leave policy template found for your school. Please create a Leave Template first."}, status=400)
 
         category_ids = data.get("category_ids") or []
         if not category_ids:
@@ -1008,13 +1072,22 @@ class LeaveTypeViewSet(TrusteeStaffReadOnlyMixin, ModelViewSet):
         code = str(data.get("code") or "").strip().upper() or None
         leave_num = int(data.get("leave_num") or 0)
         allocation_count = Decimal(str(data.get("allocation_count") or leave_num or 0.0))
-        allocation_period = str(data.get("allocation_period") or "Yearly")
+
+        timeline_to_period = {
+            "MONTHLY": "Monthly",
+            "QUARTERLY": "Quarterly",
+            "SEMI_ANNUAL": "Yearly",
+            "ANNUAL": "Yearly",
+        }
+        inherited_period = timeline_to_period.get(str(template.time_line).upper(), "Yearly")
+        allocation_period = str(data.get("allocation_period") or inherited_period)
+
         is_paid = bool(data.get("is_paid", True))
-        allow_encashment = bool(data.get("allow_encashment", False))
         is_carry_forward = bool(data.get("is_carry_forward", False) or data.get("carry_forward", False))
         max_carry_forward = int(data.get("max_carry_forward") or 0) if is_carry_forward else 0
-
-        existing_type_ids = data.get("existing_type_ids") or []
+        leave_unit = str(data.get("leave_unit") or "FULL_DAY").strip().upper()
+        if leave_unit not in ["FULL_DAY", "HALF_DAY"]:
+            leave_unit = "FULL_DAY"
 
         from django.db import transaction
         try:
@@ -1038,7 +1111,25 @@ class LeaveTypeViewSet(TrusteeStaffReadOnlyMixin, ModelViewSet):
                     # 2. Update retained or create new
                     for cat_id in category_ids:
                         cat_id_int = int(cat_id)
-                        cat_obj = SchoolFeature.objects.filter(id=cat_id_int).first()
+                        cat_obj = SchoolFeature.objects.filter(id=cat_id_int, school=school).first()
+                        if not cat_obj:
+                            cat_obj = SchoolFeature.objects.filter(id=cat_id_int).first()
+                        if not cat_obj:
+                            role_names = {
+                                1: "teacher",
+                                2: "clerk",
+                                3: "principal",
+                                4: "librarian",
+                                5: "vice principal",
+                                6: "assistant clerk",
+                                7: "transportation",
+                                8: "fees management",
+                                9: "inventory",
+                            }
+                            target_role = role_names.get(cat_id_int)
+                            if target_role:
+                                cat_obj = SchoolFeature.objects.filter(school=school, feature__name__iexact=target_role).first() or \
+                                          SchoolFeature.objects.filter(school=school, feature_name__iexact=target_role).first()
 
                         if cat_id_int in existing_by_cat and existing_by_cat[cat_id_int].pk:
                             lt_rec = existing_by_cat[cat_id_int]
@@ -1049,11 +1140,11 @@ class LeaveTypeViewSet(TrusteeStaffReadOnlyMixin, ModelViewSet):
                             lt_rec.allocation_count = allocation_count
                             lt_rec.allocation_period = allocation_period
                             lt_rec.is_paid = is_paid
-                            lt_rec.allow_encashment = allow_encashment
                             lt_rec.is_carry_forward = is_carry_forward
                             lt_rec.carry_forward = is_carry_forward
                             lt_rec.max_carry_forward = max_carry_forward
                             lt_rec.save()
+                            _sync_staff_remaining_leave(lt_rec, school)
                             saved_records.append(lt_rec)
                         else:
                             lt_rec = LeaveType.objects.create(
@@ -1066,18 +1157,36 @@ class LeaveTypeViewSet(TrusteeStaffReadOnlyMixin, ModelViewSet):
                                 allocation_count=allocation_count,
                                 allocation_period=allocation_period,
                                 is_paid=is_paid,
-                                allow_encashment=allow_encashment,
                                 is_carry_forward=is_carry_forward,
                                 carry_forward=is_carry_forward,
                                 max_carry_forward=max_carry_forward,
                                 is_active=True,
                             )
+                            _sync_staff_remaining_leave(lt_rec, school, template.academic_year if template else None)
                             saved_records.append(lt_rec)
                 else:
                     # Create mode
                     for cat_id in category_ids:
                         cat_id_int = int(cat_id)
-                        cat_obj = SchoolFeature.objects.filter(id=cat_id_int).first()
+                        cat_obj = SchoolFeature.objects.filter(id=cat_id_int, school=school).first()
+                        if not cat_obj:
+                            cat_obj = SchoolFeature.objects.filter(id=cat_id_int).first()
+                        if not cat_obj:
+                            role_names = {
+                                1: "teacher",
+                                2: "clerk",
+                                3: "principal",
+                                4: "librarian",
+                                5: "vice principal",
+                                6: "assistant clerk",
+                                7: "transportation",
+                                8: "fees management",
+                                9: "inventory",
+                            }
+                            target_role = role_names.get(cat_id_int)
+                            if target_role:
+                                cat_obj = SchoolFeature.objects.filter(school=school, feature__name__iexact=target_role).first() or \
+                                          SchoolFeature.objects.filter(school=school, feature_name__iexact=target_role).first()
 
                         existing = LeaveType.objects.filter(
                             leave_template=template,
@@ -1091,11 +1200,11 @@ class LeaveTypeViewSet(TrusteeStaffReadOnlyMixin, ModelViewSet):
                             existing.allocation_count = allocation_count
                             existing.allocation_period = allocation_period
                             existing.is_paid = is_paid
-                            existing.allow_encashment = allow_encashment
                             existing.is_carry_forward = is_carry_forward
                             existing.carry_forward = is_carry_forward
                             existing.max_carry_forward = max_carry_forward
                             existing.save()
+                            _sync_staff_remaining_leave(existing, school)
                             saved_records.append(existing)
                         else:
                             lt_rec = LeaveType.objects.create(
@@ -1108,12 +1217,12 @@ class LeaveTypeViewSet(TrusteeStaffReadOnlyMixin, ModelViewSet):
                                 allocation_count=allocation_count,
                                 allocation_period=allocation_period,
                                 is_paid=is_paid,
-                                allow_encashment=allow_encashment,
                                 is_carry_forward=is_carry_forward,
                                 carry_forward=is_carry_forward,
                                 max_carry_forward=max_carry_forward,
                                 is_active=True,
                             )
+                            _sync_staff_remaining_leave(lt_rec, school, template.academic_year if template else None)
                             saved_records.append(lt_rec)
 
                 serialized = NewLeaveTypeSerializer(saved_records, many=True).data
@@ -1144,6 +1253,26 @@ class LeaveRequestView(TrusteeStaffReadOnlyMixin, ModelViewSet): #for requesting
         )
         if show_all and is_admin_approver and school:
             qs = LeaveRequest.objects.filter(school=school)
+            is_trustee_user = (
+                role_str in ["TRUSTEE", "ADMIN(TRUSTEE)"]
+                or staff_cat == "TRUSTEE"
+                or user.groups.filter(name__in=["TRUSTEE", "trustee", "admin(trustee)"]).exists()
+            ) and not user.is_superuser
+            is_principal_user = (
+                role_str in ["PRINCIPAL", "VICE PRINCIPAL"]
+                or staff_cat in ["PRINCIPAL", "VICE PRINCIPAL"]
+            ) and not user.is_superuser
+
+            if is_trustee_user:
+                qs = qs.filter(
+                    Q(staff__category__iexact="PRINCIPAL") | Q(staff__user__role__iexact="PRINCIPAL")
+                )
+            elif is_principal_user:
+                qs = qs.exclude(
+                    Q(staff__user=user)
+                    | Q(staff__category__iexact="PRINCIPAL")
+                    | Q(staff__user__role__iexact="PRINCIPAL")
+                )
         elif staff and staff.school:
             qs = LeaveRequest.objects.filter(staff=staff, school=staff.school)
         elif school:
@@ -1354,6 +1483,7 @@ class GetStaffRemainingleave(APIView): # perticular staff remaining leaves
                 "leave_type": lt.id,
                 "leave_type_id": lt.id,
                 "leave_type_name": lt.name or lt.leave_type,
+                "leave_unit": getattr(lt, "leave_unit", "FULL_DAY"),
                 "leave_template": lt.leave_template_id,
                 "allocated": allocated,
                 "total_levaes": allocated + carry_forward,
@@ -1425,13 +1555,17 @@ class CalculateLeaveDaysView(APIView):
                 is_half_day=is_half_day,
                 half_day_session=half_day_session,
             )
-        except DjangoValidationError as e:
+        except (DjangoValidationError, ValidationError) as e:
+            err_msg = e.messages[0] if hasattr(e, "messages") and e.messages else str(e)
             return Response(
                 {
                     "is_valid": False,
-                    "error": e.messages if hasattr(e, "messages") else str(e),
+                    "error": err_msg,
+                    "detail": err_msg,
+                    "message": err_msg,
                     "total_effective_days": 0,
                     "day_breakdown": [],
+                    "summary_message": err_msg,
                 },
                 status=400,
             )
@@ -1498,6 +1632,7 @@ class CalculateLeaveDaysView(APIView):
             "excluded_holidays": breakdown_data["excluded_holidays"],
             "is_half_day": is_half_day,
             "half_day_session": half_day_session,
+            "saturday_policy": breakdown_data.get("saturday_policy", "HALF_DAY"),
             "day_breakdown": breakdown_data["breakdown"],
             "balance": {
                 "allocated": allocated,
@@ -1540,7 +1675,7 @@ class GetStaffLeaveRequest(APIView): # particular staff leave request to staff s
 class GetLeaveRequestView(ModelViewSet): #for all the leaves — clerk/principal/trustee can view
     queryset = LeaveRequest.objects.all()
     serializer_class = GetLeaveRequestSerializer
-    permission_classes = [IsAuthenticated, IsClerkOrPrincipal]
+    permission_classes = [IsAuthenticated, IsPrincipalOrTrustee | IsClerkOrPrincipal]
     http_method_names = ["get"]
 
     def get_queryset(self):
@@ -1553,7 +1688,45 @@ class GetLeaveRequestView(ModelViewSet): #for all the leaves — clerk/principal
             school = School.objects.filter(login_id=user).first()
         if not school:
             return LeaveRequest.objects.none()
-        return LeaveRequest.objects.filter(school=school)
+
+        qs = LeaveRequest.objects.filter(school=school)
+
+        role_str = str(getattr(user, "role", "") or "").strip().upper()
+        staff = Staff.objects.filter(user=user).first()
+        staff_cat = str(getattr(staff, "category", "") or "").strip().upper() if staff else ""
+
+        is_trustee = (
+            role_str in ["TRUSTEE", "ADMIN(TRUSTEE)"]
+            or staff_cat == "TRUSTEE"
+            or user.groups.filter(name__in=["TRUSTEE", "trustee", "admin(trustee)"]).exists()
+        ) and not user.is_superuser
+
+        is_principal = (
+            role_str in ["PRINCIPAL", "VICE PRINCIPAL"]
+            or staff_cat in ["PRINCIPAL", "VICE PRINCIPAL"]
+        ) and not user.is_superuser
+
+        if is_trustee:
+            # Trustee approval queue: strictly Principal's leave requests
+            qs = qs.filter(
+                Q(staff__category__iexact="PRINCIPAL") | Q(staff__user__role__iexact="PRINCIPAL")
+            )
+        elif is_principal:
+            # Principal approval queue: all other staff (Teachers, Clerk, Librarian, Peon, etc.)
+            # Exclude self-requests and any other Principal requests
+            qs = qs.exclude(
+                Q(staff__user=user)
+                | Q(staff__category__iexact="PRINCIPAL")
+                | Q(staff__user__role__iexact="PRINCIPAL")
+            )
+        elif user.is_superuser or role_str in ["ADMIN", "SUPERADMIN"]:
+            pass
+        elif role_str == "CLERK" or staff_cat == "CLERK":
+            pass
+        else:
+            qs = qs.filter(staff__user=user)
+
+        return qs.order_by("-id")
     
     
     
@@ -1576,6 +1749,15 @@ class ChangeLeaveView(ModelViewSet): # for approving day wise APPROVAL — princ
         if instance.leave and instance.leave.staff and instance.leave.staff.user_id == request.user.id:
             return Response(
                 {"error": "Self-approval is strictly forbidden. Another authorized Principal or Trustee must approve this request."},
+                status=403,
+            )
+
+        app_cat = str(getattr(instance.leave.staff, "category", "") or "").strip().upper()
+        app_role = str(getattr(getattr(instance.leave.staff, "user", None), "role", "") or "").strip().upper()
+        req_role = str(getattr(request.user, "role", "") or "").strip().upper()
+        if (app_cat == "PRINCIPAL" or app_role == "PRINCIPAL") and (req_role in ["PRINCIPAL", "VICE PRINCIPAL"]):
+            return Response(
+                {"error": "Principal cannot approve Principal leave requests. Must be approved strictly by a Trustee."},
                 status=403,
             )
 
@@ -3297,6 +3479,7 @@ class BookIssuedView(CachedLibraryViewSetMixin, ModelViewSet):
                 loan_days = setting.issue_duration_days or 14
                 due_date = now + timezone.timedelta(days=loan_days)
 
+            created_records = []
             # Process students
             if clean_student_ids:
                 students_qs = Student.objects.filter(pk__in=clean_student_ids, school=school)
@@ -4287,7 +4470,13 @@ class ReportsView(ViewSet):
                     "due_penalty": float(accrued_penalty),
                 })
 
-        overdue_list.sort(key=lambda x: x["days_overdue"], reverse=True)
+        def _get_days_overdue(item: Any) -> int:
+            try:
+                return int(item.get("days_overdue", 0) or 0)
+            except Exception:
+                return 0
+
+        overdue_list.sort(key=_get_days_overdue, reverse=True)
 
         returned_qs = BookIssued.objects.filter(school=staff.school, status="RETURNED")
         total_returned = returned_qs.count()
@@ -4571,7 +4760,7 @@ class LibraryClearanceView(ViewSet):
                         "pending_fine_total": Decimal("0.00"),
                         "status": "PENDING"
                     }
-                students_map[s.id]["active_books_count"] += 1
+                students_map[s.id]["active_books_count"] = int(students_map[s.id]["active_books_count"]) + 1
 
             for fine in unpaid_fines:
                 s = fine.student
@@ -4589,7 +4778,7 @@ class LibraryClearanceView(ViewSet):
                         "pending_fine_total": Decimal("0.00"),
                         "status": "PENDING"
                     }
-                students_map[s.id]["pending_fine_total"] += due
+                students_map[s.id]["pending_fine_total"] = Decimal(str(students_map[s.id]["pending_fine_total"])) + due
 
             data = list(students_map.values())
             for item in data:

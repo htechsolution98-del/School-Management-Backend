@@ -532,15 +532,35 @@ class StaffSalaryComponentViewSet(ModelViewSet):
 
         return queryset.order_by("staff__name", "component__name")
 
+    def perform_create(self, serializer):
+        instance = serializer.save()
+        calc_base_val = self.request.data.get("calc_base") or self.request.data.get("calculate_on")
+        if calc_base_val and instance.component:
+            instance.component.calc_base = calc_base_val
+            instance.component.save(update_fields=["calc_base"])
+
+    def perform_update(self, serializer):
+        instance = serializer.save()
+        calc_base_val = self.request.data.get("calc_base") or self.request.data.get("calculate_on")
+        if calc_base_val and instance.component:
+            instance.component.calc_base = calc_base_val
+            instance.component.save(update_fields=["calc_base"])
+
     def create(self, request, *args, **kwargs):
         response = super().create(request, *args, **kwargs)
-
         staff = Staff.objects.filter(id=response.data.get("staff")).first()
+        calc_base_val = request.data.get("calc_base") or request.data.get("calculate_on")
         return Response(
             {
+                "id": response.data.get("id"),
                 "message": "Salary Component Created Successfully",
-                "staff": staff.name,
+                "staff": staff.name if staff else "",
+                "staff_id": response.data.get("staff"),
+                "component": response.data.get("component"),
                 "component_type": response.data.get("component_type"),
+                "calculation_type": response.data.get("calculation_type"),
+                "calc_base": calc_base_val or response.data.get("calc_base"),
+                "value": response.data.get("value"),
             }
         )
 
@@ -628,6 +648,22 @@ class StaffSalaryPaymentViewSet(ModelViewSet):
             queryset = queryset.filter(payment_status=payment_status)
 
         return queryset.order_by("-salary_month", "staff__name")
+
+    @action(detail=False, methods=["get"], url_path="preview", permission_classes=[IsAuthenticated])
+    def preview(self, request):
+        from sms_app.payroll_views import SalaryPreviewAPIView
+        return SalaryPreviewAPIView().get(request)
+
+    @action(detail=False, methods=["post"], url_path="bulk-generate", permission_classes=[IsAuthenticated, IsFeeManager])
+    def bulk_generate(self, request):
+        from sms_app.payroll_views import BulkSalaryGenerateAPIView
+        return BulkSalaryGenerateAPIView().post(request)
+
+    @action(detail=True, methods=["get"], url_path="payslip", permission_classes=[IsAuthenticated])
+    def payslip(self, request, pk=None):
+        from sms_app.payroll_views import PayslipDocumentView
+        return PayslipDocumentView().get(request, pk=pk)
+
 
 
 
