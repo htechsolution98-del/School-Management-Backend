@@ -693,6 +693,8 @@ class StudentFeeViewSet(ModelViewSet):
 
         student = self.request.query_params.get("student")
         school_class = self.request.query_params.get("school_class")
+        class_name = self.request.query_params.get("class_name")
+        search = self.request.query_params.get("search")
         academic_year = self.request.query_params.get("academic_year")
         feetype = self.request.query_params.get("feetype")
         status_value = self.request.query_params.get("status")
@@ -705,14 +707,36 @@ class StudentFeeViewSet(ModelViewSet):
             queryset = queryset.filter(student_id=student)
         if school_class:
             queryset = queryset.filter(student__school_class_id=school_class)
+        if class_name:
+            cn_clean = class_name.strip()
+            pure_name = re.sub(r'(?i)^class\s*', '', cn_clean).strip()
+            queryset = queryset.filter(
+                Q(student__school_class__school_class__iexact=cn_clean)
+                | Q(student__school_class__name__iexact=cn_clean)
+                | Q(student__school_class__school_class__iexact=pure_name)
+                | Q(student__school_class__name__iexact=pure_name)
+                | Q(fee_wise_class__school_class__school_class__iexact=cn_clean)
+                | Q(fee_wise_class__school_class__school_class__iexact=pure_name)
+                | Q(student__school_class__school_class__icontains=pure_name)
+            )
+        if search:
+            search_clean = search.strip()
+            queryset = queryset.filter(
+                Q(student__name__icontains=search_clean)
+                | Q(student__surname__icontains=search_clean)
+                | Q(student__father_name__icontains=search_clean)
+                | Q(student__gr_no__icontains=search_clean)
+                | Q(student__roll_number__icontains=search_clean)
+                | Q(feetype__name__icontains=search_clean)
+            )
         if academic_year:
             queryset = queryset.filter(academic_year_id=academic_year)
         if feetype:
             queryset = queryset.filter(feetype_id=feetype)
         if status_value:
             queryset = queryset.filter(status=status_value)
-        if billing_period is not None:
-            queryset = queryset.filter(billing_period=billing_period)
+        if billing_period and billing_period.strip():
+            queryset = queryset.filter(billing_period=billing_period.strip())
         if is_rte_govt_claim in ["true", "false"]:
             queryset = queryset.filter(is_rte_govt_claim=is_rte_govt_claim == "true")
         if rte_govt_status:
@@ -2486,15 +2510,17 @@ class AccountLedgerView(APIView):
         # Sort chronologically ascending to compute running balances
         items.sort(key=lambda x: (x["date"], x["timestamp"] or "", x["id"]))
 
-        running = float(opening_balance)
+        running: float = float(opening_balance)
         for item in items:
-            running += (item["inflow"] - item["outflow"])
+            inflow_val: float = float(item["inflow"])
+            outflow_val: float = float(item["outflow"])
+            running += (inflow_val - outflow_val)
             item["running_balance"] = round(running, 2)
 
-        total_inflow = sum(x["inflow"] for x in items)
-        total_outflow = sum(x["outflow"] for x in items)
-        net_change = total_inflow - total_outflow
-        closing_balance = float(opening_balance) + net_change
+        total_inflow: float = sum(float(x["inflow"]) for x in items)
+        total_outflow: float = sum(float(x["outflow"]) for x in items)
+        net_change: float = total_inflow - total_outflow
+        closing_balance: float = float(opening_balance) + net_change
 
         # Optional type filtering if user provided type query param
         type_filter = request.query_params.get("type")

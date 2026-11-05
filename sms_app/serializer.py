@@ -32,7 +32,7 @@ from django.utils import timezone
 from rest_framework import serializers
 from django.db import transaction
 from rest_framework import serializers
-from .models import FormField, Admission
+from .models import FormField, Admission, AssignClass, Staff
 import re
 from rest_framework import serializers
 from django.contrib.auth.hashers import check_password
@@ -715,7 +715,7 @@ class GetFeatureSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = SchoolFeature
-        fields = ["id", "created_at", "feature_id", "feature_name"]
+        fields = ["id", "created_at", "feature_id", "feature_name", "is_enabled"]
 
 
 from rest_framework import serializers
@@ -1201,6 +1201,44 @@ class CurrentUserProfileSerializer(serializers.ModelSerializer):
         staff = Staff.objects.filter(user=user).first()
         if not staff:
             return None
+
+        # Resolve class teacher status and assigned classes/divisions
+        class_teacher_data = None
+        assigned_classes_list = []
+        try:
+            from .models import AssignClass
+            assignments = (
+                AssignClass.objects.filter(teacher=staff)
+                .select_related("division", "division__SchoolClass", "subject")
+            )
+            for item in assignments:
+                div = item.division
+                sc = getattr(div, "SchoolClass", None) if div else None
+                c_name = getattr(sc, "school_class", "") if sc else ""
+                d_name = getattr(div, "division", "") if div else ""
+                full_cls = f"{c_name} - Div {d_name}".strip(" -")
+                sub_name = item.subject.name if item.subject else None
+
+                record = {
+                    "id": item.id,
+                    "class_name": c_name,
+                    "division": d_name,
+                    "full_class": full_cls,
+                    "subject": sub_name,
+                    "is_class_teacher": item.is_class_teacher,
+                }
+                assigned_classes_list.append(record)
+
+                if item.is_class_teacher and not class_teacher_data:
+                    class_teacher_data = {
+                        "class_name": c_name,
+                        "division": d_name,
+                        "full_class": full_cls,
+                        "subject": sub_name,
+                    }
+        except Exception:
+            pass
+
         return {
             "id": staff.id,
             "name": staff.name,
@@ -1209,6 +1247,9 @@ class CurrentUserProfileSerializer(serializers.ModelSerializer):
             "date_of_birth": staff.date_of_birth,
             "joining_date": staff.joining_date,
             "department": staff.department.name if staff.department else None,
+            "is_class_teacher": bool(class_teacher_data),
+            "class_teacher_of": class_teacher_data,
+            "assigned_classes": assigned_classes_list,
         }
 
     def get_student_profile(self, user):

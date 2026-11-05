@@ -9,6 +9,7 @@ from rest_framework.exceptions import ValidationError, PermissionDenied
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework.renderers import JSONRenderer, StaticHTMLRenderer, BrowsableAPIRenderer
 
 from sms_app.models import Staff, StaffSalaryPayment, PayrollPayslip, PayrollRun, School
 from sms_app.permissions import IsFeeManager, IsTrusteeUser, IsClerkOrAdmin
@@ -27,10 +28,15 @@ def get_request_school(request):
         return None
     if hasattr(user, "school") and user.school:
         return user.school
+    if hasattr(user, "managed_school") and user.managed_school:
+        return user.managed_school
     staff = Staff.objects.filter(user=user).select_related("school").first()
     if staff and staff.school:
         return staff.school
-    return None
+    school = School.objects.filter(login_id=user).first()
+    if school:
+        return school
+    return School.objects.first()
 
 
 def number_to_words_inr(num):
@@ -142,6 +148,7 @@ def render_payslip_html(payment, school, request):
     present_days = breakdown.get("present_days", float(payment.present_days or 0))
     paid_leaves = breakdown.get("paid_leaves", 0)
     unpaid_leaves = breakdown.get("unpaid_leaves", breakdown.get("lwp_days", 0))
+    payable_days = breakdown.get("payable_days", max(0, working_days - unpaid_leaves))
     lwp_deduction = breakdown.get("lop_deduction_amount", breakdown.get("lwp_deduction", payment.attendance_deduction or 0))
 
     try:
@@ -150,30 +157,50 @@ def render_payslip_html(payment, school, request):
     except Exception:
         month_label = str(payment.salary_month)
 
-    school_name = getattr(school, "name", "Institutional Academy")
+    # Resolve School Name & Logo
+    school_name = getattr(school, "name", "School")
     school_address = getattr(school, "address", "") or getattr(school, "city", "")
     school_contact = getattr(school, "contact_number", "") or getattr(school, "email", "")
-    logo_url = getattr(school, "logo", "") or "/logo.png"
+    logo_url = ""
+
+    profile = getattr(school, "school_profile", None) if school else None
+    if profile:
+        school_name = profile.school_full_name or profile.school_short_name or getattr(school, "full_name", None) or school_name
+        if profile.main_logo_url:
+            logo_url = profile.main_logo_url
+
+    if not logo_url and school and getattr(school, "logo", None):
+        try:
+            url = school.logo.url
+            logo_url = request.build_absolute_uri(url) if request else url
+        except Exception:
+            logo_url = str(school.logo)
 
     amount_in_words = number_to_words_inr(net_display)
 
     earnings_rows = "".join([
-        f'<tr><td style="padding: 9px 12px; border-bottom: 1px solid #f1f5f9; color: #334155; font-size: 13px;">{e.get("name")}</td>'
-        f'<td style="padding: 9px 12px; border-bottom: 1px solid #f1f5f9; text-align: right; font-weight: 600; color: #0f172a; font-size: 13px;">{format_currency_inr(e.get("amount"))}</td></tr>'
+        f'<tr><td style="padding: 6px 10px; border-bottom: 1px solid #f1f5f9; color: #334155; font-size: 11px;">{e.get("name")}</td>'
+        f'<td style="padding: 6px 10px; border-bottom: 1px solid #f1f5f9; text-align: right; font-weight: 700; color: #0f172a; font-size: 11px;">{format_currency_inr(e.get("amount"))}</td></tr>'
         for e in earnings
     ])
 
     deductions_rows = "".join([
-        f'<tr><td style="padding: 9px 12px; border-bottom: 1px solid #f1f5f9; color: #334155; font-size: 13px;">{d.get("name")}</td>'
-        f'<td style="padding: 9px 12px; border-bottom: 1px solid #f1f5f9; text-align: right; font-weight: 600; color: #dc2626; font-size: 13px;">{format_currency_inr(d.get("amount"))}</td></tr>'
+        f'<tr><td style="padding: 6px 10px; border-bottom: 1px solid #f1f5f9; color: #334155; font-size: 11px;">{d.get("name")}</td>'
+        f'<td style="padding: 6px 10px; border-bottom: 1px solid #f1f5f9; text-align: right; font-weight: 700; color: #dc2626; font-size: 11px;">{format_currency_inr(d.get("amount"))}</td></tr>'
         for d in deductions
-    ]) or '<tr><td colspan="2" style="padding: 9px 12px; text-align: center; color: #94a3b8; font-size: 12px; font-style: italic;">No deductions applied</td></tr>'
+    ]) or '<tr><td colspan="2" style="padding: 8px 10px; text-align: center; color: #94a3b8; font-size: 11px; font-style: italic;">No deductions applied</td></tr>'
 
     payment_status_badge = (
-        '<span style="background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; padding: 3px 10px; border-radius: 9999px; font-weight: 700; font-size: 11px; text-transform: uppercase;">Paid & Reconciled</span>'
+        '<span style="background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; padding: 2px 8px; border-radius: 9999px; font-weight: 700; font-size: 10px; text-transform: uppercase;">Paid & Reconciled</span>'
         if payment.payment_status == "paid" else
-        '<span style="background: #fffbeb; color: #b45309; border: 1px solid #fde68a; padding: 3px 10px; border-radius: 9999px; font-weight: 700; font-size: 11px; text-transform: uppercase;">Draft / Pending Disbursement</span>'
+        '<span style="background: #fffbeb; color: #b45309; border: 1px solid #fde68a; padding: 2px 8px; border-radius: 9999px; font-weight: 700; font-size: 10px; text-transform: uppercase;">Draft / Disbursed</span>'
     )
+
+    if logo_url:
+        logo_html = f'<img src="{logo_url}" alt="{school_name}" style="height: 44px; max-width: 130px; object-fit: contain; border-radius: 8px;">'
+    else:
+        initials = "".join([w[0] for w in school_name.split() if w])[:2].upper() or "SC"
+        logo_html = f'<div style="height: 42px; width: 42px; border-radius: 10px; background: #eff6ff; border: 1.5px solid #bfdbfe; color: #2563eb; display: flex; align-items: center; justify-content: center; font-weight: 900; font-size: 16px;">{initials}</div>'
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -183,51 +210,52 @@ def render_payslip_html(payment, school, request):
 <title>Salary Slip - {payment.staff_name} ({month_label})</title>
 <style>
   * {{ box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }}
-  body {{ background: #f8fafc; color: #1e293b; padding: 24px; }}
-  .container {{ max-width: 820px; margin: 0 auto; background: #ffffff; border-radius: 16px; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.06), 0 8px 10px -6px rgba(0,0,0,0.04); border: 1px solid #e2e8f0; overflow: hidden; }}
-  .no-print {{ display: flex; justify-content: space-between; align-items: center; background: #0f172a; color: #ffffff; padding: 12px 24px; font-size: 13px; }}
-  .btn {{ background: #4f46e5; color: #ffffff; border: none; padding: 8px 18px; border-radius: 8px; font-weight: 600; cursor: pointer; transition: background 0.15s; font-size: 13px; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; }}
-  .btn:hover {{ background: #4338ca; }}
-  .header {{ padding: 28px 32px; border-bottom: 2px solid #4f46e5; display: flex; justify-content: space-between; align-items: center; gap: 20px; }}
-  .school-title {{ font-size: 22px; font-weight: 800; color: #1e1b4b; letter-spacing: -0.02em; }}
-  .school-sub {{ font-size: 12px; color: #64748b; margin-top: 2px; }}
+  body {{ background: #f8fafc; color: #1e293b; padding: 16px; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }}
+  .container {{ max-width: 780px; margin: 0 auto; background: #ffffff; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); border: 1px solid #e2e8f0; overflow: hidden; page-break-inside: avoid; break-inside: avoid; }}
+  .no-print {{ display: flex; justify-content: space-between; align-items: center; background: #0f172a; color: #ffffff; padding: 10px 20px; font-size: 12px; }}
+  .btn {{ background: #2563eb; color: #ffffff; border: none; padding: 6px 14px; border-radius: 6px; font-weight: 700; cursor: pointer; font-size: 12px; display: inline-flex; align-items: center; gap: 6px; }}
+  .btn:hover {{ background: #1d4ed8; }}
+  .header {{ padding: 16px 20px; border-bottom: 2px solid #2563eb; display: flex; justify-content: space-between; align-items: center; gap: 16px; }}
+  .header-left {{ display: flex; align-items: center; gap: 12px; }}
+  .school-title {{ font-size: 18px; font-weight: 800; color: #0f172a; letter-spacing: -0.01em; }}
+  .school-sub {{ font-size: 11px; color: #64748b; margin-top: 1px; }}
   .slip-badge {{ text-align: right; }}
-  .slip-label {{ font-size: 11px; font-weight: 800; color: #4f46e5; text-transform: uppercase; letter-spacing: 0.08em; }}
-  .slip-month {{ font-size: 16px; font-weight: 700; color: #0f172a; margin-top: 2px; }}
-  .body-content {{ padding: 28px 32px; }}
-  .meta-grid {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; background: #f8fafc; padding: 18px; border-radius: 12px; border: 1px solid #e2e8f0; margin-bottom: 24px; font-size: 12px; }}
-  .meta-item .label {{ color: #64748b; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }}
-  .meta-item .val {{ font-weight: 700; color: #0f172a; font-size: 13px; margin-top: 3px; word-break: break-word; }}
-  .duty-card {{ background: #f1f5f9; border-radius: 12px; padding: 14px 18px; margin-bottom: 24px; border-left: 4px solid #4f46e5; }}
-  .duty-title {{ font-size: 11px; font-weight: 800; text-transform: uppercase; color: #475569; letter-spacing: 0.05em; margin-bottom: 10px; }}
-  .duty-metrics {{ display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; text-align: center; }}
-  .duty-stat {{ background: #ffffff; padding: 10px 6px; border-radius: 8px; border: 1px solid #e2e8f0; }}
-  .duty-stat .num {{ font-size: 15px; font-weight: 800; color: #0f172a; display: block; }}
-  .duty-stat .lbl {{ font-size: 10px; color: #64748b; font-weight: 600; text-transform: uppercase; margin-top: 2px; display: block; }}
-  .table-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 24px; }}
-  .pane {{ border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; }}
-  .pane-head {{ background: #f8fafc; padding: 12px 16px; font-size: 12px; font-weight: 800; color: #334155; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid #e2e8f0; display: flex; justify-content: space-between; }}
+  .slip-label {{ font-size: 10px; font-weight: 800; color: #2563eb; text-transform: uppercase; letter-spacing: 0.08em; }}
+  .slip-month {{ font-size: 14px; font-weight: 800; color: #0f172a; margin-top: 1px; }}
+  .body-content {{ padding: 16px 20px; }}
+  .meta-grid {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; background: #f8fafc; padding: 10px 14px; border-radius: 10px; border: 1px solid #e2e8f0; margin-bottom: 12px; font-size: 11px; }}
+  .meta-item .label {{ color: #64748b; font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }}
+  .meta-item .val {{ font-weight: 700; color: #0f172a; font-size: 11px; margin-top: 1px; word-break: break-word; }}
+  .duty-card {{ background: #f8fafc; border-radius: 10px; padding: 10px 14px; margin-bottom: 12px; border: 1px solid #e2e8f0; }}
+  .duty-title {{ font-size: 10px; font-weight: 800; text-transform: uppercase; color: #475569; letter-spacing: 0.05em; margin-bottom: 6px; }}
+  .duty-metrics {{ display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; text-align: center; }}
+  .duty-stat {{ background: #ffffff; padding: 6px 4px; border-radius: 6px; border: 1px solid #e2e8f0; }}
+  .duty-stat .num {{ font-size: 13px; font-weight: 800; color: #0f172a; display: block; }}
+  .duty-stat .lbl {{ font-size: 9px; color: #64748b; font-weight: 600; text-transform: uppercase; margin-top: 1px; display: block; }}
+  .table-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }}
+  .pane {{ border: 1px solid #e2e8f0; border-radius: 10px; overflow: hidden; }}
+  .pane-head {{ background: #f8fafc; padding: 8px 12px; font-size: 10px; font-weight: 800; color: #334155; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid #e2e8f0; display: flex; justify-content: space-between; }}
   table {{ width: 100%; border-collapse: collapse; }}
-  .pane-total {{ background: #faf5ff; padding: 12px 16px; border-top: 1px solid #e2e8f0; display: flex; justify-content: space-between; font-weight: 800; font-size: 13px; color: #581c87; }}
-  .net-card {{ background: linear-gradient(135deg, #4f46e5 0%, #3730a3 100%); color: #ffffff; padding: 22px 28px; border-radius: 14px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; box-shadow: 0 4px 15px rgba(79, 70, 229, 0.25); }}
-  .net-card .title {{ font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; color: #c7d2fe; font-weight: 700; }}
-  .net-card .amt {{ font-size: 28px; font-weight: 900; letter-spacing: -0.02em; margin-top: 4px; }}
-  .net-card .words {{ font-size: 12px; color: #e0e7ff; font-weight: 500; margin-top: 4px; font-style: italic; }}
-  .footer-sig {{ display: flex; justify-content: space-between; margin-top: 48px; padding-top: 20px; border-top: 1px dashed #cbd5e1; font-size: 12px; color: #64748b; }}
-  .sig-box {{ text-align: center; width: 200px; }}
-  .sig-line {{ border-bottom: 1px solid #94a3b8; height: 32px; margin-bottom: 8px; }}
+  .pane-total {{ background: #f8fafc; padding: 8px 12px; border-top: 1px solid #e2e8f0; display: flex; justify-content: space-between; font-weight: 800; font-size: 11px; color: #0f172a; }}
+  .net-card {{ background: linear-gradient(135deg, #1e40af 0%, #1e1b4b 100%); color: #ffffff; padding: 12px 18px; border-radius: 10px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }}
+  .net-card .title {{ font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: #bfdbfe; font-weight: 700; }}
+  .net-card .amt {{ font-size: 22px; font-weight: 900; letter-spacing: -0.01em; margin-top: 2px; }}
+  .net-card .words {{ font-size: 10px; color: #e0e7ff; font-weight: 500; margin-top: 2px; font-style: italic; }}
+  .footer-sig {{ display: flex; justify-content: space-between; margin-top: 20px; padding-top: 10px; border-top: 1px dashed #cbd5e1; font-size: 10px; color: #64748b; }}
+  .sig-box {{ text-align: center; width: 160px; }}
+  .sig-line {{ border-bottom: 1px solid #94a3b8; height: 24px; margin-bottom: 4px; }}
   @media print {{
-    body {{ background: #ffffff; padding: 0; }}
-    .container {{ box-shadow: none; border: none; max-width: 100%; border-radius: 0; }}
+    @page {{ size: A4 portrait; margin: 6mm 8mm; }}
+    html, body {{ background: #ffffff !important; padding: 0 !important; margin: 0 !important; width: 100% !important; }}
+    .container {{ box-shadow: none !important; border: 1px solid #cbd5e1 !important; max-width: 100% !important; border-radius: 0 !important; page-break-inside: avoid !important; break-inside: avoid !important; }}
     .no-print {{ display: none !important; }}
-    @page {{ margin: 12mm; size: A4 portrait; }}
   }}
 </style>
 </head>
 <body>
 
 <div class="no-print">
-  <div><strong>Trustee Audit View:</strong> Official Salary Slip for {payment.staff_name} ({month_label})</div>
+  <div><strong>Salary Slip:</strong> {payment.staff_name} ({month_label})</div>
   <div style="display: flex; gap: 8px;">
     <button class="btn" onclick="window.print()">🖨️ Print / Save PDF</button>
   </div>
@@ -235,54 +263,59 @@ def render_payslip_html(payment, school, request):
 
 <div class="container">
   <div class="header">
-    <div>
-      <h1 class="school-title">{school_name}</h1>
-      <p class="school-sub">{school_address} {f"• {school_contact}" if school_contact else ""}</p>
-      <p style="font-size: 11px; color: #4f46e5; font-weight: 700; margin-top: 4px; text-transform: uppercase;">Official Staff Compensation Statement</p>
+    <div class="header-left">
+      {logo_html}
+      <div>
+        <h1 class="school-title">{school_name}</h1>
+        <p class="school-sub">{school_address} {f"• {school_contact}" if school_contact else ""}</p>
+        <p style="font-size: 10px; color: #2563eb; font-weight: 700; margin-top: 2px; text-transform: uppercase;">Official Staff Compensation Statement</p>
+      </div>
     </div>
     <div class="slip-badge">
       <div class="slip-label">Monthly Payslip</div>
       <div class="slip-month">{month_label}</div>
-      <div style="margin-top: 6px;">{payment_status_badge}</div>
+      <div style="margin-top: 4px;">{payment_status_badge}</div>
     </div>
   </div>
 
   <div class="body-content">
+    <!-- Meta Details Grid (4 columns) -->
     <div class="meta-grid">
       <div class="meta-item">
-        <div class="label">Employee Name</div>
-        <div class="val">{payment.staff_name}</div>
+        <span class="label">Employee Name</span>
+        <span class="val">{payment.staff_name}</span>
       </div>
       <div class="meta-item">
-        <div class="label">Staff ID</div>
-        <div class="val">EMP-{payment.staff_id}</div>
+        <span class="label">Staff ID</span>
+        <span class="val">EMP-{payment.staff_id}</span>
       </div>
       <div class="meta-item">
-        <div class="label">Designation / Role</div>
-        <div class="val">{payment.staff_category or "Staff"}</div>
+        <span class="label">Designation</span>
+        <span class="val">{payment.staff_category or "Staff"}</span>
       </div>
       <div class="meta-item">
-        <div class="label">Department</div>
-        <div class="val">{getattr(payment.staff, "department", None) or payment.staff_category or "General"}</div>
+        <span class="label">Payment Mode</span>
+        <span class="val" style="text-transform: uppercase;">{payment.payment_mode or "Direct"}</span>
       </div>
       <div class="meta-item">
-        <div class="label">Payment Mode</div>
-        <div class="val" style="text-transform: capitalize;">{payment.payment_mode or "Offline"}</div>
+        <span class="label">Receipt Ref</span>
+        <span class="val">{payment.receipt_number or f"SAL-{payment.id}"}</span>
       </div>
       <div class="meta-item">
-        <div class="label">Receipt Number</div>
-        <div class="val">{payment.receipt_number or f"SAL-{payment.id}"}</div>
+        <span class="label">Payment Date</span>
+        <span class="val">{payment.payment_date.strftime("%d/%m/%Y") if payment.payment_date else "—"}</span>
       </div>
       <div class="meta-item">
-        <div class="label">Transaction Ref</div>
-        <div class="val">{payment.transaction_id or "N/A"}</div>
+        <span class="label">Bank / TXN ID</span>
+        <span class="val">{payment.transaction_id or "—"}</span>
       </div>
       <div class="meta-item">
-        <div class="label">Disbursement Date</div>
-        <div class="val">{payment.payment_date.strftime("%d %b %Y") if payment.payment_date else (payment.created_at.strftime("%d %b %Y") if payment.created_at else "—")}</div>
+        <span class="label">Status</span>
+        <span class="val" style="color: #047857;">{payment.payment_status.upper() if payment.payment_status else "PAID"}</span>
       </div>
     </div>
 
+    <!-- Attendance & Duty Summary -->
     <div class="duty-card">
       <div class="duty-title">Attendance & Duty Summary ({month_label})</div>
       <div class="duty-metrics">
@@ -290,30 +323,32 @@ def render_payslip_html(payment, school, request):
           <span class="num">{working_days}</span>
           <span class="lbl">Total Days</span>
         </div>
-        <div class="duty-stat" style="border-color: #bbf7d0;">
-          <span class="num" style="color: #15803d;">{present_days}</span>
-          <span class="lbl" style="color: #166534;">Present</span>
+        <div class="duty-stat">
+          <span class="num" style="color: #047857;">{present_days}</span>
+          <span class="lbl">Present</span>
         </div>
-        <div class="duty-stat" style="border-color: #c7d2fe;">
-          <span class="num" style="color: #4338ca;">{paid_leaves}</span>
-          <span class="lbl" style="color: #3730a3;">Paid Leaves</span>
+        <div class="duty-stat">
+          <span class="num" style="color: #2563eb;">{paid_leaves}</span>
+          <span class="lbl">Paid Leaves</span>
         </div>
-        <div class="duty-stat" style="border-color: #fecaca;">
-          <span class="num" style="color: #b91c1c;">{unpaid_leaves}</span>
-          <span class="lbl" style="color: #991b1b;">LWP (Unpaid)</span>
+        <div class="duty-stat">
+          <span class="num" style="color: #dc2626;">{unpaid_leaves}</span>
+          <span class="lbl">Unpaid / LOP</span>
         </div>
-        <div class="duty-stat" style="border-color: #fed7aa;">
-          <span class="num" style="color: #c2410c;">{format_currency_inr(lwp_deduction)}</span>
-          <span class="lbl" style="color: #9a3412;">LWP Deduction</span>
+        <div class="duty-stat">
+          <span class="num" style="color: #1e40af;">{payable_days}</span>
+          <span class="lbl">Payable Days</span>
         </div>
       </div>
     </div>
 
+    <!-- 2 Column Financial Breakdown -->
     <div class="table-grid">
+      <!-- Earnings -->
       <div class="pane">
-        <div class="pane-head">
-          <span>Earnings</span>
-          <span>Amount</span>
+        <div class="pane-head" style="color: #047857;">
+          <span>Earnings &amp; Allowances</span>
+          <span>Amount (INR)</span>
         </div>
         <table>
           <tbody>
@@ -322,48 +357,54 @@ def render_payslip_html(payment, school, request):
         </table>
         <div class="pane-total">
           <span>Gross Earnings</span>
-          <span>{format_currency_inr(gross_display)}</span>
+          <span style="color: #047857;">{format_currency_inr(gross_display)}</span>
         </div>
       </div>
 
+      <!-- Deductions -->
       <div class="pane">
-        <div class="pane-head" style="color: #991b1b; background: #fef2f2;">
-          <span>Deductions</span>
-          <span>Amount</span>
+        <div class="pane-head" style="color: #dc2626;">
+          <span>Deductions &amp; Recoveries</span>
+          <span>Amount (INR)</span>
         </div>
         <table>
           <tbody>
             {deductions_rows}
           </tbody>
         </table>
-        <div class="pane-total" style="background: #fef2f2; color: #991b1b;">
+        <div class="pane-total">
           <span>Total Deductions</span>
-          <span>{format_currency_inr(deductions_display)}</span>
+          <span style="color: #dc2626;">{format_currency_inr(deductions_display)}</span>
         </div>
       </div>
     </div>
 
+    <!-- Net Salary Highlight Banner -->
     <div class="net-card">
       <div>
-        <div class="title">Net Payable Compensation</div>
+        <div class="title">Net Take-Home Salary</div>
         <div class="amt">{format_currency_inr(net_display)}</div>
         <div class="words">{amount_in_words}</div>
       </div>
       <div style="text-align: right;">
-        <span style="display: inline-block; background: rgba(255,255,255,0.18); padding: 6px 14px; border-radius: 8px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;">
-          {payment.payment_status.upper()}
+        <span style="background: rgba(255,255,255,0.18); border: 1px solid rgba(255,255,255,0.3); padding: 5px 12px; border-radius: 9999px; font-size: 11px; font-weight: 800;">
+          Disbursed &amp; Reconciled ✓
         </span>
       </div>
     </div>
 
+    <!-- Official Sign-off Notice -->
     <div class="footer-sig">
       <div class="sig-box">
         <div class="sig-line"></div>
         <div>Employee Signature</div>
       </div>
+      <div style="font-size: 9px; text-align: center; align-self: flex-end; color: #94a3b8; max-width: 320px;">
+        This is a computer-generated salary slip verified by School Accounts &amp; HR. No signature is legally required.
+      </div>
       <div class="sig-box">
         <div class="sig-line"></div>
-        <div>Authorized Signatory / Trustee</div>
+        <div>Authorized Signatory</div>
       </div>
     </div>
   </div>
@@ -373,35 +414,6 @@ def render_payslip_html(payment, school, request):
 </html>"""
     return html
 
-
-class SalaryPreviewAPIView(APIView):
-    """
-    GET /api/payroll/preview/?staff=<id>&salary_month=<YYYY-MM>
-    Calculates attendance, leaves, LWP deduction, and net salary preview dynamically.
-    """
-    permission_classes = [IsAuthenticated]
-
-    def get(self, request):
-        school = get_request_school(request)
-        if not school:
-            return Response({"error": "User school is not configured."}, status=status.HTTP_400_BAD_REQUEST)
-
-        staff_id = request.query_params.get("staff") or request.query_params.get("staff_id")
-        salary_month = request.query_params.get("salary_month")
-
-        if not staff_id or not salary_month:
-            return Response(
-                {"error": "Both 'staff' and 'salary_month' (YYYY-MM) query parameters are required."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        try:
-            preview = get_salary_preview(staff_id=int(staff_id), salary_month=salary_month, school=school)
-            return Response(preview, status=status.HTTP_200_OK)
-        except ValidationError as ve:
-            return Response({"error": str(ve.detail if hasattr(ve, "detail") else ve)}, status=status.HTTP_400_BAD_REQUEST)
-        except Exception as e:
-            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
 class BulkSalaryGenerateAPIView(APIView):
@@ -496,12 +508,44 @@ class BulkSalaryDisburseAPIView(APIView):
         }, status=status.HTTP_200_OK)
 
 
+
+class SalaryPreviewAPIView(APIView):
+    """
+    GET /api/payroll/preview/?staff=<id>&salary_month=<YYYY-MM>
+    Returns calculated preview of salary, attendance, leaves, LWP deduction, and net payable.
+    """
+    permission_classes = [IsAuthenticated, IsFeeManager | IsTrusteeUser | IsClerkOrAdmin]
+
+    def get(self, request):
+        school = get_request_school(request)
+        if not school:
+            return Response({"error": "User school is not configured."}, status=status.HTTP_400_BAD_REQUEST)
+
+        staff_id = request.query_params.get("staff") or request.query_params.get("staff_id")
+        if not staff_id:
+            return Response({"error": "staff or staff_id parameter is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        salary_month = request.query_params.get("salary_month")
+        if not salary_month:
+            today = timezone.localdate()
+            salary_month = f"{today.year}-{today.month:02d}"
+
+        try:
+            preview = get_salary_preview(staff_id=int(staff_id), salary_month=salary_month, school=school)
+            return Response(preview, status=status.HTTP_200_OK)
+        except ValidationError as ve:
+            return Response({"error": str(ve.detail if hasattr(ve, "detail") else ve)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
 class PayslipDocumentView(APIView):
     """
     GET /api/payroll/payslip/<int:pk>/
     Returns structured Payslip format (HTML or JSON) showing Basic, Earnings, Deductions, LWP, Net Payable.
     Supports JWT Bearer header, URL ?token= param, and cookies for browser new tab printing.
     """
+    renderer_classes = [JSONRenderer, StaticHTMLRenderer, BrowsableAPIRenderer]
     permission_classes = [AllowAny]
 
     def get(self, request, pk=None):

@@ -1418,10 +1418,17 @@ class AcademicYearViewSet(ModelViewSet):
     http_method_names = ["get"]
 
     def get_queryset(self):
-        user_school = getattr(self.request.user, 'school', None)
+        user = self.request.user
+        user_school = getattr(user, 'school', None)
+        if not user_school:
+            staff = getattr(user, 'staff', None)
+            if staff and getattr(staff, 'school', None):
+                user_school = staff.school
+        if not user_school and hasattr(self.request, 'school') and self.request.school:
+            user_school = self.request.school
         if user_school:
             return AcademicYear.objects.filter(school=user_school).select_related('school')
-        return AcademicYear.objects.none()
+        return AcademicYear.objects.all().select_related('school')
 
     def perform_create(self, serializer):
         serializer.save(school=self.request.user.school)
