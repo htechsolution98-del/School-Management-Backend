@@ -1705,6 +1705,8 @@ class HomeworkSerializer(serializers.ModelSerializer):
     Teachers create homework for a division.
     """
 
+    description = serializers.CharField(required=False, allow_blank=True, default="")
+    attachment = serializers.FileField(required=False, allow_null=True)
     due_date = serializers.DateField(input_formats=["%d-%m-%Y", "%Y-%m-%d", "%d/%m/%Y", "%Y/%m/%d"])
     division_name = serializers.CharField(source="division.division", read_only=True)
     school_class_name = serializers.CharField(
@@ -1778,7 +1780,14 @@ class HomeworkSerializer(serializers.ModelSerializer):
         # Automatically set school and teacher from request
         if user:
             validated_data["school"] = getattr(user, "school", None)
-            validated_data["teacher"] = getattr(user, "staff", None)
+            teacher = None
+            try:
+                teacher = getattr(user, "staff", None)
+            except Exception:
+                pass
+            if not teacher:
+                teacher = Staff.objects.filter(user=user).first()
+            validated_data["teacher"] = teacher
 
         return super().create(validated_data)
 

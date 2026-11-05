@@ -365,7 +365,7 @@ class LeaveValidationService:
             if req_date in existing_by_date:
                 for existing in existing_by_date[req_date]:
                     ex_session = existing.session or ("FULL_DAY" if existing.day_weight == 1.0 else "FIRST_HALF")
-                    
+
                     if weight == Decimal("1.0") or existing.day_weight == Decimal("1.0"):
                         raise ValidationError(
                             f"Staff already has an active leave request on {req_date} (Status: {existing.status})."
@@ -646,6 +646,23 @@ class LeaveWorkflowService:
         ).first() or LeaveCycle.objects.filter(school=school, is_active=True).first()
 
         if not leave_cycle:
+            from ..models import AcademicYear
+            from datetime import date
+            ay = AcademicYear.objects.filter(school=school, is_active=True).first() or AcademicYear.objects.filter(school=school).order_by("-id").first()
+            if ay:
+                s_date = getattr(ay, "start_date", None) or date(timezone.now().year, 1, 1)
+                e_date = getattr(ay, "end_date", None) or date(timezone.now().year, 12, 31)
+                leave_cycle, _ = LeaveCycle.objects.get_or_create(
+                    school=school,
+                    name=getattr(ay, "name", f"{s_date.year}-{e_date.year}"),
+                    defaults={
+                        "start_date": s_date,
+                        "end_date": e_date,
+                        "is_active": True,
+                    }
+                )
+
+        if not leave_cycle:
             raise ValidationError("No active Leave Cycle found for this school.")
 
         balance = LeaveBalance.objects.select_for_update().filter(
@@ -694,6 +711,16 @@ class LeaveWorkflowService:
             balance.pending = max(Decimal("0.0"), Decimal(str(balance.pending or 0)) - leave_req.total_days)
             balance.used = Decimal(str(balance.used or 0)) + leave_req.total_days
             balance.save()
+
+            if not leave_req.is_half_day and lt:
+                srl = StaffRemainingLeave.objects.filter(
+                    staff=leave_req.staff,
+                    leave_type=lt
+                ).order_by("-id").first()
+                if srl and srl.remaining_leaves is not None:
+                    deduction = int(round(float(leave_req.total_days or 1.0)))
+                    srl.remaining_leaves = max(0, srl.remaining_leaves - deduction)
+                    srl.save(update_fields=["remaining_leaves"])
         else:
             # Release any reservation
             balance.pending = max(Decimal("0.0"), Decimal(str(balance.pending or 0)) - leave_req.total_days)

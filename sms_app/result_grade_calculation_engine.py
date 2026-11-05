@@ -27,9 +27,25 @@ class ResultCalculationEngine:
 
     @staticmethod
     def calculate_student_result(school, academic_year, student):
-        config = ResultWeightageConfig.objects.filter(
-            school=school, academic_year=academic_year, is_active=True
-        ).first()
+        # 1. Check class-specific custom weightage first
+        student_class = getattr(student, "student_class", None) or getattr(student, "school_class", None)
+        config = None
+        if student_class:
+            config = ResultWeightageConfig.objects.filter(
+                school=school, academic_year=academic_year, school_class=student_class, is_active=True
+            ).first()
+
+        # 2. Fall back to school-wide default weightage (school_class is null)
+        if not config:
+            config = ResultWeightageConfig.objects.filter(
+                school=school, academic_year=academic_year, school_class__isnull=True, is_active=True
+            ).first()
+
+        # 3. Fall back to any active weightage configuration for this year
+        if not config:
+            config = ResultWeightageConfig.objects.filter(
+                school=school, academic_year=academic_year, is_active=True
+            ).first()
 
         if not config:
             return {

@@ -542,7 +542,8 @@ class GetLeaveRequestSerializer(serializers.ModelSerializer):
             dept = getattr(staff, "department", None)
             if not dept and hasattr(staff, "department_obj") and staff.department_obj:
                 dept = getattr(staff.department_obj, "name", None)
-            data["staff_department"] = dept or getattr(staff, "role", None) or "General"
+            dept_name = getattr(dept, "name", None) or (str(dept) if dept else None)
+            data["staff_department"] = dept_name or getattr(staff, "role", None) or "General"
         else:
             data["staff_role"] = "Staff"
             data["staff_category"] = "General"

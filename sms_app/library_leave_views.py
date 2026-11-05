@@ -950,7 +950,7 @@ class LeaveTemplateViewSet(ModelViewSet):
 def _sync_staff_remaining_leave(lt_rec, school, academic_year=None):
     """
     Synchronize remaining leave records for all active staff in the category,
-    guaranteeing calculations and balances are immediately available for the active Academic Year.
+    guaranteeing calculations and balances are immediately available and accurate.
     """
     try:
         if not school or not lt_rec:
@@ -964,6 +964,9 @@ def _sync_staff_remaining_leave(lt_rec, school, academic_year=None):
         if not category_name:
             return
 
+        cat_str = str(category_name).strip()
+        cat_norm = cat_str.lower().replace("_", " ").replace("-", " ")
+
         ay = academic_year
         if not ay and lt_rec.leave_template:
             ay = lt_rec.leave_template.academic_year
@@ -971,32 +974,82 @@ def _sync_staff_remaining_leave(lt_rec, school, academic_year=None):
             ay = AcademicYear.objects.filter(school=school, is_active=True).first() or AcademicYear.objects.filter(school=school).order_by("-id").first()
 
         now = timezone.now()
-        quota = lt_rec.leave_num if lt_rec.leave_num is not None else int(lt_rec.allocation_count or 0)
-        staff_qs = Staff.objects.filter(school=school, category__iexact=category_name, is_active=True)
+        quota = int(lt_rec.allocation_count if lt_rec.allocation_count is not None and lt_rec.allocation_count > 0 else (lt_rec.leave_num or 0))
+
+        # Match staff case-insensitively with normalized category
+        staff_qs = Staff.objects.filter(school=school).filter(
+            Q(category__iexact=cat_str) |
+            Q(category__iexact=cat_norm) |
+            Q(category__iexact=cat_norm.replace(" ", "_")) |
+            Q(category__iexact=cat_norm.replace(" ", "-"))
+        )
+
+        cycle = LeaveCycle.objects.filter(
+            school=school, is_active=True
+        ).first() or LeaveCycle.objects.filter(school=school).order_by("-id").first()
+
         for staff_member in staff_qs:
-            srl, created = StaffRemainingLeave.objects.get_or_create(
+            # 1. Calculate actual approved used and pending days from LeaveRequest
+            approved_used = float(LeaveRequest.objects.filter(
+                staff=staff_member,
+                status__iexact="APPROVED"
+            ).filter(
+                Q(leave_type=lt_rec) | Q(dynamic_leave_type=lt_rec.id)
+            ).aggregate(total=Sum("total_days"))["total"] or 0.0)
+
+            pending_days = float(LeaveRequest.objects.filter(
+                staff=staff_member,
+                status__iexact="PENDING"
+            ).filter(
+                Q(leave_type=lt_rec) | Q(dynamic_leave_type=lt_rec.id)
+            ).aggregate(total=Sum("total_days"))["total"] or 0.0)
+
+            remaining_val = max(0, int(quota - approved_used))
+
+            # 2. Sync or Create StaffRemainingLeave
+            srl = StaffRemainingLeave.objects.filter(
                 school=school,
                 staff=staff_member,
-                academic_year=ay,
                 leave_type=lt_rec,
-                defaults={
-                    "leave_template": lt_rec.leave_template,
-                    "total_levaes": quota,
-                    "remaining_leaves": quota,
-                    "month": now.month,
-                    "year": now.year,
-                }
-            )
-            if not created:
-                old_total = srl.total_levaes or 0
-                diff = quota - old_total
+            ).order_by("-id").first()
+
+            if srl:
                 srl.total_levaes = quota
-                if diff > 0:
-                    srl.remaining_leaves = (srl.remaining_leaves or 0) + diff
-                elif diff < 0:
-                    srl.remaining_leaves = max(0, (srl.remaining_leaves or 0) + diff)
+                srl.remaining_leaves = remaining_val
                 srl.leave_template = lt_rec.leave_template
+                if ay and not srl.academic_year:
+                    srl.academic_year = ay
                 srl.save()
+            else:
+                StaffRemainingLeave.objects.create(
+                    school=school,
+                    staff=staff_member,
+                    academic_year=ay,
+                    leave_type=lt_rec,
+                    leave_template=lt_rec.leave_template,
+                    total_levaes=quota,
+                    remaining_leaves=remaining_val,
+                    month=now.month,
+                    year=now.year,
+                )
+
+            # 3. Sync or Create LeaveBalance if LeaveCycle exists
+            if cycle:
+                lb, _ = LeaveBalance.objects.get_or_create(
+                    staff=staff_member,
+                    leave_type=lt_rec,
+                    leave_cycle=cycle,
+                    defaults={
+                        "allocated": Decimal(str(quota)),
+                        "carry_forward": Decimal("0.0"),
+                        "used": Decimal(str(approved_used)),
+                        "pending": Decimal(str(pending_days)),
+                    }
+                )
+                lb.allocated = Decimal(str(quota))
+                lb.used = Decimal(str(approved_used))
+                lb.pending = Decimal(str(pending_days))
+                lb.save()
     except Exception as e:
         import logging
         logging.getLogger(__name__).warning(f"Error syncing StaffRemainingLeave: {e}")
@@ -1010,14 +1063,11 @@ class LeaveTypeViewSet(ModelViewSet):
     def get_queryset(self):
         school = get_clerk_school(self.request)
         
-        
         # Scope to the clerk's school via the template's school FK
         qs = LeaveType.objects.filter(
             leave_template__school=school
         ).select_related("leave_template", "category")
  
-        
-        
         # Optional filter: /leave-types/?template=5
         template_id = self.request.query_params.get("template")
         if template_id:
@@ -1072,6 +1122,10 @@ class LeaveTypeViewSet(ModelViewSet):
         code = str(data.get("code") or "").strip().upper() or None
         leave_num = int(data.get("leave_num") or 0)
         allocation_count = Decimal(str(data.get("allocation_count") or leave_num or 0.0))
+        if leave_num == 0 and allocation_count > 0:
+            leave_num = int(allocation_count)
+        elif allocation_count == 0 and leave_num > 0:
+            allocation_count = Decimal(str(leave_num))
 
         timeline_to_period = {
             "MONTHLY": "Monthly",
@@ -1089,6 +1143,49 @@ class LeaveTypeViewSet(ModelViewSet):
         if leave_unit not in ["FULL_DAY", "HALF_DAY"]:
             leave_unit = "FULL_DAY"
 
+        ROLE_ID_TO_NAME = {
+            1: "teacher",
+            2: "clerk",
+            3: "principal",
+            4: "librarian",
+            5: "vice principal",
+            6: "assistant clerk",
+            7: "transportation",
+            8: "fees management",
+            9: "inventory",
+        }
+
+        def get_cat_canonical_role(cat):
+            if not cat:
+                return None
+            fname = None
+            if hasattr(cat, "feature") and cat.feature:
+                fname = cat.feature.name
+            elif getattr(cat, "feature_name", None):
+                fname = cat.feature_name
+            if fname:
+                return fname.strip().lower().replace("_", " ").replace("-", " ")
+            return None
+
+        # Resolve each requested category_id to target info
+        requested_targets = []
+        for cat_id in category_ids:
+            cat_id_int = int(cat_id)
+            cat_obj = SchoolFeature.objects.filter(id=cat_id_int, school=school).first()
+            if not cat_obj:
+                cat_obj = SchoolFeature.objects.filter(id=cat_id_int).first()
+            role_name = ROLE_ID_TO_NAME.get(cat_id_int)
+            if not cat_obj and role_name:
+                cat_obj = SchoolFeature.objects.filter(school=school, feature__name__iexact=role_name).first() or \
+                          SchoolFeature.objects.filter(school=school, feature_name__iexact=role_name).first()
+            if cat_obj and not role_name:
+                role_name = get_cat_canonical_role(cat_obj)
+            requested_targets.append({
+                "input_id": cat_id_int,
+                "cat_obj": cat_obj,
+                "role_name": (role_name.lower() if role_name else "").strip(),
+            })
+
         from django.db import transaction
         try:
             with transaction.atomic():
@@ -1101,38 +1198,52 @@ class LeaveTypeViewSet(ModelViewSet):
                         leave_template=template,
                     ).select_for_update())
 
-                    existing_by_cat = {r.category_id: r for r in group}
+                    existing_by_sf_id = {}
+                    existing_by_role = {}
+                    for r in group:
+                        if r.category_id:
+                            existing_by_sf_id[r.category_id] = r
+                        r_role = get_cat_canonical_role(r.category)
+                        if r_role:
+                            existing_by_role[r_role] = r
 
                     # 1. Delete removed categories
                     for r in group:
-                        if r.category_id not in [int(c) for c in category_ids]:
+                        r_role = get_cat_canonical_role(r.category)
+                        is_retained = False
+                        for t in requested_targets:
+                            if t["cat_obj"] and r.category_id == t["cat_obj"].id:
+                                is_retained = True
+                                break
+                            if r.category_id == t["input_id"]:
+                                is_retained = True
+                                break
+                            if r_role and t["role_name"] and r_role == t["role_name"]:
+                                is_retained = True
+                                break
+                        if not is_retained:
+                            StaffRemainingLeave.objects.filter(leave_type=r).delete()
+                            LeaveBalance.objects.filter(leave_type=r).delete()
                             r.delete()
 
                     # 2. Update retained or create new
-                    for cat_id in category_ids:
-                        cat_id_int = int(cat_id)
-                        cat_obj = SchoolFeature.objects.filter(id=cat_id_int, school=school).first()
-                        if not cat_obj:
-                            cat_obj = SchoolFeature.objects.filter(id=cat_id_int).first()
-                        if not cat_obj:
-                            role_names = {
-                                1: "teacher",
-                                2: "clerk",
-                                3: "principal",
-                                4: "librarian",
-                                5: "vice principal",
-                                6: "assistant clerk",
-                                7: "transportation",
-                                8: "fees management",
-                                9: "inventory",
-                            }
-                            target_role = role_names.get(cat_id_int)
-                            if target_role:
-                                cat_obj = SchoolFeature.objects.filter(school=school, feature__name__iexact=target_role).first() or \
-                                          SchoolFeature.objects.filter(school=school, feature_name__iexact=target_role).first()
+                    updated_record_ids = set()
+                    for t in requested_targets:
+                        cat_obj = t["cat_obj"]
+                        target_role = t["role_name"]
+                        input_id = t["input_id"]
 
-                        if cat_id_int in existing_by_cat and existing_by_cat[cat_id_int].pk:
-                            lt_rec = existing_by_cat[cat_id_int]
+                        matched_rec = None
+                        if cat_obj and cat_obj.id in existing_by_sf_id:
+                            matched_rec = existing_by_sf_id[cat_obj.id]
+                        elif input_id in existing_by_sf_id:
+                            matched_rec = existing_by_sf_id[input_id]
+                        elif target_role and target_role in existing_by_role:
+                            matched_rec = existing_by_role[target_role]
+
+                        if matched_rec and matched_rec.pk and matched_rec.id not in updated_record_ids:
+                            lt_rec = matched_rec
+                            lt_rec.category = cat_obj or lt_rec.category
                             lt_rec.name = name
                             lt_rec.leave_type = leave_type_val
                             lt_rec.code = code
@@ -1143,9 +1254,11 @@ class LeaveTypeViewSet(ModelViewSet):
                             lt_rec.is_carry_forward = is_carry_forward
                             lt_rec.carry_forward = is_carry_forward
                             lt_rec.max_carry_forward = max_carry_forward
+                            lt_rec.leave_unit = leave_unit
                             lt_rec.save()
-                            _sync_staff_remaining_leave(lt_rec, school)
+                            _sync_staff_remaining_leave(lt_rec, school, template.academic_year if template else None)
                             saved_records.append(lt_rec)
+                            updated_record_ids.add(lt_rec.id)
                         else:
                             lt_rec = LeaveType.objects.create(
                                 leave_template=template,
@@ -1160,40 +1273,42 @@ class LeaveTypeViewSet(ModelViewSet):
                                 is_carry_forward=is_carry_forward,
                                 carry_forward=is_carry_forward,
                                 max_carry_forward=max_carry_forward,
+                                leave_unit=leave_unit,
                                 is_active=True,
                             )
                             _sync_staff_remaining_leave(lt_rec, school, template.academic_year if template else None)
                             saved_records.append(lt_rec)
+                            if lt_rec.id:
+                                updated_record_ids.add(lt_rec.id)
                 else:
                     # Create mode
-                    for cat_id in category_ids:
-                        cat_id_int = int(cat_id)
-                        cat_obj = SchoolFeature.objects.filter(id=cat_id_int, school=school).first()
-                        if not cat_obj:
-                            cat_obj = SchoolFeature.objects.filter(id=cat_id_int).first()
-                        if not cat_obj:
-                            role_names = {
-                                1: "teacher",
-                                2: "clerk",
-                                3: "principal",
-                                4: "librarian",
-                                5: "vice principal",
-                                6: "assistant clerk",
-                                7: "transportation",
-                                8: "fees management",
-                                9: "inventory",
-                            }
-                            target_role = role_names.get(cat_id_int)
-                            if target_role:
-                                cat_obj = SchoolFeature.objects.filter(school=school, feature__name__iexact=target_role).first() or \
-                                          SchoolFeature.objects.filter(school=school, feature_name__iexact=target_role).first()
+                    for t in requested_targets:
+                        cat_obj = t["cat_obj"]
+                        target_role = t["role_name"]
+                        input_id = t["input_id"]
 
-                        existing = LeaveType.objects.filter(
-                            leave_template=template,
-                            category_id=cat_id_int,
-                            leave_type=leave_type_val,
-                        ).first()
+                        existing = None
+                        if cat_obj:
+                            existing = LeaveType.objects.filter(
+                                leave_template=template,
+                                category=cat_obj,
+                                leave_type=leave_type_val,
+                            ).first()
+                        if not existing and input_id:
+                            existing = LeaveType.objects.filter(
+                                leave_template=template,
+                                category_id=input_id,
+                                leave_type=leave_type_val,
+                            ).first()
+                        if not existing and target_role:
+                            existing = LeaveType.objects.filter(
+                                leave_template=template,
+                                leave_type=leave_type_val,
+                            ).filter(
+                                Q(category__feature__name__iexact=target_role) ).first()
+
                         if existing:
+                            existing.category = cat_obj or existing.category
                             existing.name = name
                             existing.code = code
                             existing.leave_num = leave_num
@@ -1203,8 +1318,9 @@ class LeaveTypeViewSet(ModelViewSet):
                             existing.is_carry_forward = is_carry_forward
                             existing.carry_forward = is_carry_forward
                             existing.max_carry_forward = max_carry_forward
+                            existing.leave_unit = leave_unit
                             existing.save()
-                            _sync_staff_remaining_leave(existing, school)
+                            _sync_staff_remaining_leave(existing, school, template.academic_year if template else None)
                             saved_records.append(existing)
                         else:
                             lt_rec = LeaveType.objects.create(
@@ -1220,6 +1336,7 @@ class LeaveTypeViewSet(ModelViewSet):
                                 is_carry_forward=is_carry_forward,
                                 carry_forward=is_carry_forward,
                                 max_carry_forward=max_carry_forward,
+                                leave_unit=leave_unit,
                                 is_active=True,
                             )
                             _sync_staff_remaining_leave(lt_rec, school, template.academic_year if template else None)
@@ -1444,19 +1561,62 @@ class GetStaffRemainingleave(APIView): # perticular staff remaining leaves
         ).first() or LeaveCycle.objects.filter(school=school, is_active=True).first()
 
         leave_types = []
-        if staff.leave_template:
-            leave_types = list(staff.leave_template.leave_types.filter(is_active=True))
-        if not leave_types and staff.category and school:
+        staff_cat = (staff.category or "").strip()
+        staff_cat_norm = staff_cat.lower().replace("_", " ").replace("-", " ")
+
+        # 1. First priority: LeaveTypes explicitly assigned to this staff's category in this school
+        if staff_cat and school:
             leave_types = list(LeaveType.objects.filter(
                 leave_template__school=school,
-                category__feature__name__iexact=staff.category,
                 is_active=True
-            ))
+            ).filter(
+                Q(category__feature__name__iexact=staff_cat) |
+                Q(category__feature__name__iexact=staff_cat_norm) ).select_related("leave_template", "category").order_by("id"))
+
+        # 2. Second priority: If staff has an assigned template, its active leave types
+        if not leave_types and staff.leave_template:
+            leave_types = list(staff.leave_template.leave_types.filter(is_active=True).select_related("leave_template", "category").order_by("id"))
+
+        # 3. Third priority: All active leave types in school's active templates
         if not leave_types and school:
-            leave_types = list(LeaveType.objects.filter(leave_template__school=school, is_active=True))
+            leave_types = list(LeaveType.objects.filter(
+                leave_template__school=school,
+                leave_template__is_active=True,
+                is_active=True
+            ).select_related("leave_template", "category").order_by("id"))
+        if not leave_types and school:
+            leave_types = list(LeaveType.objects.filter(
+                leave_template__school=school,
+                is_active=True
+            ).select_related("leave_template", "category").order_by("id"))
+
+        # Deduplicate leave_types by ID preserving order
+        seen_ids = set()
+        unique_lts = []
+        for lt in leave_types:
+            if lt.id not in seen_ids:
+                seen_ids.add(lt.id)
+                unique_lts.append(lt)
 
         results = []
-        for lt in leave_types:
+        for lt in unique_lts:
+            quota = float(lt.allocation_count if lt.allocation_count is not None and lt.allocation_count > 0 else (lt.leave_num or 0))
+
+            # Query approved and pending days taken
+            approved_used = float(LeaveRequest.objects.filter(
+                staff=staff,
+                status__iexact="APPROVED"
+            ).filter(
+                Q(leave_type=lt) | Q(dynamic_leave_type=lt.id)
+            ).aggregate(total=Sum("total_days"))["total"] or 0.0)
+
+            pending_days = float(LeaveRequest.objects.filter(
+                staff=staff,
+                status__iexact="PENDING"
+            ).filter(
+                Q(leave_type=lt) | Q(dynamic_leave_type=lt.id)
+            ).aggregate(total=Sum("total_days"))["total"] or 0.0)
+
             balance = None
             if cycle:
                 balance, _ = LeaveBalance.objects.get_or_create(
@@ -1464,32 +1624,63 @@ class GetStaffRemainingleave(APIView): # perticular staff remaining leaves
                     leave_type=lt,
                     leave_cycle=cycle,
                     defaults={
-                        "allocated": Decimal(str(lt.allocation_count or lt.leave_num or 0)),
+                        "allocated": Decimal(str(quota)),
                         "carry_forward": Decimal("0.0"),
-                        "used": Decimal("0.0"),
-                        "pending": Decimal("0.0"),
+                        "used": Decimal(str(approved_used)),
+                        "pending": Decimal(str(pending_days)),
                     }
                 )
-            rem = float(balance.remaining) if balance else float(lt.allocation_count or lt.leave_num or 0)
-            allocated = float(balance.allocated) if balance else float(lt.allocation_count or lt.leave_num or 0)
-            carry_forward = float(balance.carry_forward) if balance else 0.0
-            used = float(balance.used) if balance else 0.0
-            pending = float(balance.pending) if balance else 0.0
+                if float(balance.allocated) != quota or float(balance.used) != approved_used or float(balance.pending) != pending_days:
+                    balance.allocated = Decimal(str(quota))
+                    balance.used = Decimal(str(approved_used))
+                    balance.pending = Decimal(str(pending_days))
+                    balance.save(update_fields=["allocated", "used", "pending"])
 
+            carry_forward = float(balance.carry_forward) if balance else 0.0
+            allocated = quota
+            total_leaves = allocated + carry_forward
+            rem = max(0.0, total_leaves - approved_used)
+
+            # Sync or update StaffRemainingLeave
+            srl = StaffRemainingLeave.objects.filter(staff=staff, leave_type=lt).order_by("-id").first()
+            if srl:
+                if srl.total_levaes != int(quota) or srl.remaining_leaves != int(rem):
+                    srl.total_levaes = int(quota)
+                    srl.remaining_leaves = int(rem)
+                    srl.leave_template = lt.leave_template
+                    srl.save(update_fields=["total_levaes", "remaining_leaves", "leave_template"])
+            else:
+                now = timezone.now()
+                ay = lt.leave_template.academic_year if lt.leave_template else None
+                if not ay:
+                    ay = AcademicYear.objects.filter(school=school, is_active=True).first()
+                srl = StaffRemainingLeave.objects.create(
+                    school=school,
+                    staff=staff,
+                    academic_year=ay,
+                    leave_type=lt,
+                    leave_template=lt.leave_template,
+                    total_levaes=int(quota),
+                    remaining_leaves=int(rem),
+                    month=now.month,
+                    year=now.year,
+                )
+
+            display_name = lt.name or lt.leave_type or "Leave"
             results.append({
-                "id": balance.id if balance else lt.id,
+                "id": balance.id if balance else (srl.id if srl else lt.id),
                 "staff": staff.id,
                 "staff_name": staff.name,
                 "leave_type": lt.id,
                 "leave_type_id": lt.id,
-                "leave_type_name": lt.name or lt.leave_type,
+                "leave_type_name": display_name,
                 "leave_unit": getattr(lt, "leave_unit", "FULL_DAY"),
                 "leave_template": lt.leave_template_id,
                 "allocated": allocated,
-                "total_levaes": allocated + carry_forward,
+                "total_levaes": total_leaves,
                 "carry_forward": carry_forward,
-                "used": used,
-                "pending": pending,
+                "used": approved_used,
+                "pending": pending_days,
                 "remaining": rem,
                 "remaining_leaves": rem,
                 "is_paid": lt.is_paid,
@@ -1605,7 +1796,27 @@ class CalculateLeaveDaysView(APIView):
         carry_forward = float(balance.carry_forward) if balance else 0.0
         used = float(balance.used) if balance else 0.0
         pending = float(balance.pending) if balance else 0.0
-        available = float(balance.available) if balance else allocated
+        if not balance:
+            srl = StaffRemainingLeave.objects.filter(staff=staff, leave_type=leave_type).order_by("-id").first()
+            if srl and srl.total_levaes:
+                allocated = float(srl.total_levaes)
+            approved_used = float(LeaveRequest.objects.filter(
+                staff=staff,
+                status__iexact="APPROVED"
+            ).filter(
+                Q(leave_type=leave_type) | Q(dynamic_leave_type=leave_type.id)
+            ).aggregate(total=Sum("total_days"))["total"] or 0.0)
+            pending_reqs = float(LeaveRequest.objects.filter(
+                staff=staff,
+                status__iexact="PENDING"
+            ).filter(
+                Q(leave_type=leave_type) | Q(dynamic_leave_type=leave_type.id)
+            ).aggregate(total=Sum("total_days"))["total"] or 0.0)
+            used = approved_used
+            pending = pending_reqs
+            available = max(0.0, allocated + carry_forward - used - pending)
+        else:
+            available = float(balance.available)
 
         has_sufficient_balance = True
         if leave_type.is_paid and not getattr(leave_type, "allow_negative_balance", False):

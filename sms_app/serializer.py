@@ -3476,17 +3476,46 @@ class GetAdmissionDataSerializer(serializers.ModelSerializer):
     gr_no = serializers.SerializerMethodField()
     division = serializers.SerializerMethodField()
     rte_documents = serializers.SerializerMethodField()
+    student_id = serializers.SerializerMethodField()
+    student_details = serializers.SerializerMethodField()
+
+    def get_student_id(self, obj):
+        st = getattr(obj, "student", None) or Student.objects.filter(admission=obj).first() or Student.objects.filter(admission_no=obj.admission_number).first() or (Student.objects.filter(gr_no=obj.gr_no).first() if getattr(obj, "gr_no", None) else None)
+        return st.id if st else None
+
+    def get_student_details(self, obj):
+        st = getattr(obj, "student", None) or Student.objects.filter(admission=obj).select_related("school_class").first() or Student.objects.filter(admission_no=obj.admission_number).select_related("school_class").first() or (Student.objects.filter(gr_no=obj.gr_no).select_related("school_class").first() if getattr(obj, "gr_no", None) else None)
+        if st:
+            return {
+                "id": st.id,
+                "surname": st.surname or "",
+                "name": st.name or "",
+                "father_name": st.father_name or "",
+                "mother_name": st.mother_name or "",
+                "date_of_birth": str(st.date_of_birth) if st.date_of_birth else "",
+                "gender": st.gender or "",
+                "mobile": st.mobile or "",
+                "school_class": st.school_class_id,
+                "school_class_name": st.school_class.school_class if st.school_class else "",
+                "division": str(st.division.division if hasattr(st.division, "division") else (st.division or "")),
+                "roll_no": st.roll_no or "",
+                "aadhar_number": st.aadhar_number or "",
+                "address": st.address or "",
+                "gr_no": st.gr_no or "",
+            }
+        return None
 
     def get_gr_no(self, obj):
         sv = StudentVerify.objects.filter(admission_number=obj.admission_number).first()
         if sv and sv.gr_no:
             return sv.gr_no
-        if hasattr(obj, "student") and obj.student and obj.student.gr_no:
-            return obj.student.gr_no
+        st = getattr(obj, "student", None) or Student.objects.filter(admission=obj).first() or Student.objects.filter(admission_no=obj.admission_number).first()
+        if st and st.gr_no:
+            return st.gr_no
         return getattr(obj, "gr_no", None)
 
     def get_division(self, obj):
-        st = Student.objects.filter(admission=obj).first()
+        st = getattr(obj, "student", None) or Student.objects.filter(admission=obj).first() or Student.objects.filter(admission_no=obj.admission_number).first() or (Student.objects.filter(gr_no=obj.gr_no).first() if getattr(obj, "gr_no", None) else None)
         if st and st.division:
             return st.division.division if hasattr(st.division, "division") else str(st.division)
         for fv in obj.field_values.all():
@@ -3518,6 +3547,8 @@ class GetAdmissionDataSerializer(serializers.ModelSerializer):
             "status",
             "gr_no",
             "division",
+            "student_id",
+            "student_details",
             "submitted_at",
             "is_rte",
             "field_values",
@@ -6715,6 +6746,8 @@ class HomeworkSerializer(serializers.ModelSerializer):
     Teachers create homework for a division.
     """
 
+    description = serializers.CharField(required=False, allow_blank=True, default="")
+    attachment = serializers.FileField(required=False, allow_null=True)
     due_date = serializers.DateField(input_formats=["%d-%m-%Y", "%Y-%m-%d", "%d/%m/%Y", "%Y/%m/%d"])
     division_name = serializers.CharField(source="division.division", read_only=True)
     school_class_name = serializers.CharField(
@@ -6786,8 +6819,16 @@ class HomeworkSerializer(serializers.ModelSerializer):
         user = request.user if request and request.user.is_authenticated else None
 
         # Automatically set school and teacher from request
-        validated_data["school"] = user.school
-        validated_data["teacher"] = user.staff if hasattr(user, "staff") else None
+        if user:
+            validated_data["school"] = getattr(user, "school", None)
+            teacher = None
+            try:
+                teacher = getattr(user, "staff", None)
+            except Exception:
+                pass
+            if not teacher:
+                teacher = Staff.objects.filter(user=user).first()
+            validated_data["teacher"] = teacher
 
         return super().create(validated_data)
 
