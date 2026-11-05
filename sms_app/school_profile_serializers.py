@@ -2,13 +2,15 @@ import re
 import json
 import datetime
 from rest_framework import serializers
-from .school_profile_models import SchoolProfile
+from django.core.validators import RegexValidator, MinLengthValidator, MaxLengthValidator
+from .school_profile_models import SchoolProfile, SchoolBankAccount
 
 INDIAN_MOBILE_REGEX = re.compile(r"^[6-9]\d{9}$")
 REPEATING_DIGITS_REGEX = re.compile(r"^([6-9])\1{9}$")
 EMAIL_REGEX = re.compile(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
 IFSC_REGEX = re.compile(r"^[A-Z]{4}0[A-Z0-9]{6}$")
-BANK_ACC_REGEX = re.compile(r"^\d{9,18}$")
+BANK_ACC_REGEX = re.compile(r"^\d{9,20}$")
+BANK_NAME_REGEX = re.compile(r"^[A-Za-z\s.\-]+$")
 PAN_REGEX = re.compile(r"^[A-Z]{5}[0-9]{4}[A-Z]{1}$")
 GSTIN_REGEX = re.compile(r"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$")
 MAX_ASSET_FILE_SIZE = 200 * 1024  # 204,800 bytes (200 KB)
@@ -30,6 +32,149 @@ ALLOWED_FAVICON_EXTENSIONS = ALLOWED_IMAGE_EXTENSIONS | {".ico"}
 
 
 
+
+class SchoolBankAccountSerializer(serializers.ModelSerializer):
+    """
+    Serializer for multiple SchoolBankAccount records under an institutional profile.
+    Strictly enforces account number (9-20 digits numeric), IFSC format (11 chars),
+    and account holder / bank name restrictions (3-100 characters, letters & basic punctuation).
+    """
+    purpose_label = serializers.CharField(source="get_account_purpose_display", read_only=True)
+    school_id = serializers.IntegerField(source="school_profile.school_id", read_only=True)
+
+    account_holder_name = serializers.CharField(
+        min_length=3,
+        max_length=100,
+        validators=[
+            RegexValidator(
+                regex=r"^[A-Za-z\s.\-]+$",
+                message="Account holder name can only contain alphabets, spaces, dots, and hyphens.",
+            ),
+            MinLengthValidator(3, message="Account holder name must be between 3 and 100 characters."),
+            MaxLengthValidator(100, message="Account holder name must be between 3 and 100 characters."),
+        ],
+        error_messages={
+            "min_length": "Account holder name must be between 3 and 100 characters.",
+            "max_length": "Account holder name must be between 3 and 100 characters.",
+            "blank": "Account holder name cannot be blank.",
+            "required": "Account holder name is required.",
+        }
+    )
+
+    bank_name = serializers.CharField(
+        min_length=3,
+        max_length=100,
+        validators=[
+            RegexValidator(
+                regex=r"^[A-Za-z\s.\-]+$",
+                message="Bank name can only contain alphabets, spaces, dots, and hyphens.",
+            ),
+            MinLengthValidator(3, message="Bank name must be between 3 and 100 characters."),
+            MaxLengthValidator(100, message="Bank name must be between 3 and 100 characters."),
+        ],
+        error_messages={
+            "min_length": "Bank name must be between 3 and 100 characters.",
+            "max_length": "Bank name must be between 3 and 100 characters.",
+            "blank": "Bank name cannot be blank.",
+            "required": "Bank name is required.",
+        }
+    )
+
+    account_number = serializers.CharField(
+        min_length=9,
+        max_length=20,
+        validators=[
+            RegexValidator(
+                regex=r"^\d+$",
+                message="Account number must be between 9 and 20 digits.",
+            ),
+            MinLengthValidator(9, message="Account number must be between 9 and 20 digits."),
+            MaxLengthValidator(20, message="Account number must be between 9 and 20 digits."),
+        ],
+        error_messages={
+            "min_length": "Account number must be between 9 and 20 digits.",
+            "max_length": "Account number must be between 9 and 20 digits.",
+            "blank": "Account number must be between 9 and 20 digits.",
+            "required": "Account number is required.",
+        }
+    )
+
+    ifsc_code = serializers.CharField(
+        min_length=11,
+        max_length=11,
+        validators=[
+            RegexValidator(
+                regex=r"^[A-Z]{4}0[A-Z0-9]{6}$",
+                message="Invalid format. Must be 11 characters with the 5th character as '0' (zero).",
+            ),
+            MinLengthValidator(11, message="Invalid format. Must be 11 characters with the 5th character as '0' (zero)."),
+            MaxLengthValidator(11, message="Invalid format. Must be 11 characters with the 5th character as '0' (zero)."),
+        ],
+        error_messages={
+            "min_length": "Invalid format. Must be 11 characters with the 5th character as '0' (zero).",
+            "max_length": "Invalid format. Must be 11 characters with the 5th character as '0' (zero).",
+            "blank": "Invalid format. Must be 11 characters with the 5th character as '0' (zero).",
+            "required": "IFSC code is required.",
+        }
+    )
+
+    class Meta:
+        model = SchoolBankAccount
+        fields = [
+            "id",
+            "school_profile",
+            "school_id",
+            "account_holder_name",
+            "bank_name",
+            "account_number",
+            "ifsc_code",
+            "branch_name",
+            "account_purpose",
+            "purpose_label",
+            "is_primary",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "school_profile", "school_id", "purpose_label", "created_at", "updated_at"]
+
+    def validate_account_holder_name(self, value):
+        clean = str(value or "").strip()
+        if len(clean) < 3 or len(clean) > 100:
+            raise serializers.ValidationError("Account holder name must be between 3 and 100 characters.")
+        if not re.match(r"^[A-Za-z\s.\-]+$", clean):
+            raise serializers.ValidationError("Account holder name can only contain alphabets, spaces, dots, and hyphens.")
+        return clean
+
+    def validate_bank_name(self, value):
+        clean = str(value or "").strip()
+        if len(clean) < 3 or len(clean) > 100:
+            raise serializers.ValidationError("Bank name must be between 3 and 100 characters.")
+        if not re.match(r"^[A-Za-z\s.\-]+$", clean):
+            raise serializers.ValidationError("Bank name can only contain alphabets, spaces, dots, and hyphens.")
+        return clean
+
+    def validate_account_number(self, value):
+        val_str = str(value or "").strip()
+        if not val_str or not re.match(r"^\d{9,20}$", val_str):
+            raise serializers.ValidationError("Account number must be between 9 and 20 digits.")
+        return val_str
+
+    def validate_ifsc_code(self, value):
+        clean = str(value or "").strip().upper()
+        if not clean or not re.match(r"^[A-Z]{4}0[A-Z0-9]{6}$", clean):
+            raise serializers.ValidationError(
+                "Invalid format. Must be 11 characters with the 5th character as '0' (zero)."
+            )
+        return clean
+
+    def validate_account_purpose(self, value):
+        clean = str(value or "FEES").strip().upper()
+        allowed = {"FEES", "SALARY", "GRANTS", "GENERAL"}
+        if clean not in allowed:
+            raise serializers.ValidationError(f"Invalid account purpose. Must be one of: {', '.join(allowed)}.")
+        return clean
+
+
 class SchoolProfileSerializer(serializers.ModelSerializer):
     """
     Serializer for SchoolProfile model covering institutional identity,
@@ -40,6 +185,8 @@ class SchoolProfileSerializer(serializers.ModelSerializer):
     school_code = serializers.CharField(source="school.code", read_only=True)
     phone_numbers = serializers.JSONField(required=False, allow_null=True)
     board_affiliation = serializers.JSONField(required=False, allow_null=True)
+    bank_accounts = SchoolBankAccountSerializer(many=True, read_only=True)
+    primary_bank_account = serializers.SerializerMethodField()
 
     class Meta:
         model = SchoolProfile
@@ -67,6 +214,8 @@ class SchoolProfileSerializer(serializers.ModelSerializer):
             "bank_account_no",
             "bank_ifsc",
             "bank_name",
+            "bank_accounts",
+            "primary_bank_account",
             # Media (Cloudinary URLs)
             "main_logo_url",
             "print_logo_url",
@@ -82,6 +231,12 @@ class SchoolProfileSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         read_only_fields = ["id", "school_id", "school_name", "school_code", "created_at", "updated_at"]
+
+    def get_primary_bank_account(self, obj):
+        primary = obj.bank_accounts.filter(is_primary=True).first() or obj.bank_accounts.first()
+        if primary:
+            return SchoolBankAccountSerializer(primary).data
+        return None
 
     def validate_school_full_name(self, value):
         if value is not None:
@@ -260,10 +415,8 @@ class SchoolProfileSerializer(serializers.ModelSerializer):
         clean = str(value).strip()
         if not clean:
             return ""
-        if not clean.isdigit():
-            raise serializers.ValidationError("Bank account number must contain only numeric characters.")
-        if not (9 <= len(clean) <= 18):
-            raise serializers.ValidationError("Bank account number must be between 9 and 18 digits.")
+        if not re.match(r"^\d{9,20}$", clean):
+            raise serializers.ValidationError("Account number must be between 9 and 20 digits.")
         return clean
 
     def validate_bank_ifsc(self, value):
@@ -274,7 +427,7 @@ class SchoolProfileSerializer(serializers.ModelSerializer):
             return ""
         if not IFSC_REGEX.match(clean):
             raise serializers.ValidationError(
-                "Invalid IFSC code. It must be exactly 11 characters in standard Indian format (e.g. HDFC0001234: 4 letters, '0', 6 alphanumeric characters)."
+                "Invalid format. Must be 11 characters with the 5th character as '0' (zero)."
             )
         return clean
 

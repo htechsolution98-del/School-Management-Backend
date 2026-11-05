@@ -1340,12 +1340,131 @@ class LeaveTemplate(models.Model):
     name = models.CharField(max_length=100, null=True, blank=True)
     time_line = models.CharField(max_length=20, choices=TIMELINE_CHOICES, null=True, blank=True)
     school = models.ForeignKey(School, on_delete=models.CASCADE, null=True)
+    academic_year = models.ForeignKey(
+        "AcademicYear",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="leave_templates",
+    )
     is_active = models.BooleanField(default=True)
     description = models.TextField(blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
     
     def __str__(self):
         return self.name or f"{self.school} - {self.time_line}"
+
+    def get_cycle_engine_data(self):
+        import calendar
+        from datetime import date
+        ay = self.academic_year
+        if not ay and self.school:
+            ay = AcademicYear.objects.filter(school=self.school, is_active=True).first() or AcademicYear.objects.filter(school=self.school).order_by("-id").first()
+        if not ay:
+            return {
+                "academic_year_id": None,
+                "academic_year_name": None,
+                "academic_year_range": None,
+                "session_start": None,
+                "session_end": None,
+                "timeline": self.time_line,
+                "current_cycle": None,
+                "cycle_blocks": [],
+            }
+        start_year = ay.get_start_year() or (ay.created_at.year if ay.created_at else date.today().year)
+        start_month = ay.start_month or 4
+        end_month = ay.end_month or 3
+        months = []
+        if start_month <= end_month:
+            for m in range(start_month, end_month + 1):
+                months.append((start_year, m))
+        else:
+            for m in range(start_month, 13):
+                months.append((start_year, m))
+            for m in range(1, end_month + 1):
+                months.append((start_year + 1, m))
+        if not months:
+            for m in range(1, 13):
+                months.append((start_year, m))
+
+        first_y, first_m = months[0]
+        last_y, last_m = months[-1]
+        _, last_day = calendar.monthrange(last_y, last_m)
+        session_start = date(first_y, first_m, 1)
+        session_end = date(last_y, last_m, last_day)
+        ay_range_str = f"{calendar.month_name[first_m]} {first_y} – {calendar.month_name[last_m]} {last_y}"
+
+        today = date.today()
+        timeline = (self.time_line or "ANNUAL").upper()
+        blocks = []
+        if timeline == "ANNUAL":
+            blocks.append({
+                "label": f"Annual Cycle ({first_y}-{last_y})",
+                "start_date": session_start.strftime("%Y-%m-%d"),
+                "end_date": session_end.strftime("%Y-%m-%d"),
+                "is_current": session_start <= today <= session_end,
+            })
+        elif timeline == "QUARTERLY":
+            for q_idx in range(4):
+                q_months = months[q_idx * 3 : (q_idx + 1) * 3]
+                if not q_months:
+                    continue
+                qy_start, qm_start = q_months[0]
+                qy_end, qm_end = q_months[-1]
+                _, q_last_day = calendar.monthrange(qy_end, qm_end)
+                q_start_date = date(qy_start, qm_start, 1)
+                q_end_date = date(qy_end, qm_end, q_last_day)
+                blocks.append({
+                    "label": f"Q{q_idx + 1}: {calendar.month_abbr[qm_start]} {qy_start} – {calendar.month_abbr[qm_end]} {qy_end}",
+                    "start_date": q_start_date.strftime("%Y-%m-%d"),
+                    "end_date": q_end_date.strftime("%Y-%m-%d"),
+                    "is_current": q_start_date <= today <= q_end_date,
+                })
+        elif timeline == "SEMI_ANNUAL":
+            for h_idx in range(2):
+                h_months = months[h_idx * 6 : (h_idx + 1) * 6]
+                if not h_months:
+                    continue
+                hy_start, hm_start = h_months[0]
+                hy_end, hm_end = h_months[-1]
+                _, h_last_day = calendar.monthrange(hy_end, hm_end)
+                h_start_date = date(hy_start, hm_start, 1)
+                h_end_date = date(hy_end, hm_end, h_last_day)
+                blocks.append({
+                    "label": f"H{h_idx + 1}: {calendar.month_abbr[hm_start]} {hy_start} – {calendar.month_abbr[hm_end]} {hy_end}",
+                    "start_date": h_start_date.strftime("%Y-%m-%d"),
+                    "end_date": h_end_date.strftime("%Y-%m-%d"),
+                    "is_current": h_start_date <= today <= h_end_date,
+                })
+        else:
+            for idx, (my, mm) in enumerate(months):
+                _, m_last_day = calendar.monthrange(my, mm)
+                m_start_date = date(my, mm, 1)
+                m_end_date = date(my, mm, m_last_day)
+                blocks.append({
+                    "label": f"Month {idx + 1}: {calendar.month_name[mm]} {my}",
+                    "start_date": m_start_date.strftime("%Y-%m-%d"),
+                    "end_date": m_end_date.strftime("%Y-%m-%d"),
+                    "is_current": m_start_date <= today <= m_end_date,
+                })
+
+        current_block = next((b for b in blocks if b["is_current"]), None)
+        if not current_block and blocks:
+            if today < session_start:
+                current_block = blocks[0]
+            elif today > session_end:
+                current_block = blocks[-1]
+
+        return {
+            "academic_year_id": ay.id,
+            "academic_year_name": ay.name,
+            "academic_year_range": ay_range_str,
+            "session_start": session_start.strftime("%Y-%m-%d"),
+            "session_end": session_end.strftime("%Y-%m-%d"),
+            "timeline": timeline,
+            "current_cycle": current_block,
+            "cycle_blocks": blocks,
+        }
     
     class Meta:
         db_table = "leave_template"
@@ -1369,6 +1488,12 @@ class LeaveType(models.Model):
         ("NONE", "None"),
     ]
 
+    LEAVE_UNIT_CHOICES = [
+        ("FULL_DAY", "Full Day (1.0)"),
+        ("HALF_DAY", "Half Day (0.5)"),
+    ]
+
+    leave_unit = models.CharField(max_length=20, choices=LEAVE_UNIT_CHOICES, default="FULL_DAY")
     leave_type = models.CharField(max_length=100, null=True, blank=True)
     leave_template = models.ForeignKey(LeaveTemplate, on_delete=models.CASCADE, null=True, blank=True, related_name="leave_types")
     leave_num = models.IntegerField(null=True, blank=True)
@@ -1382,7 +1507,6 @@ class LeaveType(models.Model):
     allocation_period = models.CharField(max_length=20, choices=ALLOCATION_PERIOD_CHOICES, default="Yearly")
     carry_forward = models.BooleanField(default=False)
     max_carry_forward = models.PositiveIntegerField(default=0)
-    allow_encashment = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
 
     # Advanced policy settings
@@ -1477,9 +1601,18 @@ class LeaveRequest(models.Model):
     total_days = models.DecimalField(
         max_digits=5, decimal_places=1, default=Decimal("1.0"), null=True, blank=True
     )
+    days_count = models.DecimalField(
+        max_digits=5, decimal_places=1, default=Decimal("1.0"), null=True, blank=True
+    )
     is_half_day = models.BooleanField(default=False)
     half_day_session = models.CharField(
         max_length=20, choices=HALF_DAY_SESSION_CHOICES, default="FULL_DAY"
+    )
+    half_day_period = models.CharField(
+        max_length=20,
+        choices=[("FIRST_HALF", "First Half"), ("SECOND_HALF", "Second Half")],
+        null=True,
+        blank=True,
     )
 
     reason = models.TextField(null=True, blank=True)
@@ -1522,6 +1655,22 @@ class LeaveRequest(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
 
     def save(self, *args, **kwargs):
+        if self.is_half_day:
+            self.total_days = Decimal("0.5")
+            self.days_count = Decimal("0.5")
+            if self.half_day_period and (not self.half_day_session or self.half_day_session == "FULL_DAY"):
+                self.half_day_session = self.half_day_period
+            elif self.half_day_session and not self.half_day_period:
+                self.half_day_period = self.half_day_session
+        else:
+            if self.start_date and self.end_date:
+                diff = (self.end_date - self.start_date).days + 1
+                if diff > 0:
+                    self.total_days = Decimal(str(diff))
+                    self.days_count = Decimal(str(diff))
+            elif not self.days_count and self.total_days:
+                self.days_count = self.total_days
+
         if self.dynamic_leave_type and not self.leave_type:
             self.leave_type = self.dynamic_leave_type
         elif self.leave_type and not self.dynamic_leave_type:
@@ -1577,6 +1726,13 @@ class StaffRemainingLeave(models.Model):
         School, on_delete=models.CASCADE, null=True, blank=True, db_index=True
     )
     staff = models.ForeignKey(Staff, on_delete=models.CASCADE, null=True, blank=True)
+    academic_year = models.ForeignKey(
+        "AcademicYear",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="staff_remaining_leaves",
+    )
     leave_template = models.ForeignKey(
         LeaveTemplate, on_delete=models.CASCADE, null=True, blank=True
     )
@@ -1597,6 +1753,7 @@ class StaffRemainingLeave(models.Model):
 
     class Meta:
         db_table = "staff_remaining_leave"
+        unique_together = ("staff", "academic_year", "leave_type")
 
 
 class LeaveBalance(models.Model):
@@ -2386,15 +2543,75 @@ class StaffSalaryPayment(models.Model):
     @property
     def component_breakdown(self):
         try:
-            payslip = PayrollPayslip.objects.filter(
-                staff=self.staff,
-                payroll_run__salary_month__startswith=self.salary_month,
-            ).first()
-            if payslip:
-                return payslip.component_breakdown
+            parts = str(self.salary_month).strip().split('-')
+            if len(parts) == 2:
+                year, month = int(parts[0]), int(parts[1])
+                from datetime import date
+                m_date = date(year, month, 1)
+                payslip = PayrollPayslip.objects.filter(
+                    staff=self.staff,
+                    payroll_run__salary_month=m_date,
+                ).first()
+                if payslip and payslip.component_breakdown:
+                    return payslip.component_breakdown
         except Exception:
             pass
-        return None
+
+        # Fallback: Reconstruct rich breakdown from snapshot and payment record fields
+        earnings = []
+        deductions = []
+        if self.component_snapshot and isinstance(self.component_snapshot, list):
+            for item in self.component_snapshot:
+                if isinstance(item, dict):
+                    c_type = (item.get('component_type') or item.get('type', 'earning')).lower()
+                    formatted = {
+                        'name': item.get('name') or item.get('component_name', ''),
+                        'amount': float(item.get('amount', 0)),
+                        'type': c_type,
+                    }
+                    if c_type == 'earning':
+                        earnings.append(formatted)
+                    else:
+                        deductions.append(formatted)
+
+        has_basic = any('basic' in (e.get('name') or '').lower() for e in earnings)
+        if not has_basic and self.basic_salary and float(self.basic_salary) > 0:
+            earnings.insert(0, {
+                'name': 'Basic Salary',
+                'amount': float(self.basic_salary),
+                'type': 'earning',
+            })
+
+        gross = float(self.total_earnings or 0)
+        if gross <= 0 and earnings:
+            gross = sum(float(e.get('amount', 0)) for e in earnings)
+        elif gross <= 0:
+            gross = float(self.basic_salary or 0)
+
+        tot_ded = float(self.total_deductions or 0)
+        if tot_ded <= 0 and deductions:
+            tot_ded = sum(float(d.get('amount', 0)) for d in deductions)
+
+        net = float(self.net_salary or 0)
+        if net <= 0:
+            net = max(0.0, gross - tot_ded)
+
+        return {
+            'earnings': earnings,
+            'deductions': deductions,
+            'basic_salary': float(self.basic_salary or 0),
+            'gross_earnings': gross,
+            'total_deductions': tot_ded,
+            'net_salary': net,
+            'working_days': self.working_days or 30,
+            'present_days': float(self.present_days or 0),
+            'absent_days': float(self.absent_days or 0),
+            'unpaid_leaves': float(self.absent_days or 0),
+            'lwp_days': float(self.absent_days or 0),
+            'payable_days': float(self.present_days or 0),
+            'lop_deduction_amount': float(self.attendance_deduction or 0),
+            'lwp_deduction': float(self.attendance_deduction or 0),
+        }
 
 
 #  ITS FOR TIME TABLE
@@ -4497,4 +4714,4 @@ from .id_card_models import IDCardTemplate, IDCardRecord, IDCardLog
 
 
 
-from .school_profile_models import SchoolProfile
+from .school_profile_models import SchoolProfile, SchoolBankAccount

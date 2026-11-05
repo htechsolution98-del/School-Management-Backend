@@ -228,6 +228,26 @@ class HasModuleAccess(BasePermission):
         ).exists()
 
 
+class IsTrusteeUser(BasePermission):
+    """
+    Grants access strictly to Trustee and Administrator roles.
+    Restricts sensitive operations (e.g. final monthly payroll execution, lock, and publish).
+    """
+    def has_permission(self, request, view):
+        user = getattr(request, "user", None)
+        if not user or not user.is_authenticated:
+            return False
+        if getattr(user, "is_superuser", False):
+            return True
+        role = str(getattr(user, "role", "") or "").strip().upper()
+        if role in ["ADMIN(TRUSTEE)", "TRUSTEE", "ADMIN", "SUPERADMIN", "SUPER_ADMIN"]:
+            return True
+        staff = getattr(user, "staff", None)
+        if staff and str(getattr(staff, "category", "") or "").strip().upper() in ["TRUSTEE", "ADMIN"]:
+            return True
+        return user.groups.filter(name__in=["admin(trustee)", "trustee", "Trustee", "ADMIN(TRUSTEE)", "ADMIN", "admin"]).exists()
+
+
 class IsAdminTrusteeOrPrincipal(BasePermission):
     def has_permission(self, request, view):
         user = getattr(request, "user", None)
@@ -421,8 +441,7 @@ class IsLibrarian(BasePermission):
 class IsClerkOrReadOnly(BasePermission):
     """
     Allows read (GET, HEAD, OPTIONS) to any authenticated user.
-    Restricts write/create/update/delete strictly to Clerk roles and Administrators.
-    Principal, Trustee, Teacher, etc. cannot create or modify.
+    Allows write/create/update/delete to Clerk, Trustee, and Administrator roles.
     """
     def has_permission(self, request, view):
         user = getattr(request, 'user', None)
@@ -433,12 +452,16 @@ class IsClerkOrReadOnly(BasePermission):
         if getattr(user, 'is_superuser', False) or getattr(user, 'is_staff', False):
             return True
         role = str(getattr(user, "role", "") or "").strip().upper()
-        if role in CLERK_ROLES or role in ["ADMIN", "SUPERADMIN", "SUPER_ADMIN"]:
+        if role in CLERK_ROLES or role in ["ADMIN", "SUPERADMIN", "SUPER_ADMIN", "TRUSTEE", "ADMIN(TRUSTEE)", "PRINCIPAL"]:
             return True
         staff = getattr(user, "staff", None)
-        if staff and str(getattr(staff, "category", "") or "").strip().upper() in CLERK_ROLES:
+        if staff and str(getattr(staff, "category", "") or "").strip().upper() in (CLERK_ROLES + ["TRUSTEE", "ADMIN", "PRINCIPAL"]):
             return True
-        return user.groups.filter(name__in=CLERK_GROUPS + ["ADMIN", "admin"]).exists()
+        return (
+            user.groups.filter(name__iexact='trustee').exists()
+            or user.groups.filter(name__iexact='admin(trustee)').exists()
+            or user.groups.filter(name__in=CLERK_GROUPS + ["ADMIN", "admin", "trustee", "admin(trustee)", "Trustee", "PRINCIPAL", "principal"]).exists()
+        )
 
 
 class IsFeeTypePermission(BasePermission):

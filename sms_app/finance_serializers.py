@@ -246,6 +246,9 @@ class StaffSalaryComponentSerializer(serializers.ModelSerializer):
     component_type = serializers.CharField(
         source="component.component_type", read_only=True
     )
+    calc_base = serializers.CharField(
+        source="component.calc_base", required=False, allow_blank=True, allow_null=True
+    )
 
     class Meta:
         model = StaffSalaryComponent
@@ -257,6 +260,7 @@ class StaffSalaryComponentSerializer(serializers.ModelSerializer):
             "component_name",
             "component_type",
             "calculation_type",
+            "calc_base",
             "value",
             "is_active",
             "created_at",
