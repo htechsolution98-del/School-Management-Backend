@@ -216,7 +216,8 @@ from itertools import cycle
 
 def assign_student_divisions():
 
-    # Get all classes
+    # Fill divisions only for unassigned students. Rebalancing every student
+    # whenever a division is created silently changes existing class rosters.
     classes = SchoolClass.objects.all()
 
     for school_class in classes:
@@ -234,7 +235,9 @@ def assign_student_divisions():
 
         # Get students of this class
         students = list(
-            Student.objects.filter(school_class=school_class).order_by("created_at")
+            Student.objects.filter(school_class=school_class)
+            .filter(Q(division__isnull=True) | Q(division=""))
+            .order_by("created_at", "id")
         )
 
         if not students:
@@ -244,9 +247,19 @@ def assign_student_divisions():
         # Optional: shuffle students for random distribution
         # random.shuffle(students)
 
-        # Assign divisions (round-robin)
-        for index, student in enumerate(students):
-            student.division = divisions[index % division_len].division
+        # Place only unassigned students into the currently least populated
+        # division, preserving all existing placements.
+        counts = {
+            division.id: Student.objects.filter(
+                school_class=school_class,
+                division__iexact=division.division,
+            ).count()
+            for division in divisions
+        }
+        for student in students:
+            target = min(divisions, key=lambda division: (counts[division.id], division.id))
+            student.division = target.division
+            counts[target.id] += 1
 
         # Bulk update for performance
         Student.objects.bulk_update(students, ["division"])
@@ -377,6 +390,15 @@ def get_student_fee_for_online_payment(user, student_fee_id):
         ).get(id=student_fee_id, student=student, school=student.school)
         return student_fee, student.school
 
+    parent_student_ids = Perents.objects.filter(user=user).values_list(
+        "perents_of_id", flat=True
+    )
+    if parent_student_ids.exists():
+        student_fee = StudentFee.objects.select_related(
+            "student", "feetype", "school"
+        ).get(id=student_fee_id, student_id__in=parent_student_ids)
+        return student_fee, student_fee.school
+
     school = getattr(user, "school", None)
     if not school:
         raise StudentFee.DoesNotExist
@@ -399,6 +421,12 @@ def get_student_fee_payment_for_online_verify(user, order_id):
 
     if student:
         return queryset.get(student=student, school=student.school)
+
+    parent_student_ids = Perents.objects.filter(user=user).values_list(
+        "perents_of_id", flat=True
+    )
+    if parent_student_ids.exists():
+        return queryset.get(student_id__in=parent_student_ids)
 
     school = getattr(user, "school", None)
     if not school:

@@ -20,7 +20,7 @@ from decimal import Decimal
 import re
 from django.core.cache import cache
 from django.db import transaction
-from django.db.models import Q, Sum
+from django.db.models import Count, Q, Sum
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.decorators import api_view, permission_classes, action
 from sms_app.finance_serializers import (
@@ -42,8 +42,13 @@ class FeeVerifyView(ModelViewSet):
             if staff and staff.school:
                 school = staff.school
         return Admission.objects.filter(
-            pay_process=True, school=school
-        )
+            school=school,
+        ).filter(
+            Q(pay_process=True)
+            | Q(admission_number__in=AdmissionFee.objects.filter(
+                paid_at__isnull=False,
+            ).values("admission_number"))
+        ).distinct()
 
     def update(self, request, *args, **kwargs):
         response = super().update(request, *args, **kwargs)
@@ -152,6 +157,7 @@ class RazorpayOrderView(APIView):
                 # Save fee in admission
                 admission.fee_amount = fee_amount
                 admission.save()
+                school = getattr(self.request.user, "school", None) or getattr(admission, "school", None)
 
                 # Get or create unverified fee record
                 admission_fee = AdmissionFee.objects.filter(
@@ -163,13 +169,14 @@ class RazorpayOrderView(APIView):
                     admission_fee = AdmissionFee.objects.create(
                         amount=int(fee_amount),
                         admission_number=admission_number,
+                        school=school,
                     )
                 else:
                     admission_fee.amount = int(fee_amount)
+                    admission_fee.school = school
                     admission_fee.save()
 
                 #   ============FOR INDIVIDUAL SCHOOL =============
-                school = getattr(self.request.user, "school", None) or getattr(admission, "school", None)
                 client_to_use, key_id_to_use, _ = get_school_razorpay(school)
 
                 # Create Razorpay Order
@@ -854,7 +861,11 @@ class StudentFeePaymentViewSet(ModelViewSet):
 
         user_role = str(getattr(user, "role", "")).upper()
         if user_role == "STUDENT" or hasattr(user, "student") or Student.objects.filter(user=user).exists():
-            queryset = queryset.filter(student__user=user)
+            queryset = queryset.filter(
+                student__user=user,
+                is_verified=True,
+                is_bounced=False,
+            )
 
         student_fee = self.request.query_params.get("student_fee")
         student = self.request.query_params.get("student")
@@ -862,6 +873,7 @@ class StudentFeePaymentViewSet(ModelViewSet):
         feetype = self.request.query_params.get("feetype")
         payment_mode = self.request.query_params.get("payment_mode")
         is_verified = self.request.query_params.get("is_verified")
+        is_bounced = self.request.query_params.get("is_bounced")
         date_from = self.request.query_params.get("date_from")
         date_to = self.request.query_params.get("date_to")
 
@@ -885,6 +897,8 @@ class StudentFeePaymentViewSet(ModelViewSet):
             queryset = queryset.filter(payment_mode=payment_mode)
         if is_verified in ["true", "false"]:
             queryset = queryset.filter(is_verified=is_verified == "true")
+        if is_bounced in ["true", "false"]:
+            queryset = queryset.filter(is_bounced=is_bounced == "true")
         if date_from:
             queryset = queryset.filter(payment_date__date__gte=date_from)
         if date_to:
@@ -904,6 +918,14 @@ class StudentFeePaymentViewSet(ModelViewSet):
                 )
 
         return queryset.order_by("-payment_date", "-created_at")
+
+    def create(self, request, *args, **kwargs):
+        if Student.objects.filter(user=request.user).exists():
+            return Response(
+                {"error": "Students must complete fee payments through the verified online checkout."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        return super().create(request, *args, **kwargs)
 
     def perform_destroy(self, instance):
         student_fee = instance.student_fee
@@ -1279,13 +1301,21 @@ class StudentFeeRazorpayVerifyView(APIView):
                 request.user,
                 order_id,
             )
-        except Exception:
-            payment = StudentFeePayment.objects.filter(razorpay_order_id=order_id).first()
+        except StudentFeePayment.DoesNotExist:
+            return Response(
+                {"error": "Payment order record not found for this student"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
 
         if not payment:
             return Response(
                 {"error": "Payment order record not found"},
                 status=status.HTTP_404_NOT_FOUND,
+            )
+        if payment.payment_mode != "online" or payment.payer_type != "student" or payment.is_bounced:
+            return Response(
+                {"error": "This is not an active online student fee order."},
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         school = getattr(payment, "school", None) or getattr(request.user, "school", None)
@@ -1389,7 +1419,9 @@ class PaymentHistoryView(APIView):
             student_ids = list(Perents.objects.filter(user=request.user).values_list("perents_of_id", flat=True))
 
         payment_history = StudentFeePayment.objects.filter(
-            student_fee__student_id__in=student_ids
+            student_fee__student_id__in=student_ids,
+            is_verified=True,
+            is_bounced=False,
         ).order_by("-payment_date")
 
         serializer = StudentFeePaymentSerializer(
@@ -1711,10 +1743,45 @@ class DailyCashAuditView(APIView):
         else:
             target_date = timezone.localdate()
 
+        # Overall fee collection includes verified receipts from every payment
+        # mode. Keep this separate from physical drawer cash below.
+        all_fee_payments_qs = StudentFeePayment.objects.filter(
+            is_bounced=False,
+            is_verified=True,
+        ).filter(
+            Q(payment_date__date=target_date)
+            | (Q(payment_date__isnull=True) & Q(created_at__date=target_date))
+        )
+        if school:
+            all_fee_payments_qs = all_fee_payments_qs.filter(school=school)
+        all_fee_totals = all_fee_payments_qs.aggregate(
+            total=Sum("amount"),
+            count=Count("id"),
+        )
+        admission_fees_qs = AdmissionFee.objects.filter(paid_at__date=target_date)
+        if school:
+            admission_numbers = Admission.objects.filter(school=school).values("admission_number")
+            admission_fees_qs = admission_fees_qs.filter(
+                Q(school=school) | Q(school__isnull=True, admission_number__in=admission_numbers)
+            )
+        admission_fee_totals = admission_fees_qs.aggregate(total=Sum("amount"), count=Count("id"))
+        fee_collection_by_mode = list(
+            all_fee_payments_qs.values("payment_mode")
+            .annotate(total=Sum("amount"), count=Count("id"))
+            .order_by("payment_mode")
+        )
+        admission_mode_totals = list(
+            admission_fees_qs.values("payment_mode")
+            .annotate(total=Sum("amount"), count=Count("id"))
+            .order_by("payment_mode")
+        )
+        fee_collection_by_mode.extend(admission_mode_totals)
+
         # Query successful Cash fee payments for the date
         payments_qs = StudentFeePayment.objects.filter(
             payment_mode__iexact="cash",
-            is_bounced=False
+            is_bounced=False,
+            is_verified=True
         ).filter(
             Q(payment_date__date=target_date) | (Q(payment_date__isnull=True) & Q(created_at__date=target_date))
         )
@@ -1881,6 +1948,7 @@ class DailyCashAuditView(APIView):
                 "student_admission_number": st_adm,
                 "class_name": c_name,
                 "feetype_name": p.feetype.name if p.feetype else "Fee",
+                "payment_mode": p.payment_mode,
                 "net_amount": float(net_amt),
                 "total_received": float(p_received),
                 "return_change": float(p_change),
@@ -1889,6 +1957,75 @@ class DailyCashAuditView(APIView):
                 "note": note_text,
                 "payment_details": details,
             })
+
+        # Include completed non-cash fee payments in the register table so the
+        # received amount is visible there too. These entries do not affect
+        # cash denomination totals or the physical drawer balance.
+        non_cash_payments = all_fee_payments_qs.exclude(payment_mode__iexact="cash").select_related(
+            "student", "student__school_class", "feetype", "collected_by"
+        ).order_by("-payment_date", "-created_at", "-id")
+        for p in non_cash_payments:
+            student = p.student
+            student_name = f"{student.name or ''} {student.surname or ''}".strip() if student else "N/A"
+            class_name = "N/A"
+            if student and student.school_class:
+                school_class = student.school_class
+                class_name = getattr(getattr(school_class, "category", None), "class_name", None) or getattr(school_class, "name", "N/A")
+            recorded_by = (
+                p.collected_by.get_full_name() or p.collected_by.username
+                if p.collected_by else "Online Payment"
+            )
+            amount = p.amount or Decimal("0.00")
+            transaction_items.append({
+                "id": p.id,
+                "receipt_number": p.receipt_number or f"REC-{p.id}",
+                "payment_date": p.payment_date.isoformat() if p.payment_date else (p.created_at.isoformat() if p.created_at else None),
+                "student_id": student.id if student else None,
+                "student_name": student_name,
+                "student_admission_number": f"GR-{student.gr_no}" if student and student.gr_no else "",
+                "class_name": class_name,
+                "feetype_name": p.feetype.name if p.feetype else "Fee",
+                "payment_mode": p.payment_mode,
+                "net_amount": float(amount),
+                "total_received": float(amount),
+                "return_change": 0.0,
+                "collected_by_name": recorded_by,
+                "breakdown_text": f"Paid by {p.get_payment_mode_display()}",
+                "note": p.note or "",
+                "payment_details": p.payment_details if isinstance(p.payment_details, dict) else {},
+            })
+
+        # Admission application payments are collected before a student fee
+        # account exists. Show successful payments in the register without
+        # counting them as cash drawer receipts.
+        for payment in admission_fees_qs.order_by("-paid_at", "-id"):
+            amount = Decimal(payment.amount or 0)
+            transaction_items.append({
+                "id": -payment.id,
+                "receipt_number": payment.razorpay_payment_id or f"ADM-{payment.id}",
+                "payment_date": payment.paid_at.isoformat() if payment.paid_at else None,
+                "student_id": None,
+                "student_name": f"Admission {payment.admission_number or ''}".strip(),
+                "student_admission_number": payment.admission_number or "",
+                "class_name": "Admission",
+                "feetype_name": "Admission Fee",
+                "payment_mode": payment.payment_mode or "online",
+                "net_amount": float(amount),
+                "total_received": float(amount),
+                "return_change": 0.0,
+                "collected_by_name": "Admission Payment",
+                "breakdown_text": "Successful admission application payment",
+                "note": payment.razorpay_order_id or "",
+                "payment_details": {
+                    "razorpay_order_id": payment.razorpay_order_id,
+                    "razorpay_payment_id": payment.razorpay_payment_id,
+                },
+            })
+
+        transaction_items.sort(
+            key=lambda item: (item.get("payment_date") or "", item["id"]),
+            reverse=True,
+        )
 
         notes_list = []
         notes_subtotal = Decimal("0.00")
@@ -1964,7 +2101,8 @@ class DailyCashAuditView(APIView):
         # Calculate opening balance: Sum of all historical cash inflows minus outflows strictly before target_date
         hist_payments_qs = StudentFeePayment.objects.filter(
             payment_mode__iexact="cash",
-            is_bounced=False
+            is_bounced=False,
+            is_verified=True
         ).filter(
             Q(payment_date__date__lt=target_date) | (Q(payment_date__isnull=True) & Q(created_at__date__lt=target_date))
         )
@@ -1989,6 +2127,12 @@ class DailyCashAuditView(APIView):
             "date": target_date.isoformat(),
             "school_name": getattr(school, "name", "School") if school else "School",
             "summary": {
+                "total_fee_collected": float((all_fee_totals["total"] or Decimal("0.00")) + (admission_fee_totals["total"] or Decimal("0.00"))),
+                "fee_payment_count": (all_fee_totals["count"] or 0) + (admission_fee_totals["count"] or 0),
+                "fee_collection_by_mode": [
+                    {"payment_mode": row["payment_mode"], "amount": float(row["total"] or 0), "count": row["count"]}
+                    for row in fee_collection_by_mode
+                ],
                 "opening_balance": float(opening_balance),
                 "gross_cash_collected": float(total_gross_cash),
                 "total_change_returned": float(total_change_returned),
@@ -2018,7 +2162,8 @@ def get_available_drawer_cash(school, target_date):
     # Historical cash fee payments strictly before target_date
     hist_payments_qs = StudentFeePayment.objects.filter(
         payment_mode__iexact="cash",
-        is_bounced=False
+        is_bounced=False,
+        is_verified=True,
     ).filter(
         Q(payment_date__date__lt=target_date) | (Q(payment_date__isnull=True) & Q(created_at__date__lt=target_date))
     )
@@ -2040,7 +2185,8 @@ def get_available_drawer_cash(school, target_date):
     # Today's cash fee payments
     payments_qs = StudentFeePayment.objects.filter(
         payment_mode__iexact="cash",
-        is_bounced=False
+        is_bounced=False,
+        is_verified=True,
     ).filter(
         Q(payment_date__date=target_date) | (Q(payment_date__isnull=True) & Q(created_at__date=target_date))
     )
@@ -2340,10 +2486,44 @@ class AccountLedgerView(APIView):
         if start_date > end_date:
             start_date, end_date = end_date, start_date
 
+        # Report total verified fee collection independently from the cash
+        # drawer ledger, which must remain cash-only for accurate balances.
+        all_fee_payments_qs = StudentFeePayment.objects.filter(
+            is_bounced=False,
+            is_verified=True,
+        ).filter(
+            Q(payment_date__date__range=(start_date, end_date))
+            | (Q(payment_date__isnull=True) & Q(created_at__date__range=(start_date, end_date)))
+        )
+        if school:
+            all_fee_payments_qs = all_fee_payments_qs.filter(school=school)
+        all_fee_totals = all_fee_payments_qs.aggregate(total=Sum("amount"), count=Count("id"))
+        admission_fees_qs = AdmissionFee.objects.filter(
+            paid_at__date__range=(start_date, end_date)
+        )
+        if school:
+            admission_numbers = Admission.objects.filter(school=school).values("admission_number")
+            admission_fees_qs = admission_fees_qs.filter(
+                Q(school=school) | Q(school__isnull=True, admission_number__in=admission_numbers)
+            )
+        admission_fee_totals = admission_fees_qs.aggregate(total=Sum("amount"), count=Count("id"))
+        fee_collection_by_mode = list(
+            all_fee_payments_qs.values("payment_mode")
+            .annotate(total=Sum("amount"), count=Count("id"))
+            .order_by("payment_mode")
+        )
+        admission_mode_totals = list(
+            admission_fees_qs.values("payment_mode")
+            .annotate(total=Sum("amount"), count=Count("id"))
+            .order_by("payment_mode")
+        )
+        fee_collection_by_mode.extend(admission_mode_totals)
+
         # Calculate opening balance: Sum of all historical cash inflows minus outflows strictly before start_date
         hist_payments_qs = StudentFeePayment.objects.filter(
             payment_mode__iexact="cash",
-            is_bounced=False
+            is_bounced=False,
+            is_verified=True
         ).filter(
             Q(payment_date__date__lt=start_date) | (Q(payment_date__isnull=True) & Q(created_at__date__lt=start_date))
         )
@@ -2364,7 +2544,8 @@ class AccountLedgerView(APIView):
         # 1. Fetch cash fee payments in date range
         payments_qs = StudentFeePayment.objects.filter(
             payment_mode__iexact="cash",
-            is_bounced=False
+            is_bounced=False,
+            is_verified=True
         ).filter(
             Q(payment_date__date__range=(start_date, end_date))
             | (Q(payment_date__isnull=True) & Q(created_at__date__range=(start_date, end_date)))
@@ -2424,11 +2605,84 @@ class AccountLedgerView(APIView):
                 "class_name": c_name,
                 "category": feetype_name,
                 "source": st_name,
+                "collection_amount": amt,
                 "inflow": amt,
                 "outflow": 0.0,
                 "payment_mode": "Cash",
                 "recorded_by_name": collected_by,
                 "notes": p.note or "",
+            })
+
+        # Show successful online/UPI/card/bank fee payments as ledger entries,
+        # but do not add them to the physical cash running balance.
+        non_cash_payments = all_fee_payments_qs.exclude(payment_mode__iexact="cash").select_related(
+            "student", "student__school_class", "feetype", "collected_by"
+        ).order_by("payment_date", "created_at", "id")
+        for p in non_cash_payments:
+            st = p.student
+            st_name = f"{st.name or ''} {st.surname or ''}".strip() if st else "N/A"
+            st_adm = f"GR-{st.gr_no}" if st and st.gr_no else ""
+            c_name = st.school_class.school_class if st and st.school_class else ""
+            feetype_name = p.feetype.name if p.feetype else "Fee"
+            tx_dt = p.payment_date or p.created_at
+            tx_date_str = tx_dt.strftime("%Y-%m-%d") if tx_dt else str(start_date)
+            tx_time_str = tx_dt.strftime("%I:%M %p") if tx_dt else ""
+            amount = float(p.amount or Decimal("0.00"))
+            collected_by = (
+                p.collected_by.get_full_name() or p.collected_by.username
+                if p.collected_by else "Online Payment"
+            )
+            particulars_parts = [f"Student: {st_name}"]
+            if c_name:
+                particulars_parts.append(f"Class: {c_name}")
+            particulars_parts.append(f"Fee: {feetype_name}")
+            if st_adm:
+                particulars_parts.append(f"GR: {st_adm}")
+            items.append({
+                "id": f"ONLINE-FEE-{p.id}",
+                "raw_id": p.id,
+                "date": tx_date_str,
+                "time": tx_time_str,
+                "timestamp": tx_dt.isoformat() if tx_dt else f"{tx_date_str}T00:00:00",
+                "transaction_type": "NON_CASH_FEE_RECEIPT",
+                "type_label": f"Fee Receipt ({p.get_payment_mode_display()})",
+                "reference_no": p.receipt_number or f"REC-{p.id}",
+                "particulars": " | ".join(particulars_parts),
+                "student_name": st_name,
+                "class_name": c_name,
+                "category": feetype_name,
+                "source": st_name,
+                "collection_amount": amount,
+                "inflow": 0.0,
+                "outflow": 0.0,
+                "payment_mode": p.get_payment_mode_display(),
+                "recorded_by_name": collected_by,
+                "notes": p.note or "",
+            })
+
+        for payment in admission_fees_qs.order_by("paid_at", "id"):
+            amount = float(payment.amount or 0)
+            tx_dt = payment.paid_at
+            items.append({
+                "id": f"ADMISSION-FEE-{payment.id}",
+                "raw_id": payment.id,
+                "date": tx_dt.strftime("%Y-%m-%d") if tx_dt else str(start_date),
+                "time": tx_dt.strftime("%I:%M %p") if tx_dt else "",
+                "timestamp": tx_dt.isoformat() if tx_dt else f"{start_date}T00:00:00",
+                "transaction_type": "NON_CASH_FEE_RECEIPT",
+                "type_label": "Admission Fee Receipt",
+                "reference_no": payment.razorpay_payment_id or payment.razorpay_order_id or f"ADM-{payment.id}",
+                "particulars": f"Admission fee payment | Admission #: {payment.admission_number or 'N/A'}",
+                "student_name": f"Admission {payment.admission_number or ''}".strip(),
+                "class_name": "Admission",
+                "category": "Admission Fee",
+                "source": payment.admission_number or "Admission Application",
+                "collection_amount": amount,
+                "inflow": 0.0,
+                "outflow": 0.0,
+                "payment_mode": payment.payment_mode or "online",
+                "recorded_by_name": "Admission Payment",
+                "notes": f"Razorpay order: {payment.razorpay_order_id or 'N/A'}",
             })
 
         # 2. Fetch CashTransactions (Expenses, Bank Deposits, Misc Incomes)
@@ -2500,6 +2754,7 @@ class AccountLedgerView(APIView):
                 "class_name": "",
                 "category": ctx.category or ("Bank Deposit" if ctx.type == "BANK_DEPOSIT" else "General"),
                 "source": source_val,
+                "collection_amount": 0.0,
                 "inflow": inflow_val,
                 "outflow": outflow_val,
                 "payment_mode": "Cash",
@@ -2538,13 +2793,19 @@ class AccountLedgerView(APIView):
             "end_date": end_date.isoformat(),
             "school_name": getattr(school, "name", "School") if school else "School",
             "summary": {
+                "total_fee_collected": round(float((all_fee_totals["total"] or Decimal("0.00")) + (admission_fee_totals["total"] or Decimal("0.00"))), 2),
+                "fee_payment_count": (all_fee_totals["count"] or 0) + (admission_fee_totals["count"] or 0),
+                "fee_collection_by_mode": [
+                    {"payment_mode": row["payment_mode"], "amount": round(float(row["total"] or 0), 2), "count": row["count"]}
+                    for row in fee_collection_by_mode
+                ],
                 "opening_balance": round(float(opening_balance), 2),
                 "total_inflow": round(total_inflow, 2),
                 "total_outflow": round(total_outflow, 2),
                 "net_change": round(net_change, 2),
                 "closing_balance": round(closing_balance, 2),
                 "total_transactions": len(items),
-                "fee_receipts_count": sum(1 for x in items if x["transaction_type"] == "FEE_RECEIPT"),
+                "fee_receipts_count": (all_fee_totals["count"] or 0) + (admission_fee_totals["count"] or 0),
                 "expenses_count": sum(1 for x in items if x["transaction_type"] == "EXPENSE"),
                 "bank_deposits_count": sum(1 for x in items if x["transaction_type"] == "BANK_DEPOSIT"),
                 "misc_income_count": sum(1 for x in items if x["transaction_type"] == "MISC_INCOME"),

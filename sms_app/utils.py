@@ -383,6 +383,15 @@ def get_student_fee_for_online_payment(user, student_fee_id):
         ).get(id=student_fee_id, student=student, school=student.school)
         return student_fee, student.school
 
+    parent_student_ids = Perents.objects.filter(user=user).values_list(
+        "perents_of_id", flat=True
+    )
+    if parent_student_ids.exists():
+        student_fee = StudentFee.objects.select_related(
+            "student", "feetype", "school"
+        ).get(id=student_fee_id, student_id__in=parent_student_ids)
+        return student_fee, student_fee.school
+
     school = getattr(user, "school", None)
     if not school:
         raise StudentFee.DoesNotExist
@@ -405,6 +414,12 @@ def get_student_fee_payment_for_online_verify(user, order_id):
 
     if student:
         return queryset.get(student=student, school=student.school)
+
+    parent_student_ids = Perents.objects.filter(user=user).values_list(
+        "perents_of_id", flat=True
+    )
+    if parent_student_ids.exists():
+        return queryset.get(student_id__in=parent_student_ids)
 
     school = getattr(user, "school", None)
     if not school:

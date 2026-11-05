@@ -175,7 +175,7 @@ class TrusteeStudentReport(APIView):
                              'pending': money(fee.balance_amount), 'govt_pending': money(fee.rte_govt_balance_amount)})
         payments = StudentFeePayment.objects.filter(student_id__in=ids, student__school=school, student_fee__student_id__in=ids, is_bounced=False).filter(
             Q(school=school) | Q(school__isnull=True)
-        ).filter(Q(student_fee__school=school) | Q(student_fee__school__isnull=True)).filter(Q(is_verified=True) | ~Q(payment_mode='cheque')).exclude(student_fee__status='cancelled')
+        ).filter(Q(student_fee__school=school) | Q(student_fee__school__isnull=True)).filter(is_verified=True).exclude(student_fee__status='cancelled')
         if year:
             payments = payments.filter(student_fee__academic_year=year)
         payment_months = defaultdict(lambda: {'student_collection': Decimal('0'), 'government_collection': Decimal('0')})

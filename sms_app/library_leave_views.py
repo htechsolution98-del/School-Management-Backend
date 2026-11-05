@@ -1886,45 +1886,17 @@ class SyllabusListView(ListAPIView):
         if not student or not student.school:
             return Syllabus.objects.none()
 
-        import re
-        raw_div = (student.division or "").strip()
         school_class = student.school_class
         school = student.school
+        if not school_class:
+            return Syllabus.objects.none()
 
-        matched_div = None
-        if raw_div and school_class:
-            div_qs = Division.objects.filter(SchoolClass=school_class, school=school)
-            r_lower = raw_div.lower().strip()
-            # Extract inner letter/text e.g. "Class 9 (a)" -> "a"
-            inner_match = re.search(r'\((.*?)\)', r_lower)
-            extracted_token = inner_match.group(1).strip() if inner_match else r_lower
-
-            for d in div_qs:
-                d_name = (d.division or "").strip().lower()
-                d_str = str(d).strip().lower()
-                if d_name == r_lower or d_name == extracted_token:
-                    matched_div = d
-                    break
-                if d_str == r_lower:
-                    matched_div = d
-                    break
-                d_inner = re.search(r'\((.*?)\)', d_str)
-                if d_inner and d_inner.group(1).strip() == extracted_token:
-                    matched_div = d
-                    break
-
-        if matched_div:
-            return Syllabus.objects.filter(division=matched_div, school=school).select_related('division', 'subject').order_by('subject__name', '-id')
-
-        if school_class:
-            if raw_div:
-                fallback_div = Division.objects.filter(SchoolClass=school_class, school=school, division__icontains=raw_div).first()
-                if fallback_div:
-                    return Syllabus.objects.filter(division=fallback_div, school=school).select_related('division', 'subject').order_by('subject__name', '-id')
-                return Syllabus.objects.none()
-            return Syllabus.objects.filter(division__SchoolClass=school_class, school=school).select_related('division', 'subject').order_by('subject__name', '-id')
-
-        return Syllabus.objects.filter(school=school).select_related('division', 'subject').order_by('subject__name', '-id')
+        return (
+            Syllabus.objects.filter(school=school)
+            .filter(class_group=school_class)
+            .select_related('class_group', 'subject')
+            .order_by('-class_group_id', 'subject__name', '-id')
+        )
 
 
 class ExamViewTeacher(ListAPIView):
@@ -2351,19 +2323,32 @@ class SubjectByClassAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, class_id):
+        school = getattr(request.user, "school", None)
+        if not school:
+            staff = getattr(request.user, "staff", None)
+            school = getattr(staff, "school", None) if staff else None
+        if not school:
+            return Response({"detail": "School could not be determined for this user."}, status=403)
+        if not SchoolClass.objects.filter(id=class_id, school=school).exists():
+            return Response({"detail": "Class not found for this school."}, status=404)
+
         subjects = Subject.objects.filter(
-            division__SchoolClass_id=class_id
-        ).distinct()
+            division__SchoolClass_id=class_id,
+            division__SchoolClass__school=school,
+        ).order_by("name", "id")
 
-        data = [
-            {
-                "id": subject.id,
-                "name": subject.name
-            }
-            for subject in subjects
-        ]
+        # Subjects are assigned per division, so show one class-level option
+        # for each distinct subject name across the class's divisions.
+        subject_options = {}
+        for subject in subjects:
+            normalized_name = (subject.name or "").strip().casefold()
+            if normalized_name and normalized_name not in subject_options:
+                subject_options[normalized_name] = {
+                    "id": subject.id,
+                    "name": subject.name,
+                }
 
-        return Response(data)
+        return Response(list(subject_options.values()))
     
     
     

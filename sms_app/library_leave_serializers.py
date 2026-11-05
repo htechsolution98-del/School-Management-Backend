@@ -1473,9 +1473,28 @@ class StudentAttendanceListSerializer(serializers.ModelSerializer):
         
         
 class SyllabusListSerializer(serializers.ModelSerializer):
+    syllabus_file = serializers.SerializerMethodField()
     subject_name = serializers.CharField(source = 'subject.name', read_only = True)
-    divison_name = serializers.CharField(source = 'division.division', read_only = True)
-    school_class = serializers.CharField(source = 'division.SchoolClass', read_only = True)
+    divison_name = serializers.CharField(source = 'division.division', read_only = True, allow_null=True)
+    school_class = serializers.SerializerMethodField()
+
+    def get_school_class(self, obj):
+        school_class = obj.class_group or (obj.division.SchoolClass if obj.division_id else None)
+        return school_class.school_class if school_class else ""
+
+    def get_syllabus_file(self, obj):
+        if not obj.syllabus_file:
+            return None
+        name = getattr(obj.syllabus_file, "name", "")
+        if name.startswith(("https://", "http://")):
+            return name
+        try:
+            return obj.syllabus_file.url
+        except Exception:
+            # A stale or unavailable storage URL should not make the entire
+            # student's syllabus list fail to serialize.
+            return None
+
     class Meta:
         model = Syllabus
         fields = '__all__'

@@ -833,6 +833,58 @@ def broadcast_announcement(announcement, school=None, user=None):
                     f"school_{school.id}_user_{user.id}",
                     ws_payload
                 )
+        elif announcement.target_class_id:
+            # Class announcements must be delivered to actual members of the
+            # selected class/divisions instead of leaking through broad role groups.
+            roles = {
+                value.strip().upper()
+                for value in str(announcement.announcement_for or "").split(",")
+                if value.strip()
+            }
+            selected_divisions = {
+                value.strip().casefold()
+                for value in str(announcement.target_division or "").split(",")
+                if value.strip()
+            }
+            students = list(Student.objects.filter(
+                school=school,
+                school_class_id=announcement.target_class_id,
+            ))
+            if selected_divisions:
+                students = [st for st in students if str(st.division or "").strip().casefold() in selected_divisions]
+
+            recipient_user_ids = set()
+            if "STUDENT" in roles:
+                recipient_user_ids.update(st.user_id for st in students if st.user_id)
+            if "PARENT" in roles:
+                student_mobiles = {st.mobile for st in students if st.mobile}
+                if student_mobiles:
+                    recipient_user_ids.update(
+                        User.objects.filter(school=school, mobile__in=student_mobiles)
+                        .filter(role__in=["PARENT", "PARENTS"])
+                        .values_list("id", flat=True)
+                    )
+            if "TEACHER" in roles:
+                assignments = AssignClass.objects.filter(
+                    school=school,
+                    division__SchoolClass_id=announcement.target_class_id,
+                ).select_related("division", "teacher")
+                if selected_divisions:
+                    assignments = [
+                        assignment for assignment in assignments
+                        if str(assignment.division.division or "").strip().casefold() in selected_divisions
+                    ]
+                recipient_user_ids.update(
+                    assignment.teacher.user_id
+                    for assignment in assignments
+                    if assignment.teacher_id and assignment.teacher.user_id
+                )
+
+            for recipient_user_id in recipient_user_ids:
+                async_to_sync(channel_layer.group_send)(
+                    f"school_{school.id}_user_{recipient_user_id}",
+                    ws_payload,
+                )
         else:
             # If for everyone, send to choice_all
             if announcement.is_everyone or (announcement.announcement_for or "").upper() == "ALL":
@@ -890,6 +942,16 @@ class AnnouncementView(APIView):
             return Response(serializer.data)
 
         role = str(getattr(user, "role", "") or "").strip().upper()
+        def announcement_division_filter_for_value(division):
+            division = str(division or "").strip()
+            if not division:
+                return models.Q()
+            return (
+                models.Q(target_division__iexact=division)
+                | models.Q(target_division__istartswith=f"{division},")
+                | models.Q(target_division__icontains=f",{division},")
+                | models.Q(target_division__iendswith=f",{division}")
+            )
 
         # Management roles see all school announcements, plus direct notifications targeted to them
         is_management = (
@@ -932,7 +994,11 @@ class AnnouncementView(APIView):
                     | models.Q(target_student=student)
                     | (
                         models.Q(target_class=student.school_class)
-                        & (models.Q(target_division__isnull=True) | models.Q(target_division="") | models.Q(target_division__iexact=student.division or ""))
+                        & (
+                            models.Q(target_division__isnull=True)
+                            | models.Q(target_division="")
+                            | announcement_division_filter_for_value(student.division)
+                        )
                     )
                 )
                 announcements = Announcement.objects.filter(school=school).filter(
@@ -961,7 +1027,11 @@ class AnnouncementView(APIView):
                     | models.Q(target_student=student)
                     | (
                         models.Q(target_class=student.school_class)
-                        & (models.Q(target_division__isnull=True) | models.Q(target_division="") | models.Q(target_division__iexact=student.division or ""))
+                        & (
+                            models.Q(target_division__isnull=True)
+                            | models.Q(target_division="")
+                            | announcement_division_filter_for_value(student.division)
+                        )
                     )
                 )
                 announcements = Announcement.objects.filter(school=school).filter(
@@ -1020,6 +1090,28 @@ class AnnouncementView(APIView):
                     | role_target_q
                 )
             )
+            if role == "TEACHER":
+                teacher_assignments = AssignClass.objects.filter(
+                    school=school,
+                    teacher__user=user,
+                    division__isnull=False,
+                ).select_related("division")
+                class_scope_q = models.Q(target_class__isnull=True)
+                for assignment in teacher_assignments:
+                    assignment_division = str(assignment.division.division or "").strip()
+                    class_scope_q |= (
+                        models.Q(target_class_id=assignment.division.SchoolClass_id)
+                        & (
+                            models.Q(target_division__isnull=True)
+                            | models.Q(target_division="")
+                            | announcement_division_filter_for_value(assignment_division)
+                        )
+                    )
+                general_q &= class_scope_q
+            else:
+                # A class-scoped notice is only relevant to the selected class's
+                # students/parents and teachers assigned to that class.
+                general_q &= models.Q(target_class__isnull=True)
             direct_q = models.Q(target_user=user) | models.Q(created_by=user)
 
             announcements = Announcement.objects.filter(school=school).filter(general_q | direct_q)
