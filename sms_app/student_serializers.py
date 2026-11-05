@@ -2092,11 +2092,11 @@ class GetAdmissionDataSerializer(serializers.ModelSerializer):
     student_details = serializers.SerializerMethodField()
 
     def get_student_id(self, obj):
-        st = getattr(obj, "student", None) or Student.objects.filter(admission=obj).first()
+        st = getattr(obj, "student", None) or Student.objects.filter(admission=obj).first() or Student.objects.filter(admission_no=obj.admission_number).first() or (Student.objects.filter(gr_no=obj.gr_no).first() if getattr(obj, "gr_no", None) else None)
         return st.id if st else None
 
     def get_student_details(self, obj):
-        st = getattr(obj, "student", None) or Student.objects.filter(admission=obj).select_related("school_class").first()
+        st = getattr(obj, "student", None) or Student.objects.filter(admission=obj).select_related("school_class").first() or Student.objects.filter(admission_no=obj.admission_number).select_related("school_class").first() or (Student.objects.filter(gr_no=obj.gr_no).select_related("school_class").first() if getattr(obj, "gr_no", None) else None)
         if st:
             return {
                 "id": st.id,
@@ -2121,12 +2121,13 @@ class GetAdmissionDataSerializer(serializers.ModelSerializer):
         sv = StudentVerify.objects.filter(admission_number=obj.admission_number).first()
         if sv and sv.gr_no:
             return sv.gr_no
-        if hasattr(obj, "student") and obj.student and obj.student.gr_no:
-            return obj.student.gr_no
+        st = getattr(obj, "student", None) or Student.objects.filter(admission=obj).first() or Student.objects.filter(admission_no=obj.admission_number).first()
+        if st and st.gr_no:
+            return st.gr_no
         return getattr(obj, "gr_no", None)
 
     def get_division(self, obj):
-        st = Student.objects.filter(admission=obj).first()
+        st = getattr(obj, "student", None) or Student.objects.filter(admission=obj).first() or Student.objects.filter(admission_no=obj.admission_number).first() or (Student.objects.filter(gr_no=obj.gr_no).first() if getattr(obj, "gr_no", None) else None)
         if st and st.division:
             return st.division.division if hasattr(st.division, "division") else str(st.division)
         for fv in obj.field_values.all():

@@ -341,6 +341,46 @@ class ExamFullViewSet(viewsets.ModelViewSet):
         data["start_time"] = parsed_start
         data["end_time"] = parsed_end
 
+        # Ensure academic_year is set
+        if not data.get("academic_year"):
+            from .models import AcademicYear
+            ay = AcademicYear.objects.filter(school=school, is_active=True).first() or AcademicYear.objects.filter(school=school).order_by("-id").first()
+            if ay:
+                data["academic_year"] = ay.id
+
+        # Date restriction: Exam cannot be scheduled today or in the past; must be at least 1 day in advance
+        try:
+            from datetime import datetime
+            today_date = timezone.localdate()
+            if isinstance(parsed_date, str):
+                check_d = datetime.strptime(parsed_date, "%Y-%m-%d").date()
+            else:
+                check_d = parsed_date
+            if check_d <= today_date:
+                return Response(
+                    {"error": "Exams cannot be scheduled for today or past dates. Exams must be scheduled at least 1 day in advance."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        except Exception:
+            pass
+
+        # Room Clash Validation
+        room_id = data.get("room")
+        if room_id:
+            room_clash = Exam.objects.filter(
+                school=school,
+                room_id=room_id,
+                exam_date=parsed_date,
+                start_time__lt=parsed_end,
+                end_time__gt=parsed_start,
+            ).first()
+            if room_clash:
+                r_name = getattr(room_clash.room, "room_number", str(room_id))
+                return Response(
+                    {"error": f"Room Clash: Room {r_name} is already booked for exam paper '{room_clash.title}' between {room_clash.start_time} and {room_clash.end_time} on {exam_date}."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
         def find_clash(target_div):
             clash_qs = Exam.objects.filter(
                 school=school,
@@ -410,6 +450,7 @@ class ExamFullViewSet(viewsets.ModelViewSet):
                     serializer = self.get_serializer(data=div_data)
                     serializer.is_valid(raise_exception=True)
                     exam_obj = serializer.save(school=school, created_by=staff)
+                    self._send_exam_notifications(exam_obj, school, staff, request)
                     created_exams.append(self.get_serializer(exam_obj).data)
                 return Response(created_exams, status=status.HTTP_201_CREATED)
 
@@ -441,7 +482,64 @@ class ExamFullViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(data=data)
         serializer.is_valid(raise_exception=True)
         exam_obj = serializer.save(school=school, created_by=staff)
+        self._send_exam_notifications(exam_obj, school, staff, request)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    def _send_exam_notifications(self, exam_instance, school, staff, request):
+        try:
+            from .models import Student, StudentNotification, ExamNotification, AssignClass, Announcement
+            # 1. ExamNotification
+            ExamNotification.objects.create(
+                exam=exam_instance,
+                title=f"Exam Scheduled: {exam_instance.title}",
+                message=f"{exam_instance.title} is scheduled on {exam_instance.exam_date} from {str(exam_instance.start_time)[:5]} to {str(exam_instance.end_time)[:5]}."
+            )
+
+            # 2. StudentNotification for active students of this class and division
+            st_qs = Student.objects.filter(school=school, school_class_id=exam_instance.class_group_id, is_active=True)
+            if exam_instance.division and exam_instance.division != "ALL":
+                st_qs = st_qs.filter(division__iexact=exam_instance.division)
+
+            s_notifs = [
+                StudentNotification(
+                    school=school,
+                    student=st,
+                    created_by=staff,
+                    notification_type="EXAM",
+                    title=f"Exam Scheduled: {exam_instance.title}",
+                    message=f"{exam_instance.title} ({getattr(exam_instance.subject, 'name', 'Subject')}) is scheduled on {exam_instance.exam_date} at {str(exam_instance.start_time)[:5]}.",
+                )
+                for st in st_qs
+            ]
+            if s_notifs:
+                StudentNotification.objects.bulk_create(s_notifs, ignore_conflicts=True)
+
+            # 3. Announcement to Class Teacher
+            ct_assigns = AssignClass.objects.filter(
+                school_class_id=exam_instance.class_group_id,
+                is_class_teacher=True,
+                teacher__isnull=False
+            )
+            if exam_instance.division and exam_instance.division != "ALL":
+                ct_assigns = ct_assigns.filter(division__division__iexact=exam_instance.division)
+
+            teachers = list({a.teacher for a in ct_assigns if a.teacher})
+            cls_str = getattr(exam_instance.class_group, "school_class", "")
+            div_str = f" - Div {exam_instance.division}" if exam_instance.division else ""
+            for t in teachers:
+                Announcement.objects.create(
+                    school=school,
+                    title=f"Exam Scheduled for Your Class: {exam_instance.title}",
+                    description=f"Dear Class Teacher, an exam '{exam_instance.title}' for {cls_str}{div_str} ({getattr(exam_instance.subject, 'name', 'Subject')}) has been scheduled on {exam_instance.exam_date} from {str(exam_instance.start_time)[:5]} to {str(exam_instance.end_time)[:5]}.",
+                    announcement_for="TEACHER",
+                    target_class_id=exam_instance.class_group_id,
+                    target_division=exam_instance.division or "",
+                    target_user=getattr(t, "user", None),
+                    created_by=request.user,
+                    created_by_role="PRINCIPAL",
+                )
+        except Exception:
+            pass
 
     @action(detail=False, methods=["post"], url_path="publish-timetable")
     def publish_timetable(self, request):
