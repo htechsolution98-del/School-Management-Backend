@@ -2,7 +2,7 @@ from decimal import Decimal
 from django.utils import timezone
 from django.core.exceptions import ValidationError as DjangoValidationError, PermissionDenied as DjangoPermissionDenied
 from django.db import IntegrityError, transaction
-from .models import StaffRemainingLeave
+from .models import StaffRemainingLeave, Perents
 from .models import *
 from rest_framework.viewsets import ModelViewSet, ViewSet
 from rest_framework.permissions import IsAuthenticated
@@ -1886,21 +1886,47 @@ class SyllabusListView(ListAPIView):
         if not student or not student.school:
             return Syllabus.objects.none()
 
-        div_name = student.division
-        if div_name and student.school_class:
-            div_obj = Division.objects.filter(
-                SchoolClass=student.school_class,
-                division__iexact=div_name,
-                school=student.school
-            ).first()
-            if div_obj:
-                return Syllabus.objects.filter(division=div_obj, school=student.school)
+        import re
+        raw_div = (student.division or "").strip()
+        school_class = student.school_class
+        school = student.school
 
-        if student.school_class:
-            return Syllabus.objects.filter(division__SchoolClass=student.school_class, school=student.school)
+        matched_div = None
+        if raw_div and school_class:
+            div_qs = Division.objects.filter(SchoolClass=school_class, school=school)
+            r_lower = raw_div.lower().strip()
+            # Extract inner letter/text e.g. "Class 9 (a)" -> "a"
+            inner_match = re.search(r'\((.*?)\)', r_lower)
+            extracted_token = inner_match.group(1).strip() if inner_match else r_lower
 
-        return Syllabus.objects.filter(school=student.school)
-    
+            for d in div_qs:
+                d_name = (d.division or "").strip().lower()
+                d_str = str(d).strip().lower()
+                if d_name == r_lower or d_name == extracted_token:
+                    matched_div = d
+                    break
+                if d_str == r_lower:
+                    matched_div = d
+                    break
+                d_inner = re.search(r'\((.*?)\)', d_str)
+                if d_inner and d_inner.group(1).strip() == extracted_token:
+                    matched_div = d
+                    break
+
+        if matched_div:
+            return Syllabus.objects.filter(division=matched_div, school=school).select_related('division', 'subject').order_by('subject__name', '-id')
+
+        if school_class:
+            if raw_div:
+                fallback_div = Division.objects.filter(SchoolClass=school_class, school=school, division__icontains=raw_div).first()
+                if fallback_div:
+                    return Syllabus.objects.filter(division=fallback_div, school=school).select_related('division', 'subject').order_by('subject__name', '-id')
+                return Syllabus.objects.none()
+            return Syllabus.objects.filter(division__SchoolClass=school_class, school=school).select_related('division', 'subject').order_by('subject__name', '-id')
+
+        return Syllabus.objects.filter(school=school).select_related('division', 'subject').order_by('subject__name', '-id')
+
+
 class ExamViewTeacher(ListAPIView):
     serializer_class = ExamViewSerializer
     permission_classes = [IsAuthenticated, Isteacher]
@@ -2244,11 +2270,28 @@ class ExamRankListView(GenericAPIView):
 
 class StudentResultViewSet(ListAPIView):
     serializer_class = ResultViewSerializer
-    permission_classes = [IsAuthenticated, Isstudent]
+    permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        student = Student.objects.filter(user=self.request.user).first()
-        return Result.objects.filter(student=student, is_published=True).select_related("exam", "exam__subject")
+        user = self.request.user
+        student = Student.objects.filter(user=user).first()
+        if not student:
+            student_id = self.request.query_params.get("student_id")
+            if student_id:
+                parent_rec = Perents.objects.filter(user=user, perents_of_id=student_id).first()
+                if parent_rec:
+                    student = parent_rec.perents_of
+            if not student:
+                parent_rec = Perents.objects.filter(user=user).first()
+                if parent_rec:
+                    student = parent_rec.perents_of
+        if not student:
+            return Result.objects.none()
+        qs = Result.objects.filter(student=student, is_published=True).select_related("exam", "exam__subject", "exam__exam_term")
+        exam_id = self.request.query_params.get("exam_id")
+        if exam_id:
+            qs = qs.filter(exam_id=exam_id)
+        return qs
 
 
 from xhtml2pdf import pisa
@@ -2257,11 +2300,16 @@ from django.http import HttpResponse
 import io
 
 class StudentResultPDFView(APIView):
-    permission_classes = [IsAuthenticated, Isstudent]
+    permission_classes = [IsAuthenticated]
 
     def get(self, request, student_id, *args, **kwargs):
-        student = Student.objects.filter(user=request.user).first()
-        if str(student.id) != str(student_id):
+        user = request.user
+        student = Student.objects.filter(user=user).first()
+        if not student:
+            parent_rec = Perents.objects.filter(user=user, perents_of_id=student_id).first()
+            if parent_rec:
+                student = parent_rec.perents_of
+        if not student or str(student.id) != str(student_id):
             return Response({"detail": "not allowed"}, status=status.HTTP_403_FORBIDDEN)
 
         results = Result.objects.filter(student=student, is_published=True).select_related("exam", "exam__subject", "exam__exam_term")

@@ -31,7 +31,9 @@ class AdmissionFormViewSet(ModelViewSet):
     queryset = AdmissionForm.objects.all()
     serializer_class = AdmissionFormSerializer
     def get_permissions(self):
-        if self.action in ["list", "retrieve"]:
+        if self.action == "retrieve":
+            return [AllowAny()]
+        if self.action == "list":
             return [IsAuthenticated()]
         return [IsAuthenticated(), IsCLerk()]
 
@@ -612,10 +614,16 @@ class DocumentSubmissionView(ModelViewSet):
     def create(self, request, *args, **kwargs):
         data = request.data
 
+        raw_adm = str(data.get("admission_number") or "").strip()
+        if (not raw_adm or raw_adm in ["undefined", "null", "none"]) and request.user and request.user.is_authenticated:
+            latest = Admission.objects.filter(temp_user=request.user).order_by("-created_at").first()
+            if latest:
+                raw_adm = str(latest.admission_number)
+
         documents = self._get_uploaded_documents(request)
 
         final_data = {
-            "admission_number": data.get("admission_number"),
+            "admission_number": raw_adm,
             "documents": documents,
         }
 
@@ -632,18 +640,29 @@ class DocumentSubmissionView(ModelViewSet):
         fee_amount = 0
 
         admission = None
-        if admission_number:
+        raw_adm = str(admission_number or "").strip()
+        if raw_adm:
             admission = (
-                Admission.objects.select_related("form")
-                .filter(admission_number=admission_number)
+                Admission.objects.select_related("form", "school")
+                .filter(
+                    Q(admission_number=raw_adm)
+                    | (Q(id=int(raw_adm)) if raw_adm.isdigit() else Q(pk=-1))
+                )
+                .first()
+            )
+        if not admission and request.user and request.user.is_authenticated:
+            admission = (
+                Admission.objects.select_related("form", "school")
+                .filter(temp_user=request.user)
+                .order_by("-created_at")
                 .first()
             )
 
-            if not admission:
-                return Response(
-                    {"error": "Admission not found"},
-                    status=status.HTTP_404_NOT_FOUND,
-                )
+        if not admission:
+            return Response(
+                {"error": "Admission record not found. Please complete Step 1 first."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
 
             if admission.is_rte:
                 fee_amount = 0.0
@@ -882,7 +901,13 @@ class AdmissionUpdateViewSet(ModelViewSet):
     permission_classes = [IsAuthenticated, IsCLerk]
 
     def get_queryset(self):
-        return Admission.objects.filter(school=self.request.user.school)
+        user = self.request.user
+        school = getattr(user, "school", None)
+        if not school:
+            staff = getattr(user, "staff", None)
+            if staff and staff.school:
+                school = staff.school
+        return Admission.objects.filter(school=school)
 
     def get_serializer_class(self):
         # if self.action in ["update", "partial_update"]:
@@ -890,14 +915,23 @@ class AdmissionUpdateViewSet(ModelViewSet):
         # return admissionViewSerializer
 
     def update(self, request, *args, **kwargs):
-        response = super().update(request, *args, **kwargs)
-        return Response(
-            {
-                "message": "Admission updated successfully",
-                "data": response.data,
-            },
-            status=response.status_code,
-        )
+        try:
+            response = super().update(request, *args, **kwargs)
+            return Response(
+                {
+                    "message": "Admission updated successfully",
+                    "data": response.data,
+                },
+                status=response.status_code,
+            )
+        except serializers.ValidationError:
+            raise
+        except Exception as e:
+            logger.exception("Error updating admission %s: %s", kwargs.get("admission_number"), e)
+            return Response(
+                {"detail": str(e), "message": f"Failed to update admission: {str(e)}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
 
 # ==================================================================================
@@ -919,7 +953,7 @@ class AdmissionDocumentViewSet(ModelViewSet):
 
     permission_classes = [IsAuthenticated, IsCLerk]
 
-    parser_classes = [MultiPartParser, FormParser]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def get_queryset(self):
         return Admission.objects.filter(school=self.request.user.school)
@@ -961,6 +995,76 @@ class AdmissionDocumentViewSet(ModelViewSet):
         kwargs["partial"] = True
 
         return self.update(request, *args, **kwargs)
+
+    @action(detail=False, methods=["post"], url_path="view-url", permission_classes=[IsAuthenticated])
+    def resolve_view_url(self, request):
+        doc_id = request.data.get("document_id")
+        file_url = request.data.get("file_url")
+        admission_number = request.data.get("admission_number")
+        doc_field_id = request.data.get("document_field_id")
+
+        doc = None
+        user_school = getattr(request.user, "school", None)
+
+        if doc_id:
+            qs = AdmissionDocument.objects.filter(id=doc_id)
+            if user_school:
+                qs = qs.filter(school=user_school)
+            doc = qs.first()
+
+        if not doc and admission_number and doc_field_id:
+            qs = AdmissionDocument.objects.filter(
+                admission__admission_number=admission_number,
+                document_field_id=doc_field_id
+            )
+            if user_school:
+                qs = qs.filter(school=user_school)
+            doc = qs.first()
+
+        if not doc and not file_url:
+            return Response({"error": "Document not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        current_file_str = str(doc.file) if doc and doc.file else (file_url or "")
+
+        # If it is already a Cloudinary URL, return it immediately
+        if "cloudinary.com" in current_file_str or "res.cloudinary.com" in current_file_str:
+            return Response({"cloudinary_url": current_file_str, "url": current_file_str})
+
+        # Otherwise upload to Cloudinary and store in DB
+        try:
+            import cloudinary
+            import cloudinary.uploader
+
+            source = None
+            if doc and doc.file:
+                try:
+                    source = doc.file.path
+                except Exception:
+                    source = doc.file
+
+            if not source and file_url:
+                source = file_url
+
+            if not source and doc and doc.file:
+                source = doc.file.url
+
+            upload_res = cloudinary.uploader.upload(
+                source,
+                folder="admission_documents",
+                resource_type="auto",
+                overwrite=True,
+            )
+            c_url = upload_res.get("secure_url") or upload_res.get("url")
+
+            if doc and c_url:
+                doc.file = c_url
+                doc.save(update_fields=["file"])
+
+            return Response({"cloudinary_url": c_url, "url": c_url})
+        except Exception as e:
+            logger.exception("Failed to upload document to Cloudinary in resolve_view_url: %s", e)
+            fallback = doc.file.url if doc and doc.file else (file_url or current_file_str)
+            return Response({"cloudinary_url": fallback, "url": fallback})
 
 
 # ======================================================

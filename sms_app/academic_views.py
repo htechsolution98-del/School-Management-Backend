@@ -24,7 +24,7 @@ from django.db import transaction
 from django.db.models import Q
 from channels.layers import get_channel_layer  # type: ignore
 from asgiref.sync import async_to_sync
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.views import APIView
 from rest_framework.decorators import api_view, permission_classes, action
 
@@ -204,6 +204,8 @@ class FormFieldViewSet(RetrieveAPIView):
 # ===================================================
 # for admission form status change
 class Admission_link(APIView):
+    permission_classes = [AllowAny]
+
     def get(self, request, unique_link):
         # Find form by unique_link
         form = AdmissionForm.objects.filter(unique_link=unique_link).first()
@@ -221,14 +223,27 @@ class Admission_link(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Return school details
-        return Response(
-            {
-                "school_id": form.school.id,  # use .id not object
-                "school_slug": form.school.slug,
-            },
-            status=status.HTTP_200_OK,
-        )
+        serializer = AdmissionFormViewSerializer(form)
+        data = serializer.data
+        data["school_id"] = form.school.id
+        data["school_slug"] = form.school.slug
+        data["school_name"] = form.school.name
+        data["school_code"] = form.school.code
+        data["school_email"] = form.school.email
+        data["school_phone"] = form.school.phone
+        data["school_address"] = form.school.address
+        data["school_city"] = form.school.city
+        data["school_state"] = form.school.state
+        data["school_pincode"] = form.school.pincode
+        if getattr(form.school, "logo", None):
+            try:
+                data["school_logo"] = form.school.logo.url
+            except Exception:
+                data["school_logo"] = str(form.school.logo)
+        else:
+            data["school_logo"] = None
+
+        return Response(data, status=status.HTTP_200_OK)
 
 
 
@@ -665,11 +680,35 @@ class SyllabusView(ModelViewSet):
                         pass
                 old.delete()
 
+        file_obj = request.FILES.get("syllabus_file")
+        cloud_url = None
+        if file_obj:
+            try:
+                import cloudinary
+                import cloudinary.uploader
+                school_id = request.user.school.id if (request.user and getattr(request.user, "school", None)) else "common"
+                folder = f"school_{school_id}/syllabus"
+                upload_res = cloudinary.uploader.upload(
+                    file_obj,
+                    folder=folder,
+                    resource_type="auto",
+                    use_filename=True,
+                    unique_filename=True,
+                )
+                cloud_url = upload_res.get("secure_url") or upload_res.get("url")
+            except Exception:
+                cloud_url = None
+
         instance = serializer.save(school=request.user.school)
+        if cloud_url:
+            instance.syllabus_file = cloud_url
+            instance.save(update_fields=["syllabus_file"])
+
         self._clear_cache(request.user.school.id)
+        out_serializer = self.get_serializer(instance)
 
         return Response(
-            {"message": "Syllabus uploaded successfully", "data": serializer.data},
+            {"message": "Syllabus uploaded successfully", "data": out_serializer.data},
             status=status.HTTP_201_CREATED,
         )
 
@@ -2221,6 +2260,8 @@ class StudentAttendanceView(APIView):
                 "student_name": f"{s.name or ''} {s.surname or ''}".strip(),
                 "name": s.name or "",
                 "surname": s.surname or "",
+                "father_name": s.father_name or "",
+                "mother_name": s.mother_name or "",
                 "roll_no": s.roll_no or "",
                 "gr_no": s.gr_no or "",
                 "gender": gender,
@@ -2249,16 +2290,22 @@ class StudentAttendanceView(APIView):
         student_id = request.data.get("student")
         req_date = request.data.get("attendance_date")
         today_date = timezone.now().date()
+        target_date = None
+
         if req_date:
-            try:
-                from datetime import datetime
-                if isinstance(req_date, str):
-                    target_date = datetime.strptime(req_date.split("T")[0], "%Y-%m-%d").date()
-                else:
-                    target_date = req_date
-            except Exception:
-                target_date = today_date
-        else:
+            from datetime import datetime
+            if isinstance(req_date, str):
+                cleaned_date = req_date.split("T")[0].strip()
+                for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y"):
+                    try:
+                        target_date = datetime.strptime(cleaned_date, fmt).date()
+                        break
+                    except ValueError:
+                        pass
+            elif hasattr(req_date, "year"):
+                target_date = req_date
+
+        if not target_date:
             target_date = today_date
 
         if target_date > today_date:
@@ -2267,6 +2314,13 @@ class StudentAttendanceView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        # Resolve user school
+        school = getattr(request.user, "school", None)
+        if not school:
+            staff = getattr(request.user, "staff", None)
+            if staff and staff.school:
+                school = staff.school
+
         # Ensure mutually exclusive flags
         data = request.data.copy() if hasattr(request.data, "copy") else dict(request.data)
         if data.get("is_present"):
@@ -2274,27 +2328,35 @@ class StudentAttendanceView(APIView):
         elif data.get("is_absent"):
             data["is_present"] = False
 
+        data["attendance_date"] = target_date
+        data["student"] = student_id
+
         existing_attendance = StudentAttendance.objects.filter(
-            school=request.user.school,
+            school=school,
             student_id=student_id,
             attendance_date=target_date
         ).first()
 
         if existing_attendance:
-            serializer = StudentAttendanceSerializer(
-                existing_attendance,
-                data=data,
-                context={"request": request},
-                partial=True
-            )
+            existing_attendance.is_present = bool(data.get("is_present"))
+            existing_attendance.is_absent = bool(data.get("is_absent"))
+            staff_user = getattr(request.user, "staff", None)
+            if staff_user:
+                existing_attendance.attendance_by = staff_user
+            existing_attendance.save()
+            attendance = existing_attendance
         else:
-            serializer = StudentAttendanceSerializer(
-                data=data,
-                context={"request": request}
+            # Create/update cleanly with target attendance_date
+            attendance, _ = StudentAttendance.objects.update_or_create(
+                school=school,
+                student_id=student_id,
+                attendance_date=target_date,
+                defaults={
+                    "is_present": bool(data.get("is_present")),
+                    "is_absent": bool(data.get("is_absent")),
+                    "attendance_by": getattr(request.user, "staff", None),
+                }
             )
-
-        serializer.is_valid(raise_exception=True)
-        attendance = serializer.save()
 
         if attendance.is_present:
             status_text = "Present"
@@ -3105,14 +3167,11 @@ class StudentListView(APIView):
 class StudentNotificationView(APIView):
 
     def get_permissions(self):
-
-        if self.request.method == "GET":
+        if self.request.method in ["GET", "POST", "PATCH"]:
             return [IsAuthenticated(), Isparent()]
-
         return [IsAuthenticated(), Isteacher()]
 
     def get(self, request):
-
         student_ids = (
             Perents.objects.filter(
                 user=request.user
@@ -3136,6 +3195,35 @@ class StudentNotificationView(APIView):
         )
 
         return Response(serializer.data)
+
+    def post(self, request):
+        student_ids = Perents.objects.filter(user=request.user).values_list("perents_of_id", flat=True)
+        all_read = request.data.get("all", False)
+        nid = request.data.get("id")
+        nids = request.data.get("ids", [])
+        qs = StudentNotification.objects.filter(student_id__in=student_ids)
+
+        if all_read:
+            qs.update(is_read=True)
+            return Response({"message": "All attendance notifications marked as read.", "read_ids": list(qs.values_list("id", flat=True))}, status=status.HTTP_200_OK)
+
+        target_ids = []
+        if nid:
+            target_ids.append(nid)
+        if isinstance(nids, list):
+            target_ids.extend(nids)
+
+        clean_ids = []
+        for tid in target_ids:
+            s = str(tid).replace("sn_", "").replace("att_", "")
+            if s.isdigit():
+                clean_ids.append(int(s))
+
+        if clean_ids:
+            qs.filter(id__in=clean_ids).update(is_read=True)
+            return Response({"message": "Marked as read.", "read_ids": clean_ids}, status=status.HTTP_200_OK)
+
+        return Response({"error": "No valid notification ID provided."}, status=status.HTTP_400_BAD_REQUEST)
 
 
 

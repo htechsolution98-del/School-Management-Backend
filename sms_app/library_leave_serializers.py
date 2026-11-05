@@ -985,7 +985,9 @@ class CertificateRequestSerializer(serializers.ModelSerializer):
     generated_data = serializers.SerializerMethodField()
     student_name = serializers.SerializerMethodField()
     student_gr_no = serializers.CharField(source="student.gr_no", read_only=True, default="")
-    student_class = serializers.CharField(source="student.school_class.school_class", read_only=True, default="")
+    student_class = serializers.SerializerMethodField()
+    student_division = serializers.SerializerMethodField()
+    student_roll_no = serializers.SerializerMethodField()
 
     class Meta:
         model = CertificateRequest
@@ -995,6 +997,8 @@ class CertificateRequestSerializer(serializers.ModelSerializer):
             "student_name",
             "student_gr_no",
             "student_class",
+            "student_division",
+            "student_roll_no",
             "certificate_type",
             "certificate_type_name",
             "status",
@@ -1029,11 +1033,39 @@ class CertificateRequestSerializer(serializers.ModelSerializer):
             return " ".join(parts) if parts else str(obj.student)
         return "Student"
 
+    def get_student_class(self, obj):
+        student = obj.student
+        if not student:
+            return ""
+        if student.school_class:
+            return student.school_class.school_class
+        if hasattr(student, "admission") and student.admission:
+            for item in student.admission.field_values.all():
+                if item.field and item.field.map_to_student_field == "school_class":
+                    return item.value
+        return ""
+
+    def get_student_division(self, obj):
+        student = obj.student
+        if not student:
+            return ""
+        if student.division:
+            return student.division.division if hasattr(student.division, "division") else str(student.division)
+        return ""
+
+    def get_student_roll_no(self, obj):
+        student = obj.student
+        if not student:
+            return ""
+        return str(student.roll_no or "")
+
 
 class ClerkCertificateRequestSerializer(serializers.ModelSerializer):
     student_name = serializers.SerializerMethodField()
     student_gr_no = serializers.CharField(source="student.gr_no", read_only=True, default="")
-    student_class = serializers.CharField(source="student.school_class.school_class", read_only=True, default="")
+    student_class = serializers.SerializerMethodField()
+    student_division = serializers.SerializerMethodField()
+    student_roll_no = serializers.SerializerMethodField()
     certificate_type = serializers.CharField(source="certificate_type.name", read_only=True)
     certificate_type_id = serializers.IntegerField(source="certificate_type.id", read_only=True)
     certificate_file = serializers.SerializerMethodField()
@@ -1048,6 +1080,8 @@ class ClerkCertificateRequestSerializer(serializers.ModelSerializer):
             "student_name",
             "student_gr_no",
             "student_class",
+            "student_division",
+            "student_roll_no",
             "certificate_type",
             "certificate_type_id",
             "status",
@@ -1078,10 +1112,34 @@ class ClerkCertificateRequestSerializer(serializers.ModelSerializer):
             parts = [p for p in [student.surname, student.name, student.father_name] if p]
             return " ".join(parts) if parts else str(student)
         return "Student"
-        
-        
-        
-        
+
+    def get_student_class(self, obj):
+        student = obj.student
+        if not student:
+            return ""
+        if student.school_class:
+            return student.school_class.school_class
+        if hasattr(student, "admission") and student.admission:
+            for item in student.admission.field_values.all():
+                if item.field and item.field.map_to_student_field == "school_class":
+                    return item.value
+        return ""
+
+    def get_student_division(self, obj):
+        student = obj.student
+        if not student:
+            return ""
+        if student.division:
+            return student.division.division if hasattr(student.division, "division") else str(student.division)
+        return ""
+
+    def get_student_roll_no(self, obj):
+        student = obj.student
+        if not student:
+            return ""
+        return str(student.roll_no or "")
+
+
 class CertificateTemplateFieldSerializer(serializers.ModelSerializer):
 
     value = serializers.SerializerMethodField("get_field_value")

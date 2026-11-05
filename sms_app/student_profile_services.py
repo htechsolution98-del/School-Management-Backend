@@ -21,9 +21,11 @@ ABC_ID_ERROR = "ABC ID must be exactly 12 digits."
 def validate_aadhaar(value, exclude_student_id=None):
     if value in (None, ""):
         return value
-    if not isinstance(value, str) or not re.fullmatch(r"[0-9]{12}", value.strip()):
+    val = str(value).strip().replace(" ", "").replace("-", "")
+    if not val:
+        return ""
+    if not re.fullmatch(r"[0-9]{12}", val):
         raise serializers.ValidationError(AADHAAR_ERROR)
-    val = value.strip()
     from .models import Student
     qs = Student.objects.filter(aadhar_number=val)
     if exclude_student_id is not None:
@@ -36,27 +38,33 @@ def validate_aadhaar(value, exclude_student_id=None):
 def validate_udise(value):
     if value in (None, ""):
         return value
-    if not isinstance(value, str) or not re.fullmatch(r"[0-9]{11}", value.strip()):
+    val = str(value).strip().replace(" ", "").replace("-", "")
+    if not val:
+        return ""
+    if not re.fullmatch(r"[0-9]{11}", val):
         raise serializers.ValidationError(UDISE_ERROR)
-    return value.strip()
+    return val
 
 
 def validate_abc_id(value):
     if value in (None, ""):
         return value
-    if not isinstance(value, str) or not re.fullmatch(r"[0-9]{12}", value.strip()):
+    val = str(value).strip().replace(" ", "").replace("-", "")
+    if not val:
+        return ""
+    if not re.fullmatch(r"[0-9]{12}", val):
         raise serializers.ValidationError(ABC_ID_ERROR)
-    return value.strip()
+    return val
 
 
 def is_aadhaar_field(field):
     return field.map_to_student_field == "aadhar_number" or bool(re.search(r"aadh?aar|aadhar", field.label or "", re.I))
 
 
-def validate_dynamic_id(attrs):
+def validate_dynamic_id(attrs, exclude_student_id=None):
     field = attrs.get("field")
     if field and is_aadhaar_field(field) and "value" in attrs:
-        attrs["value"] = validate_aadhaar(attrs["value"])
+        attrs["value"] = validate_aadhaar(attrs["value"], exclude_student_id=exclude_student_id)
     return attrs
 
 
@@ -70,7 +78,51 @@ class AadhaarValidationMixin:
 
 class DynamicIDValidationMixin:
     def validate(self, attrs):
-        return validate_dynamic_id(attrs)
+        exclude_student_id = None
+        try:
+            inst = getattr(self, "instance", None)
+            if inst:
+                if hasattr(inst, "student_id") and inst.student_id:
+                    exclude_student_id = inst.student_id
+                elif hasattr(inst, "admission") and inst.admission:
+                    from .models import Student
+                    st = Student.objects.filter(admission=inst.admission).first()
+                    if st:
+                        exclude_student_id = st.id
+            if not exclude_student_id:
+                parent = getattr(self, "parent", None)
+                parent_inst = getattr(getattr(parent, "parent", None), "instance", None) or getattr(parent, "instance", None)
+                if parent_inst:
+                    from .models import Student, Admission
+                    if isinstance(parent_inst, Admission) or hasattr(parent_inst, "admission_number"):
+                        st = Student.objects.filter(admission=parent_inst).first()
+                        if st:
+                            exclude_student_id = st.id
+                    elif isinstance(parent_inst, Student):
+                        exclude_student_id = parent_inst.id
+            if not exclude_student_id and hasattr(self, "context"):
+                view = self.context.get("view")
+                if view:
+                    adm = None
+                    if hasattr(view, "get_object"):
+                        try:
+                            adm = view.get_object()
+                        except Exception:
+                            adm = None
+                    if not adm and hasattr(view, "kwargs"):
+                        adm_no = view.kwargs.get("admission_number") or view.kwargs.get("pk")
+                        if adm_no:
+                            from .models import Admission
+                            adm = Admission.objects.filter(admission_number=adm_no).first()
+                    if adm:
+                        from .models import Student
+                        st = Student.objects.filter(admission=adm).first()
+                        if st:
+                            exclude_student_id = st.id
+        except Exception:
+            pass
+
+        return validate_dynamic_id(attrs, exclude_student_id=exclude_student_id)
 
 
 def profile_queryset(queryset):

@@ -1,6 +1,25 @@
+
+def extract_staff_department_ids(instance):
+    dept_ids = []
+    if getattr(instance, "department_id", None):
+        dept_ids.append(instance.department_id)
+    desig = getattr(instance, "designation", "") or ""
+    if "dept_ids:" in desig:
+        try:
+            part = desig.split("dept_ids:")[1].split(";")[0]
+            for num in part.split(","):
+                if num.strip().isdigit():
+                    val = int(num.strip())
+                    if val not in dept_ids:
+                        dept_ids.append(val)
+        except Exception:
+            pass
+    return dept_ids
+
 # pyrefly: ignore [missing-import]
 from rest_framework import serializers
 from .models import *
+from django.db.models import Q
 # pyrefly: ignore [missing-import]
 from django.contrib.auth import get_user_model
 from django.utils import timezone
@@ -28,9 +47,16 @@ class DepartmentSerializer(serializers.ModelSerializer):
         read_only_fields = ["school", "created_at", "updated_at"]
 
     def get_staff_count(self, obj):
-        if hasattr(obj, "annotated_staff_count"):
-            return obj.annotated_staff_count
-        return obj.staff_set.count()
+        try:
+            return Staff.objects.filter(
+                Q(department=obj) |
+                Q(designation__icontains=f"dept_ids:{obj.id},") |
+                Q(designation__icontains=f",{obj.id},") |
+                Q(designation__endswith=f",{obj.id}") |
+                Q(designation=f"dept_ids:{obj.id}")
+            ).distinct().count()
+        except Exception:
+            return obj.staff_set.count()
 
     def get_total_staff(self, obj):
         return self.get_staff_count(obj)
@@ -44,6 +70,10 @@ class DepartmentSerializer(serializers.ModelSerializer):
         return clean_name
 
 class StaffSerializer(serializers.ModelSerializer):
+    departments = serializers.ListField(
+        child=serializers.IntegerField(), required=False, write_only=True
+    )
+
     class Meta:
         model = Staff
         fields = "__all__"
@@ -57,27 +87,41 @@ class StaffSerializer(serializers.ModelSerializer):
         return value.strip()
 
     def validate_email(self, value):
-        if not value or not value.strip():
-            raise serializers.ValidationError("Email address is required.")
-        value = value.strip().lower()
+        if not value or not str(value).strip():
+            return value
+        val = str(value).strip().lower()
         import re
-        if not re.match(r"^[^\s@]+@[^\s@]+\.[^\s@]+$", value):
+        if not re.match(r"^[^\s@]+@[^\s@]+\.[^\s@]+$", val):
             raise serializers.ValidationError("Enter a valid email address.")
-        qs = User.objects.filter(email__iexact=value)
-        if self.instance and self.instance.user:
-            qs = qs.exclude(pk=self.instance.user.pk)
-        if qs.exists():
+        qs = User.objects.filter(email__iexact=val)
+        staff_qs = Staff.objects.filter(email__iexact=val)
+        if self.instance:
+            if getattr(self.instance, "user", None):
+                qs = qs.exclude(pk=self.instance.user.pk)
+            staff_qs = staff_qs.exclude(pk=self.instance.pk)
+        if qs.exists() or staff_qs.exists():
+            if self.instance and self.instance.email and self.instance.email.strip().lower() == val:
+                return val
             raise serializers.ValidationError("Email is already registered.")
-        return value
+        return val
 
     def validate_mobile(self, value):
-        value = validate_mobile(value, required=True)
-        qs = User.objects.filter(mobile=value)
-        if self.instance and self.instance.user:
-            qs = qs.exclude(pk=self.instance.user.pk)
-        if qs.exists():
+        if not value:
+            return value
+        val = "".join(c for c in str(value) if c.isdigit())
+        if len(val) != 10:
+            raise serializers.ValidationError("Mobile number must be exactly 10 digits.")
+        qs = User.objects.filter(mobile=val)
+        staff_qs = Staff.objects.filter(mobile=val)
+        if self.instance:
+            if getattr(self.instance, "user", None):
+                qs = qs.exclude(pk=self.instance.user.pk)
+            staff_qs = staff_qs.exclude(pk=self.instance.pk)
+        if qs.exists() or staff_qs.exists():
+            if self.instance and self.instance.mobile == val:
+                return val
             raise serializers.ValidationError("Mobile number is already registered.")
-        return value
+        return val
 
     def validate_date_of_birth(self, value):
         if value:
@@ -115,9 +159,12 @@ class StaffSerializer(serializers.ModelSerializer):
                 if attrs.get("is_active") is not False:
                     attrs["is_active"] = True
         else:
-            exit_date = self.instance.exit_date if self.instance else None
-            if exit_date and exit_date <= timezone.localdate():
-                attrs["is_active"] = False
+            if attrs.get("is_active") is True:
+                attrs["exit_date"] = None
+            else:
+                exit_date = self.instance.exit_date if self.instance else None
+                if exit_date and exit_date <= timezone.localdate():
+                    attrs["is_active"] = False
 
         return attrs
 
@@ -134,14 +181,55 @@ class StaffSerializer(serializers.ModelSerializer):
                 logging.getLogger(__name__).warning("Failed to auto-allocate leaves for staff %s: %s", staff.id, e)
 
     def create(self, validated_data):
+        departments = validated_data.pop("departments", None)
+        if departments:
+            primary_id = int(departments[0])
+            validated_data["department"] = Department.objects.filter(id=primary_id).first()
+            all_str = ",".join(str(d) for d in departments)
+            existing_desig = validated_data.get("designation") or ""
+            clean_desig = existing_desig.split("dept_ids:")[0].strip() if "dept_ids:" in existing_desig else existing_desig.strip()
+            validated_data["designation"] = f"dept_ids:{all_str}" if not clean_desig else f"{clean_desig};dept_ids:{all_str}"
+
         instance = super().create(validated_data)
         self._sync_leave_allocation(instance)
         return instance
 
     def update(self, instance, validated_data):
+        departments = validated_data.pop("departments", None)
+        if departments is not None:
+            if departments:
+                primary_id = int(departments[0])
+                validated_data["department"] = Department.objects.filter(id=primary_id).first()
+                all_str = ",".join(str(d) for d in departments)
+                existing_desig = validated_data.get("designation") or instance.designation or ""
+                clean_desig = existing_desig.split("dept_ids:")[0].strip() if "dept_ids:" in existing_desig else existing_desig.strip()
+                validated_data["designation"] = f"dept_ids:{all_str}" if not clean_desig else f"{clean_desig};dept_ids:{all_str}"
+            else:
+                validated_data["department"] = None
+                existing_desig = validated_data.get("designation") or instance.designation or ""
+                if "dept_ids:" in existing_desig:
+                    validated_data["designation"] = existing_desig.split("dept_ids:")[0].strip() or None
+
         instance = super().update(instance, validated_data)
         self._sync_leave_allocation(instance)
         return instance
+
+    def to_representation(self, instance):
+        ret = super().to_representation(instance)
+        dept_ids = extract_staff_department_ids(instance)
+        dept_names = []
+        if dept_ids:
+            try:
+                dept_map = {d.id: d.name for d in Department.objects.filter(id__in=dept_ids)}
+                dept_names = [dept_map[d_id] for d_id in dept_ids if d_id in dept_map]
+            except Exception:
+                if instance.department:
+                    dept_names = [instance.department.name]
+
+        ret["departments"] = dept_ids
+        ret["department_names"] = dept_names
+        ret["department_name"] = ", ".join(dept_names) if dept_names else (instance.department.name if instance.department else None)
+        return ret
 
 
 

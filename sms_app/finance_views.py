@@ -674,8 +674,9 @@ class StudentFeeViewSet(ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
+        user = self.request.user
         queryset = (
-            StudentFee.objects.filter(school=self.request.user.school)
+            StudentFee.objects.filter(school=user.school)
             .select_related(
                 "academic_year",
                 "student",
@@ -685,6 +686,10 @@ class StudentFeeViewSet(ModelViewSet):
             )
             .prefetch_related("payments")
         )
+
+        user_role = str(getattr(user, "role", "")).upper()
+        if user_role == "STUDENT" or hasattr(user, "student") or Student.objects.filter(user=user).exists():
+            queryset = queryset.filter(student__user=user)
 
         student = self.request.query_params.get("student")
         school_class = self.request.query_params.get("school_class")
@@ -822,6 +827,10 @@ class StudentFeePaymentViewSet(ModelViewSet):
         )
         if school:
             queryset = queryset.filter(school=school)
+
+        user_role = str(getattr(user, "role", "")).upper()
+        if user_role == "STUDENT" or hasattr(user, "student") or Student.objects.filter(user=user).exists():
+            queryset = queryset.filter(student__user=user)
 
         student_fee = self.request.query_params.get("student_fee")
         student = self.request.query_params.get("student")

@@ -2969,7 +2969,7 @@ class StudentAttendance(models.Model):
 
     is_absent = models.BooleanField(default=False)
 
-    attendance_date = models.DateField(auto_now_add=True)
+    attendance_date = models.DateField(default=timezone.localdate, db_index=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
 

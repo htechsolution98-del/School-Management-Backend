@@ -6,14 +6,31 @@ import unicodedata
 
 
 def validate_admission_upload(file):
+    if not file:
+        return "File is required"
     extension = str(getattr(file, "name", "")).rsplit(".", 1)[-1].lower()
-    content_type = getattr(file, "content_type", "")
-    if extension not in ("pdf", "png", "jpg", "jpeg", "webp") or content_type not in ("", "application/pdf", "image/png", "image/jpeg", "image/webp"):
+    content_type = str(getattr(file, "content_type", "") or "").lower()
+    if extension not in ("pdf", "png", "jpg", "jpeg", "webp"):
+        return "Upload PDF, JPG, PNG or WebP files only"
+    valid_mime_types = (
+        "",
+        "application/pdf",
+        "application/x-pdf",
+        "application/octet-stream",
+        "binary/octet-stream",
+        "image/png",
+        "image/jpeg",
+        "image/pjpeg",
+        "image/webp",
+    )
+    if content_type and content_type not in valid_mime_types:
         return "Upload PDF, JPG, PNG or WebP files only"
     size = getattr(file, "size", 0)
-    limit = (3 if extension == "pdf" else 1) * 1024 * 1024
-    if size <= 0 or size > limit:
-        return "PDF must be up to 3 MB and images up to 1 MB; empty files are not allowed"
+    limit = (5 if extension == "pdf" else 3) * 1024 * 1024
+    if size <= 0:
+        return "The uploaded file is empty"
+    if size > limit:
+        return f"File size exceeds maximum limit ({limit // (1024 * 1024)} MB)"
     return ""
 
 
@@ -54,7 +71,7 @@ def validate_admission_value(field, raw_value, today=None):
         if re.fullmatch(r"\+91\d{10}", value):
             value = value[3:]
         if not re.fullmatch(r"[6-9]\d{9}", value):
-            return value, "Enter a valid 10-digit mobile number"
+            return value, "Enter a valid 10-digit mobile number starting with 6, 7, 8, or 9"
     if kind == "email" or re.search(r"email|e-mail", descriptor):
         value = value.lower()
         if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]{2,}", value):

@@ -30,7 +30,7 @@ from drf_yasg import openapi
 from django.conf import settings
 from django.conf.urls.static import static
 from sms_app.views import *
-from sms_app.auth_views import CustomLoginView, InitDatabaseView, CookieTokenRefreshView, ChangePasswordView, LogoutView
+from sms_app.auth_views import CustomLoginView, InitDatabaseView, CookieTokenRefreshView, ChangePasswordView, LogoutView, ForgotPasswordSendOTPView, ForgotPasswordResetView
 from sms_app.finance_ledger_views import *
 from sms_app.finance_views import (
     RTESummaryView,
@@ -407,6 +407,10 @@ urlpatterns = [
     
     path('api/api-login/', LoginView.as_view()),
     path('api/logout/', LogoutView.as_view(), name='api_logout'),
+    path('api/forgot-password/send-otp/', ForgotPasswordSendOTPView.as_view(), name='forgot_password_send_otp'),
+    path('api/forgot-password/reset/', ForgotPasswordResetView.as_view(), name='forgot_password_reset'),
+    path('forgot-password/send-otp/', ForgotPasswordSendOTPView.as_view()),
+    path('forgot-password/reset/', ForgotPasswordResetView.as_view()),
     path('logout/', LogoutView.as_view(), name='logout_direct'),
     path('api/me/', CurrentUserProfileView.as_view(), name='current_user_profile'),
     path('api/profile/', CurrentUserProfileView.as_view(), name='profile_alias'),

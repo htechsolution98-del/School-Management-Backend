@@ -34,9 +34,21 @@ class SchoolStatusMiddleware(MiddlewareMixin):
 
         # Check if user has a school and it's active
         school = getattr(request.user, "school", None)
+        if not school:
+            staff = getattr(request.user, "staff", None)
+            if staff and staff.school:
+                school = staff.school
+        if not school:
+            student = getattr(request.user, "student", None)
+            if student and student.school:
+                school = student.school
+
         if school and school.is_active is False:
             return JsonResponse(
-                {"detail": "School is deactivated. Contact administrator."},
+                {
+                    "detail": "School is deactivated. Contact administrator.",
+                    "code": "school_deactivated",
+                },
                 status=403,
             )
 

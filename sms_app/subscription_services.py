@@ -20,6 +20,36 @@ from dateutil.relativedelta import relativedelta
 
 class SubscriptionBillingService:
     @staticmethod
+    def calculate_renewal_period(subscription: Optional[SchoolSubscription], months_count: int = 1):
+        """
+        Calculates renewal start and end dates:
+        - If subscription is overdue (due_date in the past), renewal counts from the expiration date (due_date),
+          effectively deducting the overdue days.
+        - If subscription is active, renewal extends from due_date.
+        - If no previous subscription / due_date, renewal starts from today.
+        Returns: (base_date, next_due, overdue_days)
+        """
+        today = timezone.now().date()
+        effective_months = max(1, int(months_count or 1))
+
+        if subscription and subscription.due_date:
+            base_date = subscription.due_date
+            candidate_due = base_date + relativedelta(months=effective_months)
+            overdue_days = max(0, (today - base_date).days) if base_date < today else 0
+
+            # If overdue period exceeds the renewed months, ensure it remains active until at least tomorrow
+            if candidate_due <= today:
+                next_due = today + relativedelta(days=1)
+            else:
+                next_due = candidate_due
+        else:
+            base_date = today
+            next_due = base_date + relativedelta(months=effective_months)
+            overdue_days = 0
+
+        return base_date, next_due, overdue_days
+
+    @staticmethod
     def get_active_student_count(school: School) -> int:
         """Counts active students excluding deleted/archived/inactive ones."""
         return Student.objects.filter(school=school, is_active=True).count()
@@ -120,9 +150,8 @@ class SubscriptionBillingService:
         # Calculate days expansion & future due date
         today = timezone.now().date()
         sub = getattr(school, "subscription", None)
-        base_date = sub.due_date if (sub and sub.due_date and sub.due_date > today and sub.status in ["ACTIVE", "TRIAL", "GRACE_PERIOD"]) else today
-        new_due_date = base_date + relativedelta(months=effective_months)
-        expanded_days = (new_due_date - today).days
+        base_date, new_due_date, overdue_days = cls.calculate_renewal_period(sub, effective_months)
+        expanded_days = max(1, (new_due_date - today).days)
 
         snapshot = {
             "plan_id": plan.id if plan else None,
@@ -141,6 +170,8 @@ class SubscriptionBillingService:
             "current_due_date": str(base_date),
             "new_due_date": str(new_due_date),
             "expanded_days": expanded_days,
+            "overdue_days": overdue_days,
+            "counted_from_expiration": overdue_days > 0,
             "captured_at": timezone.now().isoformat(),
         }
 
@@ -158,6 +189,8 @@ class SubscriptionBillingService:
             "current_due_date": str(base_date),
             "new_due_date": str(new_due_date),
             "expanded_days": expanded_days,
+            "overdue_days": overdue_days,
+            "counted_from_expiration": overdue_days > 0,
             "price_snapshot": snapshot,
         }
 

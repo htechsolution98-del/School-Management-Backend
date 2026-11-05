@@ -64,7 +64,7 @@ class SchoolFeatureView(ModelViewSet):
                 feature_name = feature.name.strip()
                 staff_qs = Staff.objects.filter(school=school, category__iexact=feature_name)
                 staff_qs.update(is_active=is_enabled)
-                
+
                 user_ids = list(staff_qs.values_list('user_id', flat=True))
                 if user_ids:
                     User.objects.filter(id__in=user_ids).update(is_active=is_enabled)
@@ -119,7 +119,7 @@ class ChangeFeatureStatusVIew(ModelViewSet):
                 feature_name = feature.name.strip()
                 staff_qs = Staff.objects.filter(school=school, category__iexact=feature_name)
                 staff_qs.update(is_active=is_enabled)
-                
+
                 user_ids = list(staff_qs.values_list('user_id', flat=True))
                 if user_ids:
                     User.objects.filter(id__in=user_ids).update(is_active=is_enabled)
@@ -211,24 +211,26 @@ class SchoolView(ModelViewSet):
             # ✅ Create school with generated code
             school = serializer.save(login_id=user, code=school_code)
 
-            # ✅ Bulk create school features
-            school_features = [
-                SchoolFeature(school=school, feature=feature, is_enabled=True)
-                for feature in features
-            ]
-
-            SchoolFeature.objects.bulk_create(school_features, ignore_conflicts=True)
+            # ✅ Create school features: Enable ONLY selected features, disable unselected
+            selected_fids = set(f.id for f in features)
+            all_features = Feature.objects.all()
+            for feat in all_features:
+                SchoolFeature.objects.update_or_create(
+                    school=school,
+                    feature=feat,
+                    defaults={"is_enabled": (feat.id in selected_fids)}
+                )
 
             # ✅ Link user to school
             user.school = school  # if field exists
             user.save()
 
-            # 🌟 Create dedicated SubscriptionPlan for this School
-            plan_name = f"{school.name} Plan"
+                        # 🌟 Create dedicated SubscriptionPlan for this School (unique per school code even with same school name)
+            plan_name = f"{school.name} ({school.code}) Plan"
             plan, _ = SubscriptionPlan.objects.get_or_create(
                 name=plan_name,
                 defaults={
-                    "description": f"Subscription plan configured for {school.name}",
+                    "description": f"Subscription plan configured for {school.name} ({school.code})",
                     "pricing_model": pricing_model or "FLAT",
                     "monthly_price": monthly_p or 0,
                     "quarterly_price": quarterly_p or 0,
@@ -246,7 +248,7 @@ class SchoolView(ModelViewSet):
             today = timezone.now().date()
             s_start = trial_start if trial_start else today
             s_end = trial_end if trial_end else (today + datetime.timedelta(days=14))
-            
+
             SchoolSubscription.objects.create(
                 school=school,
                 plan=plan,
@@ -292,7 +294,7 @@ class SchoolView(ModelViewSet):
                     if sf.is_enabled != should_be_enabled:
                         sf.is_enabled = should_be_enabled
                         sf.save()
-                        
+
                         feat_name = sf.feature.name.strip()
                         staff_qs = Staff.objects.filter(school=school, category__iexact=feat_name)
                         staff_qs.update(is_active=should_be_enabled)
@@ -378,12 +380,26 @@ class SchoolView(ModelViewSet):
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
+        from .models import Student
+        staff_count = Staff.objects.filter(school=instance).count()
+        student_count = Student.objects.filter(school=instance).count()
+        if staff_count > 0 or student_count > 0:
+            return Response(
+                {
+                    "error": f"Cannot delete school '{instance.name}'. This institution currently has {student_count} student(s) and {staff_count} staff member(s) registered. All students and staff must be transferred or removed before this school/trustee can be deleted.",
+                    "detail": f"This school/trustee cannot be deleted because it still contains active records: {student_count} student(s) and {staff_count} staff member(s).",
+                    "student_count": student_count,
+                    "staff_count": staff_count,
+                    "can_delete": False,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         try:
             self.perform_destroy(instance)
             return Response({"message": "School deleted successfully."}, status=status.HTTP_200_OK)
         except ProtectedError:
             return Response(
-                {"error": "Cannot delete school because active records (such as students) are linked to it."},
+                {"error": "Cannot delete school because active records (such as students or staff) are linked to it."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         except Exception as e:
@@ -883,6 +899,9 @@ class AnnouncementView(APIView):
                 "SUPER_ADMIN",
                 "PRINCIPAL",
                 "VICE PRINCIPAL",
+                "CLERK",
+                "ASSISTANT CLERK",
+                "ASSISTANT_CLERK",
             ]
         )
 
@@ -901,8 +920,6 @@ class AnnouncementView(APIView):
                     | models.Q(announcement_for__icontains="STUDENT")
                     | models.Q(announcement_for__iexact="STUDENTS_PARENTS")
                     | models.Q(announcement_for__iexact="STUDENT_PARENT")
-                    | models.Q(announcement_for__isnull=True)
-                    | models.Q(announcement_for="")
                 )
             )
             if student:
@@ -932,8 +949,6 @@ class AnnouncementView(APIView):
                     | models.Q(announcement_for__icontains="PARENT")
                     | models.Q(announcement_for__iexact="STUDENTS_PARENTS")
                     | models.Q(announcement_for__iexact="STUDENT_PARENT")
-                    | models.Q(announcement_for__isnull=True)
-                    | models.Q(announcement_for="")
                 )
             )
             if student:
@@ -998,8 +1013,6 @@ class AnnouncementView(APIView):
                 & (
                     models.Q(is_everyone=True)
                     | models.Q(announcement_for__iexact="ALL")
-                    | models.Q(announcement_for__isnull=True)
-                    | models.Q(announcement_for="")
                     | role_target_q
                 )
             )
@@ -1354,10 +1367,13 @@ class AnnouncementMarkReadView(APIView):
         if not target_ids:
             return Response({"error": "No valid announcement ID provided."}, status=status.HTTP_400_BAD_REQUEST)
 
-        reads = [AnnouncementRead(user=user, announcement_id=tid) for tid in target_ids]
-        AnnouncementRead.objects.bulk_create(reads, ignore_conflicts=True)
+        existing_ids = set(Announcement.objects.filter(id__in=target_ids).values_list("id", flat=True))
+        valid_targets = [tid for tid in target_ids if tid in existing_ids]
+        if valid_targets:
+            reads = [AnnouncementRead(user=user, announcement_id=tid) for tid in valid_targets]
+            AnnouncementRead.objects.bulk_create(reads, ignore_conflicts=True)
 
-        return Response({"message": "Marked as read successfully.", "read_ids": target_ids}, status=status.HTTP_200_OK)
+        return Response({"message": "Marked as read successfully.", "read_ids": valid_targets}, status=status.HTTP_200_OK)
 
 
 class HolidayCalendarView(APIView):
@@ -1571,11 +1587,9 @@ class HolidayCalendarView(APIView):
             pass
         return Response({"message": "Event deleted successfully"}, status=status.HTTP_200_OK)
 
-        
+
 
 
 from rest_framework_simplejwt.views import TokenRefreshView
 from django.conf import settings
-
-
 

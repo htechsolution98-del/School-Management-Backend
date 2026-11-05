@@ -1636,9 +1636,9 @@ class StudentAttendanceSerializer(serializers.ModelSerializer):
             "id",
             "school",
             "attendance_by",
-            "attendance_date",
             "created_at",
         ]
+        validators = []
 
     def validate(self, attrs):
 
@@ -1659,10 +1659,12 @@ class StudentAttendanceSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
 
-        request = self.context["request"]
-
-        validated_data["school"] = request.user.school
-        validated_data["attendance_by"] = request.user.staff
+        request = self.context.get("request")
+        if request:
+            user = request.user
+            school = getattr(user, "school", None) or getattr(getattr(user, "staff", None), "school", None)
+            validated_data["school"] = school
+            validated_data["attendance_by"] = getattr(user, "staff", None)
 
         attendance = super().create(validated_data)
 
