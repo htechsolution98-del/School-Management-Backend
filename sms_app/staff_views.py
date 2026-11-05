@@ -854,6 +854,7 @@ from rest_framework.permissions import IsAuthenticated
 
 from rest_framework.decorators import action
 from django.db.models import Q
+from .staff_serializers import TeacherWorkloadSerializer
 
 
 class TeacherWorkloadViewSet(TrusteeStaffReadOnlyMixin, ModelViewSet):
@@ -925,19 +926,22 @@ class TeacherWorkloadViewSet(TrusteeStaffReadOnlyMixin, ModelViewSet):
                     return Response({"detail": f"{d.capitalize()} limit must be between 0 and 15."}, status=status.HTTP_400_BAD_REQUEST)
                 update_fields[f] = val
 
-        max_weekly = request.data.get("max_weekly_periods")
         max_consecutive = request.data.get("max_consecutive_periods")
 
-        if max_weekly is not None:
-            val = int(max_weekly)
-            if val < 1 or val > 60:
-                return Response({"detail": "Weekly limit must be between 1 and 60."}, status=status.HTTP_400_BAD_REQUEST)
-            update_fields["max_weekly_periods"] = val
         if max_consecutive is not None:
             val = int(max_consecutive)
-            if val < 1 or val > 10:
-                return Response({"detail": "Consecutive limit must be between 1 and 10."}, status=status.HTTP_400_BAD_REQUEST)
+            if val < 2 or val > 10:
+                return Response({"detail": "Consecutive limit must be between 2 and 10."}, status=status.HTTP_400_BAD_REQUEST)
             update_fields["max_consecutive_periods"] = val
+
+        # Mathematical Integrity: Derive weekly limit from daily sum if daily limits were provided
+        day_keys = [f"max_periods_{d}" for d in ["mon", "tue", "wed", "thu", "fri", "sat"]]
+        if all(k in update_fields for k in day_keys):
+            update_fields["max_weekly_periods"] = sum(update_fields[k] for k in day_keys)
+        elif "max_weekly_periods" in request.data:
+            val = int(request.data["max_weekly_periods"])
+            if val >= 1 and val <= 60:
+                update_fields["max_weekly_periods"] = val
 
         if not update_fields:
             return Response({"detail": "No valid fields provided to update."}, status=status.HTTP_400_BAD_REQUEST)
@@ -948,3 +952,65 @@ class TeacherWorkloadViewSet(TrusteeStaffReadOnlyMixin, ModelViewSet):
 
         updated_count = qs.update(**update_fields)
         return Response({"message": f"Successfully updated {updated_count} teachers.", "count": updated_count})
+
+    @action(detail=False, methods=["get", "post"], url_path="saturday-policy", permission_classes=[IsAuthenticated])
+    def saturday_policy(self, request):
+        school = self.get_school()
+        if not school:
+            return Response({"detail": "School not found."}, status=status.HTTP_400_BAD_REQUEST)
+
+        from sms_app.models import WorkingDay, AttendanceTimeRule
+        from django.core.cache import cache
+        from sms_app.services.leave_service import get_school_saturday_policy
+
+        if request.method == "POST":
+            from sms_app.permissions import IsClerkOrAdmin
+            if not (request.user.is_superuser or IsClerkOrAdmin().has_permission(request, self)):
+                return Response({"detail": "Permission denied. Only Clerks/Admins can modify Saturday policy."}, status=403)
+
+            policy = str(request.data.get("saturday_policy", "")).upper()
+            if policy not in ["OFF", "HALF_DAY", "FULL_DAY"]:
+                return Response(
+                    {"detail": "Invalid policy. Choose 'OFF', 'HALF_DAY', or 'FULL_DAY'."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            if policy == "OFF":
+                WorkingDay.objects.filter(school=school, day="saturday").delete()
+            else:
+                WorkingDay.objects.get_or_create(school=school, day="saturday")
+
+            cache.set(f"school_{school.id}_saturday_policy", policy, timeout=None)
+
+            auto_apply = request.data.get("auto_apply_to_staff", False)
+            if auto_apply:
+                max_sat = 0 if policy == "OFF" else (3 if policy == "HALF_DAY" else 5)
+                teachers = self.get_queryset()
+                for t in teachers:
+                    t.max_periods_sat = max_sat
+                    t.max_weekly_periods = (
+                        (t.max_periods_mon or 0) + (t.max_periods_tue or 0) +
+                        (t.max_periods_wed or 0) + (t.max_periods_thu or 0) +
+                        (t.max_periods_fri or 0) + max_sat
+                    )
+                    t.save()
+
+            return Response({
+                "saturday_policy": policy,
+                "max_periods": 0 if policy == "OFF" else (3 if policy == "HALF_DAY" else 5),
+                "is_locked": policy == "OFF",
+                "label": "Sat Off" if policy == "OFF" else ("Half Day (3 periods max)" if policy == "HALF_DAY" else "Full Day"),
+                "message": f"Saturday policy set to {policy}."
+            })
+
+        # GET: determine school policy
+        detected_policy = get_school_saturday_policy(school)
+
+        return Response({
+            "saturday_policy": detected_policy,
+            "max_periods": 0 if detected_policy == "OFF" else (3 if detected_policy == "HALF_DAY" else 5),
+            "is_locked": detected_policy == "OFF",
+            "label": "Sat Off" if detected_policy == "OFF" else ("Half Day (3 periods max)" if detected_policy == "HALF_DAY" else "Full Day"),
+            "source": "Institutional Academic Working Calendar"
+        })
+

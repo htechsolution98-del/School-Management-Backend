@@ -1103,8 +1103,8 @@ class AttendanceSerializer(serializers.ModelSerializer):
 
 
 class AcademicYearSerializer(serializers.ModelSerializer):
-    start_year = serializers.IntegerField(write_only=True, required=False)
-    end_year = serializers.IntegerField(write_only=True, required=False)
+    start_year = serializers.IntegerField(required=False)
+    end_year = serializers.IntegerField(required=False)
 
     month_numbers = serializers.SerializerMethodField()
     billing_periods = serializers.SerializerMethodField()
@@ -1125,6 +1125,13 @@ class AcademicYearSerializer(serializers.ModelSerializer):
             "created_at",
         ]
         read_only_fields = ["school", "name", "created_at"]
+
+    def to_representation(self, instance):
+        ret = super().to_representation(instance)
+        start_year = instance.get_start_year()
+        ret["start_year"] = start_year
+        ret["end_year"] = (start_year + 1) if start_year else None
+        return ret
 
     def get_month_numbers(self, obj):
         return obj.get_month_numbers()
@@ -1158,7 +1165,11 @@ class AcademicYearSerializer(serializers.ModelSerializer):
                 )
 
         request = self.context.get("request")
-        school = getattr(request.user, "school", None) if request else None
+        school = getattr(self.instance, "school", None) if self.instance else (
+            getattr(request.user, "school", None) if request and hasattr(request, "user") else None
+        )
+        if not school and request and hasattr(request, "user"):
+            school = getattr(request.user, "school", None)
 
         start_year = attrs.get("start_year")
         end_year = attrs.get("end_year")
@@ -1188,13 +1199,15 @@ class AcademicYearSerializer(serializers.ModelSerializer):
         name = attrs.get("name", getattr(self.instance, "name", None))
 
         if school and name:
-            queryset = AcademicYear.objects.filter(school=school, name=name)
-            if self.instance:
-                queryset = queryset.exclude(pk=self.instance.pk)
-            if queryset.exists():
-                raise serializers.ValidationError(
-                    {"name": "This academic year already exists for this school."}
-                )
+            # When updating, if the academic year name has not changed, skip uniqueness check
+            if not self.instance or self.instance.name != name:
+                queryset = AcademicYear.objects.filter(school=school, name=name)
+                if self.instance and self.instance.pk:
+                    queryset = queryset.exclude(pk=self.instance.pk)
+                if queryset.exists():
+                    raise serializers.ValidationError(
+                        {"name": "This academic year already exists for this school."}
+                    )
 
         return attrs
 
@@ -1212,6 +1225,10 @@ class AcademicYearSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         validated_data.pop("start_year", None)
         validated_data.pop("end_year", None)
+
+        name = validated_data.get("name")
+        if name:
+            instance.name = name
 
         is_active = validated_data.get("is_active", None)
         if is_active is True and instance.school:

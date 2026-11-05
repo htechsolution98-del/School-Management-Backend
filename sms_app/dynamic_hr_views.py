@@ -113,7 +113,7 @@ from .trustee_staff_access import TrusteeStaffReadOnlyMixin
 
 class AttendanceSettingViewSet(TrusteeStaffReadOnlyMixin, viewsets.ModelViewSet):
     serializer_class = AttendanceSettingSerializer
-    permission_classes = [IsAuthenticated, IsHRAttendanceAdmin]
+    permission_classes = [IsAuthenticated, IsClerkOrAdmin]
 
     def get_queryset(self):
         school = get_request_school(self.request)
@@ -126,6 +126,14 @@ class AttendanceSettingViewSet(TrusteeStaffReadOnlyMixin, viewsets.ModelViewSet)
         if not school:
             raise ValidationError("Authenticated user is not linked to any school.")
         serializer.save(school=school)
+
+
+    def perform_update(self, serializer):
+        instance = serializer.save()
+        if "biometric_required" in serializer.validated_data and instance.school:
+            AttendanceSetting.objects.filter(school=instance.school).update(
+                biometric_required=instance.biometric_required
+            )
 
 
 class AttendanceRegularizationViewSet(TrusteeStaffReadOnlyMixin, viewsets.ModelViewSet):

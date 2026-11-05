@@ -19,6 +19,7 @@ from sms_app.models import (
     Attendance,
     AttendanceSetting,
     Holiday,
+    WorkingDay,
 )
 
 logger = logging.getLogger(__name__)
@@ -32,6 +33,45 @@ def quantize_half_day(val):
     # Multiply by 2, round to whole integer, divide by 2
     doubled = (d * 2).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
     return doubled / 2
+
+
+InstitutionalHoliday = Holiday
+
+
+def get_school_saturday_policy(school):
+    """
+    Returns 'OFF', 'HALF_DAY', or 'FULL_DAY' for a school.
+    Resolution order:
+    1. Check Django cache first: f"school_{school.id}_saturday_policy"
+    2. Check WorkingDay table: if WorkingDay records exist and 'saturday' is NOT present -> 'OFF'
+    3. Check active Staff max_periods_sat:
+       - if any staff has max_periods_sat > 3 -> 'FULL_DAY'
+       - if all staff have max_periods_sat == 0 -> 'OFF'
+    4. Default institutional fallback -> 'HALF_DAY'
+    """
+    if not school:
+        return "HALF_DAY"
+    try:
+        from django.core.cache import cache
+        cached = cache.get(f"school_{school.id}_saturday_policy")
+        if cached in ["OFF", "HALF_DAY", "FULL_DAY"]:
+            return cached
+
+        from sms_app.models import WorkingDay, Staff
+        has_working = WorkingDay.objects.filter(school=school).exists()
+        has_sat = WorkingDay.objects.filter(school=school, day="saturday").exists()
+        if has_working and not has_sat:
+            return "OFF"
+
+        staff_qs = Staff.objects.filter(school=school, is_active=True)
+        if staff_qs.filter(max_periods_sat__gt=3).exists():
+            return "FULL_DAY"
+        if staff_qs.exists() and not staff_qs.filter(max_periods_sat__gt=0).exists():
+            return "OFF"
+
+        return "HALF_DAY"
+    except Exception:
+        return "HALF_DAY"
 
 
 class LeaveValidationService:
@@ -52,88 +92,83 @@ class LeaveValidationService:
         - excluded_holidays: int
         - effective_days: list of tuples [(date, day_weight, session)]
         - breakdown: list of detailed dicts for UI preview
+        - saturday_policy: str
         """
         if start_date > end_date:
             raise ValidationError("Start date cannot be after end date.")
 
-        if is_half_day:
-            if start_date != end_date:
-                raise ValidationError("Half-day leave must start and end on the same date.")
-            if not leave_type.half_day_allowed:
-                raise ValidationError(f"Leave type '{leave_type.name or leave_type.leave_type}' does not permit half-day leave.")
-            if half_day_session not in ["FIRST_HALF", "SECOND_HALF"]:
-                half_day_session = "FIRST_HALF"
+        sat_policy = get_school_saturday_policy(school)
+        from sms_app.models import WorkingDay, Holiday
+        has_working_day_model = WorkingDay.objects.filter(school=school).exists()
+        school_working_days = set(WorkingDay.objects.filter(school=school).values_list("day", flat=True)) if has_working_day_model else None
 
+        def _get_holiday_for_date(d):
+            return Holiday.objects.filter(
+                Q(school=school),
+                Q(is_holiday=True) | Q(event_type__in=["HOLIDAY", "WEEK_OFF"]),
+                Q(start_date__lte=d),
+                Q(end_date__gte=d) | Q(end_date__isnull=True, start_date=d),
+            ).first()
+
+        is_single_day = (start_date == end_date) or is_half_day
+
+        # ── 1. Single-Day Strict Checks ──
+        if is_single_day:
             day_name = start_date.strftime("%A")
             is_sunday = (start_date.weekday() == 6)
+            is_saturday = (start_date.weekday() == 5)
 
-            if is_sunday and not leave_type.include_weekends:
+            # Prevent leave submission on Sunday
+            if is_sunday and not getattr(leave_type, "include_weekends", False):
+                raise ValidationError("Selected date is an official holiday/off-day. Leave application is not permitted.")
+
+            # Prevent leave submission on official Holiday
+            if not getattr(leave_type, "include_holidays", False):
+                holiday_obj = _get_holiday_for_date(start_date)
+                if holiday_obj:
+                    raise ValidationError("Selected date is an official holiday/off-day. Leave application is not permitted.")
+
+            # Check WorkingDay model (if non-working day)
+            if school_working_days is not None and start_date.strftime("%A").lower() not in school_working_days and not getattr(leave_type, "include_weekends", False):
+                raise ValidationError("Selected date is an official holiday/off-day. Leave application is not permitted.")
+
+            # Strict Tri-State Saturday Rules for Single-Day
+            if is_saturday:
+                if sat_policy == "OFF":
+                    raise ValidationError("Saturday is an institutional off-day. Leave application is not permitted.")
+                elif sat_policy == "HALF_DAY" and is_half_day:
+                    raise ValidationError("Saturday operates on half-day hours; taking leave requires a Full Day absence.")
+
+            if is_half_day:
+                if start_date != end_date:
+                    raise ValidationError("Half-day leave must start and end on the same date.")
+                if not getattr(leave_type, "half_day_allowed", True):
+                    raise ValidationError(f"Leave type '{leave_type.name or leave_type.leave_type}' does not permit half-day leave.")
+                if half_day_session not in ["FIRST_HALF", "SECOND_HALF"]:
+                    half_day_session = "FIRST_HALF"
+
                 return {
-                    "total_effective_days": Decimal("0.0"),
+                    "total_effective_days": Decimal("0.5"),
                     "calendar_days": 1,
-                    "excluded_weekends": 1,
+                    "excluded_weekends": 0,
                     "excluded_holidays": 0,
-                    "effective_days": [],
+                    "effective_days": [(start_date, Decimal("0.5"), half_day_session)],
                     "breakdown": [
                         {
                             "date": start_date.strftime("%Y-%m-%d"),
                             "day_name": day_name,
-                            "weight": 0.0,
-                            "is_effective": False,
-                            "reason": "Sunday Weekly Off (Policy Excluded)",
-                            "category": "WEEKEND",
+                            "weight": 0.5,
+                            "is_effective": True,
+                            "reason": f"Half Day ({half_day_session.replace('_', ' ').title()})",
+                            "category": "HALF_DAY",
                         }
                     ],
+                    "saturday_policy": sat_policy,
                 }
 
-            if not leave_type.include_holidays:
-                holiday_obj = Holiday.objects.filter(
-                    Q(school=school),
-                    Q(is_holiday=True) | Q(event_type__in=["HOLIDAY", "WEEK_OFF"]),
-                    Q(start_date__lte=start_date),
-                    Q(end_date__gte=start_date) | Q(end_date__isnull=True, start_date=start_date),
-                ).first()
-                if holiday_obj:
-                    h_name = holiday_obj.name or holiday_obj.title or "School Holiday"
-                    return {
-                        "total_effective_days": Decimal("0.0"),
-                        "calendar_days": 1,
-                        "excluded_weekends": 0,
-                        "excluded_holidays": 1,
-                        "effective_days": [],
-                        "breakdown": [
-                            {
-                                "date": start_date.strftime("%Y-%m-%d"),
-                                "day_name": day_name,
-                                "weight": 0.0,
-                                "is_effective": False,
-                                "reason": f"Holiday: {h_name} (Policy Excluded)",
-                                "category": "HOLIDAY",
-                            }
-                        ],
-                    }
-
-            return {
-                "total_effective_days": Decimal("0.5"),
-                "calendar_days": 1,
-                "excluded_weekends": 0,
-                "excluded_holidays": 0,
-                "effective_days": [(start_date, Decimal("0.5"), half_day_session)],
-                "breakdown": [
-                    {
-                        "date": start_date.strftime("%Y-%m-%d"),
-                        "day_name": day_name,
-                        "weight": 0.5,
-                        "is_effective": True,
-                        "reason": f"Half Day ({half_day_session.replace('_', ' ').title()})",
-                        "category": "HALF_DAY",
-                    }
-                ],
-            }
-
-        # Multi-day or single full-day leave
+        # ── 2. Multi-day (or Single Full-day) Dynamic Range Calculation ──
         holiday_map = {}
-        if not leave_type.include_holidays:
+        if not getattr(leave_type, "include_holidays", False):
             holidays = Holiday.objects.filter(
                 Q(school=school),
                 Q(is_holiday=True) | Q(event_type__in=["HOLIDAY", "WEEK_OFF"]),
@@ -160,8 +195,9 @@ class LeaveValidationService:
             calendar_days += 1
             day_name = curr.strftime("%A")
             is_sunday = (curr.weekday() == 6)
+            is_saturday = (curr.weekday() == 5)
 
-            if is_sunday and not leave_type.include_weekends:
+            if is_sunday and not getattr(leave_type, "include_weekends", False):
                 excluded_weekends += 1
                 breakdown.append({
                     "date": curr.strftime("%Y-%m-%d"),
@@ -174,7 +210,20 @@ class LeaveValidationService:
                 curr += timedelta(days=1)
                 continue
 
-            if curr in holiday_map and not leave_type.include_holidays:
+            if is_saturday and sat_policy == "OFF" and not getattr(leave_type, "include_weekends", False):
+                excluded_weekends += 1
+                breakdown.append({
+                    "date": curr.strftime("%Y-%m-%d"),
+                    "day_name": day_name,
+                    "weight": 0.0,
+                    "is_effective": False,
+                    "reason": "Saturday Off (Institutional Policy)",
+                    "category": "WEEKEND",
+                })
+                curr += timedelta(days=1)
+                continue
+
+            if curr in holiday_map and not getattr(leave_type, "include_holidays", False):
                 excluded_holidays += 1
                 breakdown.append({
                     "date": curr.strftime("%Y-%m-%d"),
@@ -183,6 +232,19 @@ class LeaveValidationService:
                     "is_effective": False,
                     "reason": f"Holiday: {holiday_map[curr]} (Policy Excluded)",
                     "category": "HOLIDAY",
+                })
+                curr += timedelta(days=1)
+                continue
+
+            if school_working_days is not None and curr.strftime("%A").lower() not in school_working_days and not getattr(leave_type, "include_weekends", False):
+                excluded_weekends += 1
+                breakdown.append({
+                    "date": curr.strftime("%Y-%m-%d"),
+                    "day_name": day_name,
+                    "weight": 0.0,
+                    "is_effective": False,
+                    "reason": f"{day_name} Non-Working Day (School Calendar)",
+                    "category": "OFF_DAY",
                 })
                 curr += timedelta(days=1)
                 continue
@@ -200,9 +262,11 @@ class LeaveValidationService:
             curr += timedelta(days=1)
 
         if not result:
+            if start_date == end_date:
+                raise ValidationError("Selected date is an official holiday/off-day. Leave application is not permitted.")
             raise ValidationError("Selected date range contains only holidays or weekends excluded by policy.")
 
-        if leave_type.max_consecutive_days > 0 and len(result) > leave_type.max_consecutive_days:
+        if getattr(leave_type, "max_consecutive_days", 0) and leave_type.max_consecutive_days > 0 and len(result) > leave_type.max_consecutive_days:
             raise ValidationError(
                 f"Maximum consecutive days allowed for {leave_type.name or leave_type.leave_type} is {leave_type.max_consecutive_days} days. (Requested: {len(result)} days)"
             )
@@ -215,6 +279,7 @@ class LeaveValidationService:
             "excluded_holidays": excluded_holidays,
             "effective_days": result,
             "breakdown": breakdown,
+            "saturday_policy": sat_policy,
         }
 
     @staticmethod
@@ -355,6 +420,7 @@ class LeaveWorkflowService:
         reason,
         is_half_day=False,
         half_day_session="FULL_DAY",
+        half_day_period=None,
         requested_by=None,
     ):
         """
@@ -396,10 +462,23 @@ class LeaveWorkflowService:
 
         # 4. Check available balance
         available = balance.available
+        is_paid = leave_type.is_paid
         if total_days > available and not leave_type.allow_negative_balance:
-            raise ValidationError(
-                f"Insufficient leave balance. Available: {available} days, Requested: {total_days} days."
-            )
+            if is_half_day or available <= Decimal("0.0"):
+                is_paid = False
+            else:
+                raise ValidationError(
+                    f"Insufficient leave balance. Available: {available} days, Requested: {total_days} days."
+                )
+
+        if is_half_day:
+            effective_session = half_day_period or half_day_session or "FIRST_HALF"
+            half_day_session = effective_session
+            half_day_period = effective_session
+            total_days = Decimal("0.5")
+            days_count = Decimal("0.5")
+        else:
+            days_count = total_days
 
         # 5. Create LeaveRequest
         leave_req = LeaveRequest.objects.create(
@@ -410,11 +489,13 @@ class LeaveWorkflowService:
             start_date=start_date,
             end_date=end_date,
             total_days=total_days,
+            days_count=days_count,
             is_half_day=is_half_day,
             half_day_session=half_day_session,
+            half_day_period=half_day_period if is_half_day else None,
             reason=reason,
             status="PENDING",
-            is_paid=leave_type.is_paid,
+            is_paid=is_paid,
             audit_log=[
                 {
                     "action": "SUBMITTED",
@@ -422,6 +503,9 @@ class LeaveWorkflowService:
                     "by_user_name": str(requested_by) if requested_by else "System",
                     "timestamp": timezone.now().isoformat(),
                     "total_days": float(total_days),
+                    "is_half_day": is_half_day,
+                    "half_day_period": half_day_period if is_half_day else None,
+                    "is_paid": is_paid,
                 }
             ],
         )
@@ -433,27 +517,28 @@ class LeaveWorkflowService:
                 leave=leave_req,
                 date=d_date,
                 status="PENDING",
-                day_weight=d_weight,
-                session=d_session,
+                day_weight=Decimal("0.5") if is_half_day else d_weight,
+                session=half_day_session if is_half_day else d_session,
             )
 
-        # 7. Reserve balance
-        balance.pending = Decimal(str(balance.pending or 0)) + total_days
-        balance.save()
+        # 7. Reserve balance if paid
+        if is_paid:
+            balance.pending = Decimal(str(balance.pending or 0)) + total_days
+            balance.save()
 
-        # 8. Record LeaveTransaction
-        LeaveTransaction.objects.create(
-            school=school,
-            staff=staff,
-            leave_type=leave_type,
-            leave_cycle=leave_cycle,
-            leave_request=leave_req,
-            transaction_type="RESERVATION",
-            amount=total_days,
-            balance_after=balance.available,
-            description=f"Reserved {total_days} days for Leave Request #{leave_req.id}",
-            created_by=requested_by,
-        )
+            # 8. Record LeaveTransaction
+            LeaveTransaction.objects.create(
+                school=school,
+                staff=staff,
+                leave_type=leave_type,
+                leave_cycle=leave_cycle,
+                leave_request=leave_req,
+                transaction_type="RESERVATION",
+                amount=total_days,
+                balance_after=balance.available,
+                description=f"Reserved {total_days} days for Leave Request #{leave_req.id}",
+                created_by=requested_by,
+            )
 
         return leave_req
 
@@ -571,10 +656,48 @@ class LeaveWorkflowService:
             balance = cls.get_or_create_balance(leave_req.staff, leave_req.leave_type, leave_cycle)
             balance = LeaveBalance.objects.select_for_update().get(id=balance.id)
 
-        # Deduct pending, increment used
-        balance.pending = max(Decimal("0.0"), Decimal(str(balance.pending or 0)) - leave_req.total_days)
-        balance.used = Decimal(str(balance.used or 0)) + leave_req.total_days
-        balance.save()
+        # Check StaffRemainingLeave and handle half-day LWP deduction
+        from sms_app.models import AcademicYear, StaffRemainingLeave
+        ay = AcademicYear.objects.filter(school=school, is_active=True).first()
+        lt = leave_req.dynamic_leave_type or leave_req.leave_type
+
+        if leave_req.is_half_day:
+            leave_req.total_days = Decimal("0.5")
+            leave_req.days_count = Decimal("0.5")
+            if not leave_req.half_day_period and leave_req.half_day_session:
+                leave_req.half_day_period = leave_req.half_day_session
+            elif not leave_req.half_day_session and leave_req.half_day_period:
+                leave_req.half_day_session = leave_req.half_day_period
+
+            has_remaining_quota = False
+            if ay and lt:
+                srl = StaffRemainingLeave.objects.filter(
+                    staff=leave_req.staff,
+                    academic_year=ay,
+                    leave_type=lt
+                ).first()
+                if srl and (srl.remaining_leaves or 0) > 0:
+                    has_remaining_quota = True
+                    srl.remaining_leaves = max(0, (srl.remaining_leaves or 0) - 1)
+                    srl.save()
+                elif not srl and balance.available >= Decimal("0.5"):
+                    has_remaining_quota = True
+            elif balance.available >= Decimal("0.5"):
+                has_remaining_quota = True
+
+            # If quota is 0 or exceeded: flag record as LWP with exact unpaid days (0.5)
+            if not has_remaining_quota:
+                leave_req.is_paid = False
+
+        if leave_req.is_paid:
+            # Deduct pending, increment used
+            balance.pending = max(Decimal("0.0"), Decimal(str(balance.pending or 0)) - leave_req.total_days)
+            balance.used = Decimal(str(balance.used or 0)) + leave_req.total_days
+            balance.save()
+        else:
+            # Release any reservation
+            balance.pending = max(Decimal("0.0"), Decimal(str(balance.pending or 0)) - leave_req.total_days)
+            balance.save()
 
         # Update LeaveRequest
         now = timezone.now()
