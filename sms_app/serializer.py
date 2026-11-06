@@ -7200,8 +7200,7 @@ class HomeworkSerializer(serializers.ModelSerializer):
 
     def get_submission_count(self, obj):
         """Return count of total submissions for this homework"""
-        # return obj.submissions.count()
-        return HomeworkSubmissions.objects.all().count()
+        return HomeworkSubmissions.objects.filter(homework=obj).count()
 
     def validate(self, attrs):  # pyrefly: ignore[bad-override-param-name]
         request = self.context.get("request")

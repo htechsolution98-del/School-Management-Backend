@@ -1974,6 +1974,104 @@ class DailyCashAuditView(APIView):
                 "payment_details": details,
             })
 
+        # Include completed non-cash fee payments in the register table so the
+        # received amount is visible there too. These entries do not affect
+        # cash denomination totals or the physical drawer balance.
+        non_cash_payments = all_fee_payments_qs.exclude(payment_mode__iexact="cash").select_related(
+            "student", "student__school_class", "feetype", "collected_by"
+        ).order_by("-payment_date", "-created_at", "-id")
+        for p in non_cash_payments:
+            student = p.student
+            student_name = f"{student.name or ''} {student.surname or ''}".strip() if student else "N/A"
+            class_name = "N/A"
+            if student and student.school_class:
+                school_class = student.school_class
+                class_name = getattr(getattr(school_class, "category", None), "class_name", None) or getattr(school_class, "name", "N/A")
+            recorded_by = (
+                p.collected_by.get_full_name() or p.collected_by.username
+                if p.collected_by else "Online Payment"
+            )
+            amount = p.amount or Decimal("0.00")
+            transaction_items.append({
+                "id": p.id,
+                "receipt_number": p.receipt_number or f"REC-{p.id}",
+                "payment_date": p.payment_date.isoformat() if p.payment_date else (p.created_at.isoformat() if p.created_at else None),
+                "student_id": student.id if student else None,
+                "student_name": student_name,
+                "student_admission_number": f"GR-{student.gr_no}" if student and student.gr_no else "",
+                "class_name": class_name,
+                "feetype_name": p.feetype.name if p.feetype else "Fee",
+                "payment_mode": p.payment_mode,
+                "net_amount": float(amount),
+                "total_received": float(amount),
+                "return_change": 0.0,
+                "collected_by_name": recorded_by,
+                "breakdown_text": f"Paid by {p.get_payment_mode_display()}",
+                "note": p.note or "",
+                "payment_details": p.payment_details if isinstance(p.payment_details, dict) else {},
+            })
+
+        # Admission application payments: cash admission payments count as cash drawer receipts,
+        # while non-cash admission payments appear for register audit.
+        adm_numbers = [p.admission_number for p in admission_fees_qs if p.admission_number]
+        admissions_qs = Admission.objects.filter(admission_number__in=adm_numbers).prefetch_related("field_values__field")
+        admissions_lookup = {a.admission_number: a for a in admissions_qs}
+
+        for payment in admission_fees_qs.order_by("-paid_at", "-id"):
+            amount = Decimal(payment.amount or 0)
+            is_cash = str(payment.payment_mode or "").strip().lower() == "cash"
+            if is_cash:
+                total_net_cash += amount
+                total_gross_cash += amount
+                mode_str = "Cash"
+                col_by = "Clerk Desk"
+                breakdown = "Admission Form Fee (Cash)"
+            else:
+                mode_str = payment.payment_mode or "online"
+                col_by = "Online Payment"
+                breakdown = "Admission Form Fee (Online)"
+
+            applicant_name = f"Admission {payment.admission_number or ''}".strip()
+            c_name = "Admission"
+            adm_obj = admissions_lookup.get(payment.admission_number)
+            if adm_obj:
+                f_name = ""
+                s_name = ""
+                for fv in adm_obj.field_values.all():
+                    mapping = getattr(fv.field, "map_to_student_field", None)
+                    lbl = getattr(fv.field, "label", "")
+                    if mapping in ["name", "first_name"] or re.search(r"^(student\s*)?name$", lbl, re.I):
+                        f_name = fv.value or ""
+                    elif mapping == "surname" or re.search(r"surname|last\s*name", lbl, re.I):
+                        s_name = fv.value or ""
+                    elif mapping == "school_class" or re.search(r"^(applying for |admission )?class", lbl, re.I):
+                        c_name = fv.value or "Admission"
+                full_nm = f"{f_name} {s_name}".strip()
+                if full_nm:
+                    applicant_name = full_nm
+
+            transaction_items.append({
+                "id": -payment.id,
+                "receipt_number": payment.razorpay_payment_id or payment.razorpay_order_id or f"ADM-{payment.id}",
+                "payment_date": payment.paid_at.isoformat() if payment.paid_at else None,
+                "student_id": None,
+                "student_name": applicant_name,
+                "student_admission_number": payment.admission_number or "",
+                "class_name": c_name,
+                "feetype_name": "Admission Form Fee",
+                "payment_mode": mode_str,
+                "net_amount": float(amount),
+                "total_received": float(amount),
+                "return_change": 0.0,
+                "collected_by_name": col_by,
+                "breakdown_text": breakdown,
+                "note": payment.razorpay_order_id or "",
+                "payment_details": {
+                    "razorpay_order_id": payment.razorpay_order_id,
+                    "razorpay_payment_id": payment.razorpay_payment_id,
+                },
+            })
+
         transaction_items.sort(
             key=lambda item: (item.get("payment_date") or "", item["id"]),
             reverse=True,
@@ -2062,6 +2160,17 @@ class DailyCashAuditView(APIView):
             hist_payments_qs = hist_payments_qs.filter(school=school)
         hist_fee_net = hist_payments_qs.aggregate(total=Sum("amount"))["total"] or Decimal("0.00")
 
+        hist_adm_fees_qs = AdmissionFee.objects.filter(
+            payment_mode__iexact="cash",
+            paid_at__date__lt=target_date,
+        )
+        if school:
+            admission_numbers = Admission.objects.filter(school=school).values("admission_number")
+            hist_adm_fees_qs = hist_adm_fees_qs.filter(
+                Q(school=school) | Q(school__isnull=True, admission_number__in=admission_numbers)
+            )
+        hist_adm_fee_net = hist_adm_fees_qs.aggregate(total=Sum("amount"))["total"] or Decimal("0.00")
+
         hist_cash_txs_qs = CashTransaction.objects.filter(date__lt=target_date)
         if school:
             hist_cash_txs_qs = hist_cash_txs_qs.filter(school=school)
@@ -2070,7 +2179,7 @@ class DailyCashAuditView(APIView):
         hist_expenses = hist_cash_txs_qs.filter(type="EXPENSE").aggregate(total=Sum("amount"))["total"] or Decimal("0.00")
         hist_bank_deposits = hist_cash_txs_qs.filter(type="BANK_DEPOSIT").aggregate(total=Sum("amount"))["total"] or Decimal("0.00")
 
-        opening_balance = (hist_fee_net + hist_misc_income) - (hist_expenses + hist_bank_deposits)
+        opening_balance = (hist_fee_net + hist_adm_fee_net + hist_misc_income) - (hist_expenses + hist_bank_deposits)
 
         net_fee_cash = total_net_cash
         net_cash_in_drawer = opening_balance + net_fee_cash + total_misc_income - total_expenses - total_bank_deposits
@@ -2548,6 +2657,17 @@ class AccountLedgerView(APIView):
             hist_payments_qs = hist_payments_qs.filter(school=school)
         hist_fee_net = hist_payments_qs.aggregate(total=Sum("amount"))["total"] or Decimal("0.00")
 
+        hist_adm_fees_qs = AdmissionFee.objects.filter(
+            payment_mode__iexact="cash",
+            paid_at__date__lt=start_date,
+        )
+        if school:
+            admission_numbers = Admission.objects.filter(school=school).values("admission_number")
+            hist_adm_fees_qs = hist_adm_fees_qs.filter(
+                Q(school=school) | Q(school__isnull=True, admission_number__in=admission_numbers)
+            )
+        hist_adm_fee_net = hist_adm_fees_qs.aggregate(total=Sum("amount"))["total"] or Decimal("0.00")
+
         hist_cash_txs_qs = CashTransaction.objects.filter(date__lt=start_date)
         if school:
             hist_cash_txs_qs = hist_cash_txs_qs.filter(school=school)
@@ -2556,7 +2676,7 @@ class AccountLedgerView(APIView):
         hist_expenses = hist_cash_txs_qs.filter(type="EXPENSE").aggregate(total=Sum("amount"))["total"] or Decimal("0.00")
         hist_bank_deposits = hist_cash_txs_qs.filter(type="BANK_DEPOSIT").aggregate(total=Sum("amount"))["total"] or Decimal("0.00")
 
-        opening_balance = (hist_fee_net + hist_misc_income) - (hist_expenses + hist_bank_deposits)
+        opening_balance = (hist_fee_net + hist_adm_fee_net + hist_misc_income) - (hist_expenses + hist_bank_deposits)
 
         # 1. Fetch cash fee payments in date range
         payments_qs = StudentFeePayment.objects.filter(
@@ -2677,29 +2797,67 @@ class AccountLedgerView(APIView):
                 "notes": p.note or "",
             })
 
+        adm_numbers_ledger = [p.admission_number for p in admission_fees_qs if p.admission_number]
+        admissions_ledger_qs = Admission.objects.filter(admission_number__in=adm_numbers_ledger).prefetch_related("field_values__field")
+        admissions_ledger_lookup = {a.admission_number: a for a in admissions_ledger_qs}
+
         for payment in admission_fees_qs.order_by("paid_at", "id"):
             amount = float(payment.amount or 0)
             tx_dt = payment.paid_at
+            is_cash = str(payment.payment_mode or "").strip().lower() == "cash"
+
+            applicant_name = f"Admission {payment.admission_number or ''}".strip()
+            c_name = "Admission"
+            adm_obj = admissions_ledger_lookup.get(payment.admission_number)
+            if adm_obj:
+                f_name = ""
+                s_name = ""
+                for fv in adm_obj.field_values.all():
+                    mapping = getattr(fv.field, "map_to_student_field", None)
+                    lbl = getattr(fv.field, "label", "")
+                    if mapping in ["name", "first_name"] or re.search(r"^(student\s*)?name$", lbl, re.I):
+                        f_name = fv.value or ""
+                    elif mapping == "surname" or re.search(r"surname|last\s*name", lbl, re.I):
+                        s_name = fv.value or ""
+                    elif mapping == "school_class" or re.search(r"^(applying for |admission )?class", lbl, re.I):
+                        c_name = fv.value or "Admission"
+                full_nm = f"{f_name} {s_name}".strip()
+                if full_nm:
+                    applicant_name = full_nm
+
+            if is_cash:
+                tx_type = "FEE_RECEIPT"
+                type_lbl = "Admission Fee Receipt (Cash)"
+                inflow_val = amount
+                mode_str = "Cash"
+                collected_by = "Clerk Desk"
+            else:
+                tx_type = "NON_CASH_FEE_RECEIPT"
+                type_lbl = "Admission Fee Receipt (Online)"
+                inflow_val = 0.0
+                mode_str = payment.payment_mode or "online"
+                collected_by = "Online Payment"
+
             items.append({
                 "id": f"ADMISSION-FEE-{payment.id}",
                 "raw_id": payment.id,
                 "date": tx_dt.strftime("%Y-%m-%d") if tx_dt else str(start_date),
                 "time": tx_dt.strftime("%I:%M %p") if tx_dt else "",
                 "timestamp": tx_dt.isoformat() if tx_dt else f"{start_date}T00:00:00",
-                "transaction_type": "NON_CASH_FEE_RECEIPT",
-                "type_label": "Admission Fee Receipt",
+                "transaction_type": tx_type,
+                "type_label": type_lbl,
                 "reference_no": payment.razorpay_payment_id or payment.razorpay_order_id or f"ADM-{payment.id}",
-                "particulars": f"Admission fee payment | Admission #: {payment.admission_number or 'N/A'}",
-                "student_name": f"Admission {payment.admission_number or ''}".strip(),
-                "class_name": "Admission",
-                "category": "Admission Fee",
-                "source": payment.admission_number or "Admission Application",
+                "particulars": f"Admission fee payment | Applicant: {applicant_name} | Admission #: {payment.admission_number or 'N/A'}",
+                "student_name": applicant_name,
+                "class_name": c_name,
+                "category": "Admission Form Fee",
+                "source": applicant_name,
                 "collection_amount": amount,
-                "inflow": 0.0,
+                "inflow": inflow_val,
                 "outflow": 0.0,
-                "payment_mode": payment.payment_mode or "online",
-                "recorded_by_name": "Admission Payment",
-                "notes": f"Razorpay order: {payment.razorpay_order_id or 'N/A'}",
+                "payment_mode": mode_str,
+                "recorded_by_name": collected_by,
+                "notes": f"Note: {payment.razorpay_order_id or 'N/A'}",
             })
 
         # 2. Fetch CashTransactions (Expenses, Bank Deposits, Misc Incomes)
