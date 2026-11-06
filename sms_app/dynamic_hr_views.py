@@ -390,6 +390,11 @@ class AttendanceRegularizationViewSet(TrusteeStaffReadOnlyMixin, viewsets.ModelV
         if not policy and regularization.staff.school:
             policy = AttendanceSetting.objects.filter(school=regularization.staff.school, is_active=True).first()
 
+        time_rule = None
+        if not policy and regularization.staff.school:
+            from .models import AttendanceTimeRule
+            time_rule = AttendanceTimeRule.objects.filter(school=regularization.staff.school).first()
+
         if policy and policy.check_in_time and regularization.requested_check_in:
             c_sec = (
                 regularization.requested_check_in.hour * 3600
@@ -404,6 +409,28 @@ class AttendanceRegularizationViewSet(TrusteeStaffReadOnlyMixin, viewsets.ModelV
             diff_mins = (c_sec - t_sec) / 60.0
             attendance.is_late = diff_mins > policy.grace_period_mins
             attendance.is_half_day = diff_mins > policy.half_day_threshold_mins
+        elif time_rule and time_rule.start_time and regularization.requested_check_in:
+            c_sec = (
+                regularization.requested_check_in.hour * 3600
+                + regularization.requested_check_in.minute * 60
+                + regularization.requested_check_in.second
+            )
+            t_sec = (
+                time_rule.start_time.hour * 3600
+                + time_rule.start_time.minute * 60
+                + time_rule.start_time.second
+            )
+            diff_mins = (c_sec - t_sec) / 60.0
+            attendance.is_late = diff_mins > 15
+            if time_rule.half_day_time:
+                h_sec = (
+                    time_rule.half_day_time.hour * 3600
+                    + time_rule.half_day_time.minute * 60
+                    + time_rule.half_day_time.second
+                )
+                attendance.is_half_day = c_sec >= h_sec
+            else:
+                attendance.is_half_day = diff_mins > 120
         else:
             attendance.is_late = False
             attendance.is_half_day = False
@@ -423,9 +450,43 @@ class AttendanceRegularizationViewSet(TrusteeStaffReadOnlyMixin, viewsets.ModelV
             attendance.is_early_exit = early_diff_mins > (policy.grace_period_mins or 0)
             if early_diff_mins > policy.half_day_threshold_mins:
                 attendance.is_half_day = True
+        elif time_rule and time_rule.end_time and regularization.requested_check_out:
+            c_sec = (
+                regularization.requested_check_out.hour * 3600
+                + regularization.requested_check_out.minute * 60
+                + regularization.requested_check_out.second
+            )
+            t_sec = (
+                time_rule.end_time.hour * 3600
+                + time_rule.end_time.minute * 60
+                + time_rule.end_time.second
+            )
+            early_diff_mins = (t_sec - c_sec) / 60.0
+            attendance.is_early_exit = early_diff_mins > 0
+            if early_diff_mins > 120:
+                attendance.is_half_day = True
         else:
             attendance.is_early_exit = False
 
+        if attendance.working_hours and attendance.working_hours < Decimal("4.00") and attendance.working_hours > Decimal("0.00"):
+            attendance.is_half_day = True
+
+        current_time = timezone.now().isoformat()
+        corr_entry = {
+            "action": "Regularization Approved",
+            "by": request.user.id,
+            "by_username": request.user.username,
+            "timestamp": current_time,
+            "previous_check_in": orig_in,
+            "previous_check_out": orig_out,
+            "new_check_in": new_in_dt.isoformat() if new_in_dt else None,
+            "new_check_out": new_out_dt.isoformat() if new_out_dt else None,
+            "reason": regularization.reason,
+            "note": request.data.get("note", "Regularization approved"),
+        }
+        c_logs = list(attendance.correction_log or [])
+        c_logs.append(corr_entry)
+        attendance.correction_log = c_logs
         attendance.save()
 
         # Refresh a payslip that already exists for this month in the same
@@ -444,7 +505,6 @@ class AttendanceRegularizationViewSet(TrusteeStaffReadOnlyMixin, viewsets.ModelV
                 raise ValidationError({"payroll": str(exc)}) from exc
 
         # 2. Append to audit log and update regularization
-        current_time = timezone.now().isoformat()
         log_entry = {
             "action": "Approved",
             "by": request.user.id,
@@ -468,6 +528,27 @@ class AttendanceRegularizationViewSet(TrusteeStaffReadOnlyMixin, viewsets.ModelV
         regularization.status = "Approved"
         regularization.approved_by = request.user
         regularization.save(update_fields=["status", "approved_by", "audit_log", "updated_at"])
+
+        # Send notification to staff member
+        try:
+            from .models import Announcement
+            from .school_views import broadcast_announcement
+            target_user = getattr(regularization.staff, "user", None)
+            if target_user:
+                date_str = regularization.attendance_date.strftime("%d-%m-%Y") if hasattr(regularization.attendance_date, "strftime") else str(regularization.attendance_date)
+                ann = Announcement.objects.create(
+                    school=regularization.staff.school,
+                    title="Attendance Regularization Approved",
+                    description=f"Your attendance regularization request for date {date_str} has been approved. Status is updated in your attendance record.",
+                    target_user=target_user,
+                    is_everyone=False,
+                    priority="NORMAL",
+                    created_by=request.user,
+                    created_by_role="PRINCIPAL",
+                )
+                broadcast_announcement(ann, regularization.staff.school, request.user)
+        except Exception as e:
+            print("Failed to send attendance regularization approval announcement:", e)
 
         return Response(self.get_serializer(regularization).data)
 
@@ -501,12 +582,13 @@ class AttendanceRegularizationViewSet(TrusteeStaffReadOnlyMixin, viewsets.ModelV
             )
 
         current_time = timezone.now().isoformat()
+        rej_note = request.data.get("note", "Regularization rejected")
         log_entry = {
             "action": "Rejected",
             "by": request.user.id,
             "by_username": request.user.username,
             "timestamp": current_time,
-            "note": request.data.get("note", "Regularization rejected"),
+            "note": rej_note,
         }
         logs = list(regularization.audit_log or [])
         logs.append(log_entry)
@@ -514,6 +596,27 @@ class AttendanceRegularizationViewSet(TrusteeStaffReadOnlyMixin, viewsets.ModelV
         regularization.status = "Rejected"
         regularization.approved_by = request.user
         regularization.save(update_fields=["status", "approved_by", "audit_log", "updated_at"])
+
+        # Send notification to staff member
+        try:
+            from .models import Announcement
+            from .school_views import broadcast_announcement
+            target_user = getattr(regularization.staff, "user", None)
+            if target_user:
+                date_str = regularization.attendance_date.strftime("%d-%m-%Y") if hasattr(regularization.attendance_date, "strftime") else str(regularization.attendance_date)
+                ann = Announcement.objects.create(
+                    school=regularization.staff.school,
+                    title="Attendance Regularization Rejected",
+                    description=f"Your attendance regularization request for date {date_str} was rejected by {request.user.username}. Reason: {rej_note}",
+                    target_user=target_user,
+                    is_everyone=False,
+                    priority="NORMAL",
+                    created_by=request.user,
+                    created_by_role="PRINCIPAL",
+                )
+                broadcast_announcement(ann, regularization.staff.school, request.user)
+        except Exception as e:
+            print("Failed to send attendance regularization rejection announcement:", e)
 
         return Response(self.get_serializer(regularization).data)
 

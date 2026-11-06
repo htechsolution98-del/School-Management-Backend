@@ -1,3 +1,29 @@
+
+def broadcast_leave_update(school_id, user_id=None, action="updated", leave_id=None, status=None, staff_name=None, message=None):
+    from channels.layers import get_channel_layer
+    from asgiref.sync import async_to_sync
+    channel_layer = get_channel_layer()
+    if not channel_layer or not school_id:
+        return
+    payload = {
+        "type": "leave_update",
+        "action": action,
+        "leave_id": leave_id,
+        "status": status,
+        "staff_name": staff_name,
+        "message": message or f"Leave {action}",
+    }
+    try:
+        async_to_sync(channel_layer.group_send)(f"school_{school_id}_choice_all", payload)
+        async_to_sync(channel_layer.group_send)(f"school_{school_id}_choice_PRINCIPAL", payload)
+        async_to_sync(channel_layer.group_send)(f"school_{school_id}_choice_TRUSTEE", payload)
+        async_to_sync(channel_layer.group_send)(f"school_{school_id}_leaves", payload)
+        if user_id:
+            async_to_sync(channel_layer.group_send)(f"school_{school_id}_user_{user_id}", payload)
+            async_to_sync(channel_layer.group_send)(f"school_{school_id}_user_{user_id}_leaves", payload)
+    except Exception as e:
+        print(f"Error broadcasting leave update: {e}")
+
 import logging
 import calendar
 from datetime import date, timedelta
@@ -597,7 +623,7 @@ class LeaveWorkflowService:
 
     @classmethod
     @transaction.atomic
-    def approve_leave_request(cls, leave_req, approver_user, school):
+    def approve_leave_request(cls, leave_req, approver_user, school, remarks=""):
         """
         Approves a pending leave request, transfers reserved balance to used,
         synchronizes Staff Attendance, and logs audit entries.
@@ -736,6 +762,7 @@ class LeaveWorkflowService:
                 "action": "APPROVED",
                 "by_user_id": approver_user.id,
                 "by_user_name": str(approver_user),
+                "remarks": remarks or "",
                 "timestamp": now.isoformat(),
             }
         )
@@ -975,6 +1002,19 @@ class LeaveWorkflowService:
                     created_by=approver_user,
                 )
 
+        # Restore StaffRemainingLeave quota
+        lt = leave_req.dynamic_leave_type or leave_req.leave_type
+        if leave_req.is_paid and lt:
+            from sms_app.models import StaffRemainingLeave
+            srl = StaffRemainingLeave.objects.filter(
+                staff=leave_req.staff,
+                leave_type=lt
+            ).order_by("-id").first()
+            if srl and srl.remaining_leaves is not None:
+                refund_days = 1 if leave_req.is_half_day else int(round(float(leave_req.total_days or 1.0)))
+                srl.remaining_leaves = (srl.remaining_leaves or 0) + refund_days
+                srl.save(update_fields=["remaining_leaves"])
+
         leave_req.status = "CANCELLED"
         leave_req.cancellation_status = "APPROVED"
         leave_req.cancellation_action_by = approver_user
@@ -994,6 +1034,27 @@ class LeaveWorkflowService:
 
         # Revert Attendance
         LeaveAttendanceSyncService.revert_cancelled_leave(leave_req)
+
+        # Send targeted notification to applicant user
+        try:
+            target_user = getattr(leave_req.staff, "user", None)
+            if target_user:
+                from ..models import Announcement
+                from ..school_views import broadcast_announcement
+                leave_type_name = getattr(leave_req.dynamic_leave_type or leave_req.leave_type, "name", "Leave")
+                ann = Announcement.objects.create(
+                    school=school,
+                    title="Leave Cancellation Approved",
+                    description=f"Your cancellation request for {leave_type_name} ({leave_req.start_date} to {leave_req.end_date}, {leave_req.total_days} days) has been Approved and your quota restored.",
+                    target_user=target_user,
+                    is_everyone=False,
+                    priority="IMPORTANT",
+                    created_by=approver_user,
+                    created_by_role=str(getattr(approver_user, "role", "") or "MANAGEMENT").upper(),
+                )
+                broadcast_announcement(ann, school, approver_user)
+        except Exception as e:
+            print("Failed to notify user of cancellation approval:", e)
 
         return leave_req
 

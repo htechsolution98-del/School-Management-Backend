@@ -187,6 +187,12 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
             self.fields["leave_type"].queryset = qs
             self.fields["dynamic_leave_type"].queryset = qs
 
+    def get_approval_remarks(self, obj):
+        for entry in reversed(getattr(obj, "audit_log", []) or []):
+            if isinstance(entry, dict) and entry.get("action") == "APPROVED" and entry.get("remarks"):
+                return entry.get("remarks")
+        return ""
+
     def get_leave_type_name(self, obj):
         lt = obj.dynamic_leave_type or obj.leave_type
         if lt:
@@ -461,6 +467,7 @@ class GetLeaveRequestSerializer(serializers.ModelSerializer):
     dynamic_leave_type_name = serializers.SerializerMethodField()
     status = serializers.SerializerMethodField()
     approved_by_name = serializers.CharField(source="approved_by.username", read_only=True, default=None)
+    approval_remarks = serializers.SerializerMethodField()
 
     class Meta:
         model = LeaveRequest
@@ -483,6 +490,7 @@ class GetLeaveRequestSerializer(serializers.ModelSerializer):
             "approved_by",
             "approved_by_name",
             "approved_at",
+            "approval_remarks",
             "rejection_reason",
             "cancellation_status",
             "cancellation_reason",
@@ -506,6 +514,12 @@ class GetLeaveRequestSerializer(serializers.ModelSerializer):
             "leave_days",
             "remaining_leaves",
         ]
+
+    def get_approval_remarks(self, obj):
+        for entry in reversed(getattr(obj, "audit_log", []) or []):
+            if isinstance(entry, dict) and entry.get("action") == "APPROVED" and entry.get("remarks"):
+                return entry.get("remarks")
+        return ""
 
     def get_leave_type_name(self, obj):
         if obj.dynamic_leave_type:
@@ -1705,7 +1719,7 @@ class ShelfSerializer(serializers.ModelSerializer):
 def to_title_case_py(text: str) -> str:
     if not text:
         return ""
-    words = str(text).strip().split()
+    words = text.strip().split()
     res = []
     for word in words:
         if "." in word:

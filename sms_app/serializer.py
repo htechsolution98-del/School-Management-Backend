@@ -5852,7 +5852,20 @@ class GenerateStaffSalaryPaymentSerializer(serializers.ModelSerializer):
         if salary_month:
             try:
                 parts = str(salary_month).split("-")
-                month_start = date(int(parts[0]), int(parts[1]), 1)
+                month_year = int(parts[0])
+                month_num = int(parts[1])
+                month_start = date(month_year, month_num, 1)
+
+                # Enforce Joining Date Rule: staff cannot receive salary for months before their joining date
+                if staff and staff.joining_date:
+                    import calendar
+                    last_day = calendar.monthrange(month_year, month_num)[1]
+                    month_end = date(month_year, month_num, last_day)
+                    if staff.joining_date > month_end:
+                        raise serializers.ValidationError({
+                            "message": f"Cannot generate salary: {staff.name} joined on {staff.joining_date.strftime('%d-%m-%Y')}. Salary cannot be generated for months prior to joining date."
+                        })
+
                 payroll_run = PayrollRun.objects.filter(school=school, salary_month=month_start).first()
                 if payroll_run and payroll_run.status == "Locked":
                     raise serializers.ValidationError(
@@ -5883,13 +5896,17 @@ class GenerateStaffSalaryPaymentSerializer(serializers.ModelSerializer):
         from sms_app.services.payroll_service import generate_payslip, MissingPunchError
 
         try:
-            generate_payslip(
+            res = generate_payslip(
                 staff=staff,
                 month=month,
                 year=year,
                 payment_data=validated_data,
                 raise_on_missing_punch=True
             )
+            if isinstance(res, dict) and res.get("status") == "skipped":
+                raise serializers.ValidationError({
+                    "message": res.get("reason") or f"Cannot generate salary: {staff.name} is not eligible for {salary_month}."
+                })
         except MissingPunchError as e:
             missing_dates_str = ", ".join(d.strftime("%Y-%m-%d") for d in e.dates)
             raise serializers.ValidationError({
@@ -6583,7 +6600,7 @@ class StaffListSirializer(serializers.ModelSerializer):
             # "address",
             # "date_of_birth",
             "joining_date",
-            # "salary",
+            "salary",
             # "is_active",
             # "created_at",
             # "updated_at",

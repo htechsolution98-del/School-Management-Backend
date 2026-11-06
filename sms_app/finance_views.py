@@ -1719,6 +1719,26 @@ class RTESummaryView(APIView):
         })
 
 
+def get_finance_school(request):
+    """Retrieve school associated with the authenticated user/staff robustly."""
+    user = getattr(request, "user", None)
+    if not user or not getattr(user, "is_authenticated", False):
+        return None
+    if getattr(user, "school", None):
+        return user.school
+    if getattr(user, "school_id", None):
+        from .models import School
+        s = School.objects.filter(id=user.school_id).first()
+        if s:
+            return s
+    from .models import Staff
+    staff = Staff.objects.filter(user=user).select_related("school").first()
+    if staff and staff.school:
+        return staff.school
+    from .models import School
+    return School.objects.first()
+
+
 class DailyCashAuditView(APIView):
     """
     GET /api/fees/daily-cash-audit/?date=YYYY-MM-DD
@@ -1728,11 +1748,7 @@ class DailyCashAuditView(APIView):
 
     def get(self, request):
         user = request.user
-        school = getattr(user, "school", None)
-        if not school:
-            staff = getattr(user, "staff", None)
-            if staff and staff.school:
-                school = staff.school
+        school = get_finance_school(request)
 
         date_str = request.query_params.get("date")
         if date_str:
@@ -1958,70 +1974,6 @@ class DailyCashAuditView(APIView):
                 "payment_details": details,
             })
 
-        # Include completed non-cash fee payments in the register table so the
-        # received amount is visible there too. These entries do not affect
-        # cash denomination totals or the physical drawer balance.
-        non_cash_payments = all_fee_payments_qs.exclude(payment_mode__iexact="cash").select_related(
-            "student", "student__school_class", "feetype", "collected_by"
-        ).order_by("-payment_date", "-created_at", "-id")
-        for p in non_cash_payments:
-            student = p.student
-            student_name = f"{student.name or ''} {student.surname or ''}".strip() if student else "N/A"
-            class_name = "N/A"
-            if student and student.school_class:
-                school_class = student.school_class
-                class_name = getattr(getattr(school_class, "category", None), "class_name", None) or getattr(school_class, "name", "N/A")
-            recorded_by = (
-                p.collected_by.get_full_name() or p.collected_by.username
-                if p.collected_by else "Online Payment"
-            )
-            amount = p.amount or Decimal("0.00")
-            transaction_items.append({
-                "id": p.id,
-                "receipt_number": p.receipt_number or f"REC-{p.id}",
-                "payment_date": p.payment_date.isoformat() if p.payment_date else (p.created_at.isoformat() if p.created_at else None),
-                "student_id": student.id if student else None,
-                "student_name": student_name,
-                "student_admission_number": f"GR-{student.gr_no}" if student and student.gr_no else "",
-                "class_name": class_name,
-                "feetype_name": p.feetype.name if p.feetype else "Fee",
-                "payment_mode": p.payment_mode,
-                "net_amount": float(amount),
-                "total_received": float(amount),
-                "return_change": 0.0,
-                "collected_by_name": recorded_by,
-                "breakdown_text": f"Paid by {p.get_payment_mode_display()}",
-                "note": p.note or "",
-                "payment_details": p.payment_details if isinstance(p.payment_details, dict) else {},
-            })
-
-        # Admission application payments are collected before a student fee
-        # account exists. Show successful payments in the register without
-        # counting them as cash drawer receipts.
-        for payment in admission_fees_qs.order_by("-paid_at", "-id"):
-            amount = Decimal(payment.amount or 0)
-            transaction_items.append({
-                "id": -payment.id,
-                "receipt_number": payment.razorpay_payment_id or f"ADM-{payment.id}",
-                "payment_date": payment.paid_at.isoformat() if payment.paid_at else None,
-                "student_id": None,
-                "student_name": f"Admission {payment.admission_number or ''}".strip(),
-                "student_admission_number": payment.admission_number or "",
-                "class_name": "Admission",
-                "feetype_name": "Admission Fee",
-                "payment_mode": payment.payment_mode or "online",
-                "net_amount": float(amount),
-                "total_received": float(amount),
-                "return_change": 0.0,
-                "collected_by_name": "Admission Payment",
-                "breakdown_text": "Successful admission application payment",
-                "note": payment.razorpay_order_id or "",
-                "payment_details": {
-                    "razorpay_order_id": payment.razorpay_order_id,
-                    "razorpay_payment_id": payment.razorpay_payment_id,
-                },
-            })
-
         transaction_items.sort(
             key=lambda item: (item.get("payment_date") or "", item["id"]),
             reverse=True,
@@ -2225,11 +2177,7 @@ class AddDailyExpenseView(APIView):
 
     def post(self, request):
         user = request.user
-        school = getattr(user, "school", None)
-        if not school:
-            staff = getattr(user, "staff", None)
-            if staff and staff.school:
-                school = staff.school
+        school = get_finance_school(request)
 
         amount_val = request.data.get("amount")
         if not amount_val:
@@ -2307,11 +2255,7 @@ class BankDepositView(APIView):
 
     def post(self, request):
         user = request.user
-        school = getattr(user, "school", None)
-        if not school:
-            staff = getattr(user, "staff", None)
-            if staff and staff.school:
-                school = staff.school
+        school = get_finance_school(request)
 
         amount_val = request.data.get("amount")
         if not amount_val:
@@ -2386,11 +2330,7 @@ class AddMiscIncomeView(APIView):
 
     def post(self, request):
         user = request.user
-        school = getattr(user, "school", None)
-        if not school:
-            staff = getattr(user, "staff", None)
-            if staff and staff.school:
-                school = staff.school
+        school = get_finance_school(request)
 
         amount_val = request.data.get("amount")
         if not amount_val:
@@ -2445,6 +2385,87 @@ class AddMiscIncomeView(APIView):
         }, status=status.HTTP_201_CREATED)
 
 
+class SetInitialCashView(APIView):
+    """
+    POST /api/finance/set-initial-cash/
+    Allows Clerk, Fees Manager, or Principal to establish or adjust starting cash float.
+    Payload: { amount: 5000, date: "2026-11-01", notes: "Initial starting cash drawer float" }
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        user = request.user
+        school = get_finance_school(request)
+
+        amount_val = request.data.get("amount")
+        if amount_val is None:
+            return Response(
+                {"error": "Amount is required."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        try:
+            amount = Decimal(str(amount_val))
+            if amount < Decimal("0.00"):
+                raise ValueError()
+        except Exception:
+            return Response(
+                {"error": "Invalid amount provided. Must be a non-negative number."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        notes = request.data.get("notes") or "Initial Cash Drawer Float"
+        date_str = request.data.get("date")
+        if date_str:
+            try:
+                tx_date = datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
+            except ValueError:
+                tx_date = timezone.localdate()
+        else:
+            tx_date = timezone.localdate()
+
+        # Find or create Initial Cash Float transaction
+        existing_tx = CashTransaction.objects.filter(
+            school=school,
+            type="MISC_INCOME",
+            category="Initial Cash Float",
+        ).first()
+
+        if existing_tx:
+            existing_tx.amount = amount
+            existing_tx.date = tx_date
+            existing_tx.notes = notes
+            existing_tx.recorded_by = user
+            existing_tx.save()
+            tx = existing_tx
+            msg = f"Initial petty cash float updated to ₹{amount:.2f}."
+        else:
+            tx = CashTransaction.objects.create(
+                school=school,
+                type="MISC_INCOME",
+                amount=amount,
+                category="Initial Cash Float",
+                notes=notes,
+                date=tx_date,
+                recorded_by=user
+            )
+            msg = f"Initial petty cash float recorded as ₹{amount:.2f}."
+
+        return Response({
+            "success": True,
+            "message": msg,
+            "transaction": {
+                "id": tx.id,
+                "type": tx.type,
+                "amount": float(tx.amount),
+                "category": tx.category,
+                "notes": tx.notes,
+                "date": tx.date.isoformat(),
+                "created_at": tx.created_at.isoformat(),
+                "recorded_by_name": user.get_full_name() or user.username
+            }
+        }, status=status.HTTP_200_OK)
+
+
 class AccountLedgerView(APIView):
     """
     GET /api/finance/account-ledger/?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD&type=all&order=desc
@@ -2455,11 +2476,7 @@ class AccountLedgerView(APIView):
 
     def get(self, request):
         user = request.user
-        school = getattr(user, "school", None)
-        if not school:
-            staff = getattr(user, "staff", None)
-            if staff and staff.school:
-                school = staff.school
+        school = get_finance_school(request)
 
         today = timezone.localdate()
         first_day_of_month = today.replace(day=1)
@@ -2777,6 +2794,19 @@ class AccountLedgerView(APIView):
         net_change: float = total_inflow - total_outflow
         closing_balance: float = float(opening_balance) + net_change
 
+        # 1. Cash in Drawer (રોકડ): exact physical cash balance in office drawer
+        cash_in_drawer: float = float(opening_balance) + total_inflow - total_outflow
+
+        # 2. Total Bank Balance / Online collection in this period
+        total_bank_collection: float = sum(
+            float(x.get("collection_amount", 0.0))
+            for x in items
+            if x.get("transaction_type") == "NON_CASH_FEE_RECEIPT"
+        )
+
+        # 3. Grand total school funds (Cash in Drawer + Total Bank Collection)
+        total_school_funds: float = cash_in_drawer + total_bank_collection
+
         # Optional type filtering if user provided type query param
         type_filter = request.query_params.get("type")
         filtered_items = items
@@ -2804,6 +2834,9 @@ class AccountLedgerView(APIView):
                 "total_outflow": round(total_outflow, 2),
                 "net_change": round(net_change, 2),
                 "closing_balance": round(closing_balance, 2),
+                "cash_in_drawer": round(cash_in_drawer, 2),
+                "total_bank_collection": round(total_bank_collection, 2),
+                "total_school_funds": round(total_school_funds, 2),
                 "total_transactions": len(items),
                 "fee_receipts_count": (all_fee_totals["count"] or 0) + (admission_fee_totals["count"] or 0),
                 "expenses_count": sum(1 for x in items if x["transaction_type"] == "EXPENSE"),
