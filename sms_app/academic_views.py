@@ -2424,8 +2424,8 @@ class StudentAttendanceView(APIView):
         data["attendance_date"] = target_date
         data["student"] = student_id
 
+        # Query by student and date to match the unique_together constraint safely
         existing_attendance = StudentAttendance.objects.filter(
-            school=school,
             student_id=student_id,
             attendance_date=target_date
         ).first()
@@ -2433,22 +2433,22 @@ class StudentAttendanceView(APIView):
         if existing_attendance:
             existing_attendance.is_present = bool(data.get("is_present"))
             existing_attendance.is_absent = bool(data.get("is_absent"))
+            if school and not existing_attendance.school:
+                existing_attendance.school = school
             staff_user = getattr(request.user, "staff", None)
             if staff_user:
                 existing_attendance.attendance_by = staff_user
             existing_attendance.save()
             attendance = existing_attendance
         else:
-            # Create/update cleanly with target attendance_date
-            attendance, _ = StudentAttendance.objects.update_or_create(
+            # Create cleanly with target attendance_date (allowing previous days as well)
+            attendance = StudentAttendance.objects.create(
                 school=school,
                 student_id=student_id,
                 attendance_date=target_date,
-                defaults={
-                    "is_present": bool(data.get("is_present")),
-                    "is_absent": bool(data.get("is_absent")),
-                    "attendance_by": getattr(request.user, "staff", None),
-                }
+                is_present=bool(data.get("is_present")),
+                is_absent=bool(data.get("is_absent")),
+                attendance_by=getattr(request.user, "staff", None),
             )
 
         if attendance.is_present:
@@ -2511,21 +2511,22 @@ class StudentAttendanceView(APIView):
             response_serializer.data,
             status=status.HTTP_200_OK if existing_attendance else status.HTTP_201_CREATED
         )
+
     def put(self, request, id):
         attendance = get_object_or_404(
             StudentAttendance,
-            id=id,
-            school=request.user.school
+            id=id
         )
 
-        serializer = StudentAttendanceSerializer(
-            attendance,
-            data=request.data,
-            context={"request": request}
-        )
-
-        serializer.is_valid(raise_exception=True)
-        attendance = serializer.save()
+        data = request.data.copy() if hasattr(request.data, "copy") else dict(request.data)
+        if "is_present" in data:
+            attendance.is_present = bool(data["is_present"])
+        if "is_absent" in data:
+            attendance.is_absent = bool(data["is_absent"])
+        staff_user = getattr(request.user, "staff", None)
+        if staff_user:
+            attendance.attendance_by = staff_user
+        attendance.save()
 
         if attendance.is_present:
             status_text = "Present"
@@ -3823,65 +3824,125 @@ class TeacherAssignmentView(APIView):
 
 
 class StudyMaterialView(APIView):
-    permission_classes = [Isteacher]
-    def get(self, request):
-        materials = StudyMaterial.objects.filter(
-            school=request.user.school,
-            staff=request.user.staff
-        ).order_by("-created_at")
+    permission_classes = [IsAuthenticated]
 
+    def get(self, request):
+        school = getattr(request.user, "school", None)
+        staff = getattr(request.user, "staff", None)
+        if not school:
+            if staff and staff.school:
+                school = staff.school
+
+        materials = StudyMaterial.objects.filter(school=school)
+        if staff and getattr(request.user, "role", "").lower() in ["teacher", "staff"]:
+            materials = materials.filter(staff=staff)
+
+        materials = materials.order_by("-created_at")
         serializer = StudyMaterialSerializer(
             materials,
             many=True,
             context={"request": request}
         )
-
         return Response(serializer.data)
 
     def post(self, request):
-        school = request.user.school
-        staff = request.user.staff
+        import re
+        school = getattr(request.user, "school", None)
+        staff = getattr(request.user, "staff", None)
+        if not school and staff and staff.school:
+            school = staff.school
 
-        serializer = StudyMaterialSerializer(data=request.data)
+        raw_title = request.data.get("title", "").strip() or "Untitled Material"
+        raw_desc = request.data.get("description", "").strip()
+        raw_class = request.data.get("student_class") or request.data.get("className") or request.data.get("class_name") or ""
+        raw_division = request.data.get("division") or ""
+        raw_subject = request.data.get("subject") or request.data.get("subject_name") or ""
+        raw_type = request.data.get("material_type") or request.data.get("type") or "notes"
 
-        if serializer.is_valid():
-            material = serializer.save(school=school, staff=staff)
+        type_mapping = {
+            "study notes": "notes",
+            "notes": "notes",
+            "assignment": "assignment",
+            "practice sheet": "worksheet",
+            "worksheet": "worksheet",
+            "reference guide": "other",
+            "other": "other",
+        }
+        material_type = type_mapping.get(str(raw_type).strip().lower(), "notes")
 
-            channel_layer = get_channel_layer()
+        # Resolve SchoolClass
+        sc = None
+        if raw_class:
+            if str(raw_class).isdigit():
+                sc = SchoolClass.objects.filter(id=int(raw_class), school=school).first()
+            if not sc:
+                sc = SchoolClass.objects.filter(school_class__iexact=str(raw_class).strip(), school=school).first()
+            if not sc:
+                num_m = re.search(r'\d+', str(raw_class))
+                if num_m:
+                    sc = SchoolClass.objects.filter(school=school, school_class__icontains=num_m.group(0)).first()
+            if not sc:
+                sc = SchoolClass.objects.filter(school=school, school_class__icontains=str(raw_class).strip()).first()
 
-            
-            group_name = f"student_{material.school.id}_class_{material.student_class.id}"
+        class_name_val = sc.school_class if sc else str(raw_class).strip()
 
-            try:
-                channel_layer = get_channel_layer()
-                if channel_layer:
-                    async_to_sync(channel_layer.group_send)(
-                        group_name,
-                        {
-                            "type": "studymaterial",
+        # Clean Division (e.g. "Div A" -> "a", "A" -> "a")
+        div_clean = str(raw_division).strip()
+        if div_clean.lower().startswith("div"):
+            div_clean = div_clean[3:].strip()
+        div_clean = div_clean.strip().lower()
 
-                            "subject": str(material.subject),
-                            "student_class": str(material.student_class),
-                            "material_type": material.material_type,
-                            "title": material.title,
-                            "description": material.description,
+        # Resolve Subject
+        subj = None
+        if raw_subject:
+            if str(raw_subject).isdigit():
+                subj = Subject.objects.filter(id=int(raw_subject), school=school).first()
+            if not subj:
+                subj = Subject.objects.filter(name__iexact=str(raw_subject).strip(), school=school).first()
+            if not subj:
+                subj = Subject.objects.filter(name__icontains=str(raw_subject).strip(), school=school).first()
 
-                            # ✅ always send URL, not file object
-                            "file": request.build_absolute_uri(material.file.url),
-                        }
-                    )
-            except Exception as e:
-                print("Failed to send study material notification:", e)
+        subject_name_val = subj.name if subj else str(raw_subject).strip()
 
-            return Response(serializer.data, status=201)
+        # Collect files
+        uploaded_files = request.FILES.getlist("files")
+        if not uploaded_files:
+            single = request.FILES.get("file")
+            if single:
+                uploaded_files = [single]
 
-        return Response(serializer.errors, status=400)
+        if not uploaded_files:
+            return Response({"error": "No file attached. Please attach at least one file."}, status=400)
+
+        created_items = []
+        for f in uploaded_files:
+            size_mb = f"{round(f.size / (1024 * 1024), 2)} MB" if f.size >= 1024 * 1024 else f"{round(f.size / 1024, 1)} KB"
+            mat = StudyMaterial.objects.create(
+                school=school,
+                staff=staff,
+                subject=subj,
+                subject_name=subject_name_val,
+                student_class=sc,
+                class_name=class_name_val,
+                division=div_clean,
+                material_type=material_type,
+                title=raw_title,
+                description=raw_desc,
+                file=f,
+                file_name=f.name,
+                file_size=size_mb,
+            )
+            created_items.append(mat)
+
+        serializer = StudyMaterialSerializer(created_items, many=True, context={"request": request})
+        return Response(serializer.data if len(created_items) > 1 else serializer.data[0], status=201)
+
     def put(self, request, id):
+        school = getattr(request.user, "school", None)
         material = get_object_or_404(
             StudyMaterial,
             id=id,
-            school=request.user.school,
-            staff=request.user.staff
+            school=school
         )
 
         serializer = StudyMaterialSerializer(
@@ -3897,19 +3958,65 @@ class StudyMaterialView(APIView):
         return Response(serializer.errors, status=400)
 
     def delete(self, request, id):
+        school = getattr(request.user, "school", None)
         material = get_object_or_404(
             StudyMaterial,
             id=id,
-            school=request.user.school,
-            staff=request.user.staff
+            school=school
         )
-
         material.delete()
-
         return Response(
             {"message": "Study material deleted successfully."},
             status=204
         )
+
+
+class StudentStudyMaterialView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        import re
+        user = request.user
+        student = getattr(user, "student", None)
+        if not student:
+            student = Student.objects.filter(user=user).first()
+        if not student or not student.school:
+            return Response([])
+
+        school = student.school
+        student_class = student.school_class
+        student_div = (student.division or "").strip().lower()
+
+        qs = StudyMaterial.objects.filter(school=school)
+
+        # 1. Filter by Class (matching foreign key or class name/number)
+        if student_class:
+            class_num_match = re.search(r'\d+', student_class.school_class)
+            class_num = class_num_match.group(0) if class_num_match else ""
+
+            class_q = Q(student_class=student_class) | Q(class_name__iexact=student_class.school_class)
+            if class_num:
+                class_q |= Q(class_name__icontains=class_num)
+            qs = qs.filter(class_q)
+        else:
+            return Response([])
+
+        # 2. Strict Division filter: Only materials matching this student's division or generic/all
+        if student_div:
+            div_q = (
+                Q(division__iexact=student_div)
+                | Q(division__iexact=f"Div {student_div}")
+                | Q(division__iexact=f"Div-{student_div}")
+                | Q(division__isnull=True)
+                | Q(division="")
+                | Q(division__iexact="all")
+            )
+            qs = qs.filter(div_q)
+        else:
+            qs = qs.filter(Q(division__isnull=True) | Q(division="") | Q(division__iexact="all"))
+
+        serializer = StudyMaterialSerializer(qs.order_by("-created_at"), many=True, context={"request": request})
+        return Response(serializer.data)
 
 
 class ParentChildrenView(APIView):

@@ -1429,10 +1429,12 @@ class AdmissionFeeVerifySerializer(serializers.ModelSerializer):
 # 1
 class AdmissionFieldValueReadSerializer(serializers.ModelSerializer):
     field_label = serializers.CharField(source="field.label", read_only=True)
+    field_type = serializers.CharField(source="field.field_type", read_only=True)
+    options = serializers.JSONField(source="field.options", read_only=True)
 
     class Meta:
         model = AdmissionFieldValue
-        fields = ["created_at", "id", "field", "field_label", "value"]
+        fields = ["created_at", "id", "field", "field_label", "field_type", "options", "value"]
 
 
 # 2
@@ -2554,9 +2556,35 @@ class AdmissionUpdateSerializer(serializers.ModelSerializer):
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
 
+        req = self.context.get("request")
+        req_data = req.data if (req and hasattr(req, "data")) else {}
+
+        # Extract direct student/placement fields from request payload
+        class_input = req_data.get("school_class")
+        div_val = req_data.get("division")
+        name_val = req_data.get("name")
+        surname_val = req_data.get("surname")
+        father_val = req_data.get("father_name")
+        mother_val = req_data.get("mother_name")
+        dob_val = req_data.get("date_of_birth")
+        gender_val = req_data.get("gender")
+        mobile_val = req_data.get("mobile")
+        roll_val = req_data.get("roll_no")
+        aadhar_val = req_data.get("aadhar_number")
+        address_val = req_data.get("address")
+
+        cls_obj = None
+        if class_input is not None and str(class_input).strip():
+            class_str = str(class_input).strip()
+            if class_str.isdigit():
+                cls_obj = SchoolClass.objects.filter(id=int(class_str)).first()
+            if not cls_obj:
+                cls_obj = SchoolClass.objects.filter(school=instance.school, school_class__iexact=class_str).first()
+
+        student = Student.objects.filter(admission=instance).first()
+
         # Safely update or create field values without wiping out existing ones
         if field_values_data is not None:
-            student = Student.objects.filter(admission=instance).first()
             for item in field_values_data:
                 field_obj = item.get("field")
                 val = item.get("value")
@@ -2586,13 +2614,13 @@ class AdmissionUpdateSerializer(serializers.ModelSerializer):
 
                         if id_mapping == "school_class" or any(k in label_lower for k in ["applying for class", "class", "standard"]):
                             val_str = str(val).strip() if val is not None else ""
-                            cls_obj = None
+                            f_cls = None
                             if val_str.isdigit():
-                                cls_obj = SchoolClass.objects.filter(id=int(val_str), school=instance.school).first()
-                            if not cls_obj and val_str:
-                                cls_obj = SchoolClass.objects.filter(school=instance.school, school_class__iexact=val_str).first()
-                            if cls_obj:
-                                student.school_class = cls_obj
+                                f_cls = SchoolClass.objects.filter(id=int(val_str), school=instance.school).first()
+                            if not f_cls and val_str:
+                                f_cls = SchoolClass.objects.filter(school=instance.school, school_class__iexact=val_str).first()
+                            if f_cls:
+                                student.school_class = f_cls
                         elif id_mapping in {"aadhar_number", "abc_id", "udise_no"}:
                             setattr(student, id_mapping, val)
                         elif id_mapping and hasattr(student, id_mapping):
@@ -2614,23 +2642,84 @@ class AdmissionUpdateSerializer(serializers.ModelSerializer):
                         elif ("guardian" in label_lower or "mobile" in label_lower or "contact" in label_lower) and not student.mobile:
                             student.mobile = val
 
-            if student:
-                req = self.context.get("request")
-                if req and hasattr(req, "data"):
-                    div_val = req.data.get("division")
-                    if div_val:
-                        student.division = div_val
-                try:
-                    student.save()
-                except Exception:
-                    pass
+        # Update student directly from top-level request fields
+        if student:
+            if cls_obj:
+                student.school_class = cls_obj
+            if div_val is not None:
+                student.division = str(div_val)
+            if name_val is not None:
+                student.name = str(name_val)
+            if surname_val is not None:
+                student.surname = str(surname_val)
+            if father_val is not None:
+                student.father_name = str(father_val)
+            if mother_val is not None:
+                student.mother_name = str(mother_val)
+            if mobile_val is not None:
+                student.mobile = str(mobile_val)
+            if roll_val is not None:
+                student.roll_no = str(roll_val)
+            if aadhar_val is not None:
+                student.aadhar_number = str(aadhar_val)
+            if hasattr(student, "address") and address_val is not None:
+                student.address = str(address_val)
+            if hasattr(student, "gender") and gender_val is not None:
+                student.gender = str(gender_val)
+            if dob_val:
+                for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
+                    try:
+                        import datetime as _dt
+                        student.date_of_birth = _dt.datetime.strptime(str(dob_val).strip(), fmt).date()
+                        break
+                    except Exception:
+                        pass
+            try:
+                student.save()
+            except Exception:
+                pass
 
-        # Handle direct division update in request data if no student object yet
-        req = self.context.get("request")
-        if req and hasattr(req, "data"):
-            div_val = req.data.get("division")
-            if div_val:
-                Student.objects.filter(admission=instance).update(division=div_val)
+        # Also update corresponding AdmissionFieldValue entries so that admission record reflects new values
+        try:
+            for fv in instance.field_values.select_related("field"):
+                if not fv.field:
+                    continue
+                lbl = (fv.field.label or "").lower()
+                if cls_obj and any(k in lbl for k in ["class", "standard", "grade", "applying for class"]):
+                    fv.value = cls_obj.school_class
+                    fv.save(update_fields=["value"])
+                elif div_val is not None and any(k in lbl for k in ["division", "section", "sec"]):
+                    fv.value = str(div_val)
+                    fv.save(update_fields=["value"])
+                elif name_val is not None and any(k in lbl for k in ["first name", "firstname", "student name", "candidate name", "name"]) and not any(k in lbl for k in ["father", "mother", "guardian", "surname"]):
+                    fv.value = str(name_val)
+                    fv.save(update_fields=["value"])
+                elif surname_val is not None and any(k in lbl for k in ["surname", "last name", "lastname"]):
+                    fv.value = str(surname_val)
+                    fv.save(update_fields=["value"])
+                elif father_val is not None and any(k in lbl for k in ["father", "guardian", "middle name"]):
+                    fv.value = str(father_val)
+                    fv.save(update_fields=["value"])
+                elif mother_val is not None and "mother" in lbl:
+                    fv.value = str(mother_val)
+                    fv.save(update_fields=["value"])
+                elif mobile_val is not None and any(k in lbl for k in ["mobile", "phone", "contact"]):
+                    fv.value = str(mobile_val)
+                    fv.save(update_fields=["value"])
+                elif dob_val is not None and any(k in lbl for k in ["dob", "birth"]):
+                    fv.value = str(dob_val)
+                    fv.save(update_fields=["value"])
+                elif aadhar_val is not None and any(k in lbl for k in ["aadhaar", "aadhar"]):
+                    fv.value = str(aadhar_val)
+                    fv.save(update_fields=["value"])
+                elif address_val is not None and any(k in lbl for k in ["address", "city"]):
+                    fv.value = str(address_val)
+                    fv.save(update_fields=["value"])
+                elif gender_val is not None and any(k in lbl for k in ["gender", "sex"]):
+                    fv.value = str(gender_val)
+                    fv.save(update_fields=["value"])
+        except Exception:
+            pass
 
         instance.save()
         return instance
@@ -2683,12 +2772,13 @@ class AdmissionDocumentUpdateSerializer(serializers.ModelSerializer):
 
                 # documents[0][document_field]
                 document_field = request.data.get(f"documents[{i}][document_field]")
+                doc_id = request.data.get(f"documents[{i}][id]") or request.data.get(f"documents[{i}][document_id]")
 
                 # documents[0][file]
                 file = request.FILES.get(f"documents[{i}][file]") or request.data.get(f"documents[{i}][file]")
 
                 # stop loop when no more documents
-                if not document_field:
+                if not document_field and not doc_id:
                     break
 
                 # skip if file missing
@@ -2707,20 +2797,56 @@ class AdmissionDocumentUpdateSerializer(serializers.ModelSerializer):
                             folder="admission_documents",
                             resource_type="auto",
                         )
+                        # Reset stream position if fallback is needed
+                        if hasattr(file, "seek"):
+                            try:
+                                file.seek(0)
+                            except Exception:
+                                pass
                     c_url = (upload_res.get("secure_url") or upload_res.get("url")) if upload_res else None
                     if c_url:
                         saved_target = c_url
                 except Exception as c_err:
                     logger.warning("Direct Cloudinary upload failed during document update: %s", c_err)
+                    if hasattr(file, "seek"):
+                        try:
+                            file.seek(0)
+                        except Exception:
+                            pass
 
-                AdmissionDocument.objects.update_or_create(
-                    admission=instance,
-                    document_field_id=document_field,
-                    defaults={
-                        "file": saved_target,
-                        "school": instance.school,
-                    },
-                )
+                target_field_id = None
+                if document_field:
+                    try:
+                        target_field_id = int(document_field)
+                    except (ValueError, TypeError):
+                        target_field_id = document_field
+
+                existing_doc = None
+                if doc_id:
+                    existing_doc = AdmissionDocument.objects.filter(id=doc_id, admission=instance).first()
+                if not existing_doc and target_field_id:
+                    existing_doc = AdmissionDocument.objects.filter(admission=instance, document_field_id=target_field_id).first()
+
+                if existing_doc:
+                    existing_doc.file = saved_target
+                    if instance.school:
+                        existing_doc.school = instance.school
+                    if target_field_id:
+                        existing_doc.document_field_id = target_field_id
+                    existing_doc.save()
+                    # Clean up any leftover duplicate records for the same field
+                    if target_field_id:
+                        AdmissionDocument.objects.filter(
+                            admission=instance,
+                            document_field_id=target_field_id
+                        ).exclude(id=existing_doc.id).delete()
+                else:
+                    AdmissionDocument.objects.create(
+                        admission=instance,
+                        document_field_id=target_field_id,
+                        file=saved_target,
+                        school=instance.school,
+                    )
 
                 i += 1
 
@@ -2736,10 +2862,12 @@ class AdmissionDocumentUpdateSerializer(serializers.ModelSerializer):
 class AdmissionFieldValueReadSerializer(serializers.ModelSerializer):
     field_label = serializers.CharField(source="field.label", read_only=True)
     field_order = serializers.IntegerField(source="field.order", read_only=True)
+    field_type = serializers.CharField(source="field.field_type", read_only=True)
+    options = serializers.JSONField(source="field.options", read_only=True)
 
     class Meta:
         model = AdmissionFieldValue
-        fields = ["id", "field", "field_label", "field_order", "value"]
+        fields = ["id", "field", "field_label", "field_order", "field_type", "options", "value"]
 
 
 class AdmissionSectionWiseReadSerializer(serializers.Serializer):
@@ -2919,7 +3047,31 @@ class DivisionSetSerilaizer(serializers.ModelSerializer):
 
 
 class AdmissionFieldValueReadSerializer(serializers.ModelSerializer):
-    field_label = serializers.CharField(source="field.label", read_only=True)
+    field_label = serializers.SerializerMethodField()
+
+    def get_field_label(self, obj):
+        try:
+            if obj.field:
+                return obj.field.label or ""
+        except Exception:
+            pass
+        return ""
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        val = str(data.get("value") or "").strip()
+        field_label = str(data.get("field_label") or "").lower()
+        if any(k in field_label for k in ["class", "standard", "grade", "applying for class"]):
+            if val.isdigit():
+                try:
+                    from .models import SchoolClass
+                    sc = SchoolClass.objects.filter(id=int(val)).first()
+                    if sc and sc.school_class:
+                        data["class_id"] = int(val)
+                        data["value"] = sc.school_class
+                except Exception:
+                    pass
+        return data
 
     class Meta:
         model = AdmissionFieldValue
@@ -2932,9 +3084,41 @@ class AdmissionFieldValueReadSerializer(serializers.ModelSerializer):
 
 
 class AdmissionDocumentReadSerializer(serializers.ModelSerializer):
-    document_label = serializers.CharField(
-        source="document_field.label", read_only=True
-    )
+    document_label = serializers.SerializerMethodField()
+    file = serializers.SerializerMethodField()
+
+    def get_document_label(self, obj):
+        try:
+            if obj.document_field:
+                return obj.document_field.label or ""
+        except Exception:
+            pass
+        return ""
+
+    def get_file(self, obj):
+        try:
+            if obj.file:
+                raw_val = str(getattr(obj.file, "name", "") or obj.file).strip()
+                last_https = raw_val.rfind("https://")
+                last_http = raw_val.rfind("http://")
+                idx = max(last_https, last_http)
+                if idx >= 0:
+                    return raw_val[idx:]
+
+                url = str(obj.file.url).strip()
+                last_https = url.rfind("https://")
+                last_http = url.rfind("http://")
+                idx = max(last_https, last_http)
+                if idx > 0:
+                    return url[idx:]
+
+                request = self.context.get("request")
+                if request and url and not url.startswith("http"):
+                    return request.build_absolute_uri(url)
+                return url
+        except Exception:
+            pass
+        return None
 
     class Meta:
         model = AdmissionDocument
@@ -2951,16 +3135,16 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
     field_values = AdmissionFieldValueReadSerializer(many=True, read_only=True)
     documents = AdmissionDocumentReadSerializer(many=True, read_only=True)
     gr_no = serializers.CharField(write_only=True, required=False)
+    school_class_id = serializers.IntegerField(write_only=True, required=False)
+    division = serializers.CharField(write_only=True, required=False, allow_blank=True)
 
     class Meta:
         model = Admission
         fields = ["created_at", "id",
             "admission_number",
             "gr_no",
-            # "school_class",
-            # "division",
-            # "clerk_verified",
-            # "clerk_verified_at",
+            "school_class_id",
+            "division",
             "field_values",
             "documents",
         ]
@@ -2977,10 +3161,13 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
             school = getattr(self.instance, "school", None)
 
         if gr_no and school:
-            if Student.objects.filter(gr_no=gr_no, school=school).exists():
+            existing_student = Student.objects.filter(gr_no=gr_no, school=school)
+            if self.instance:
+                existing_student = existing_student.exclude(admission=self.instance)
+            if existing_student.exists():
                 raise serializers.ValidationError(
                     {
-                        "message": "A student with this gr_no already exists for this school."
+                        "message": "A student with this GR number already exists for this school."
                     }
                 )
 
@@ -2989,67 +3176,110 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
 
         request = self.context.get("request")
-        gr_no = validated_data.pop("gr_no")
+        gr_no = validated_data.pop("gr_no", None)
+        if not gr_no and request and hasattr(request, "data"):
+            gr_no = request.data.get("gr_no")
+        gr_no = str(gr_no or "").strip()
+
+        school_class_id = validated_data.pop("school_class_id", None)
+        if school_class_id is None and request and hasattr(request, "data"):
+            school_class_id = request.data.get("school_class_id")
+
+        division = validated_data.pop("division", None)
+        if division is None and request and hasattr(request, "data"):
+            division = request.data.get("division")
+        division = str(division or "").strip()
+
         school = getattr(getattr(request, "user", None), "school", None) or getattr(instance, "school", None)
         # g = instance.status
         # print(g)
         with transaction.atomic():
 
             # =========================
-            # 1. MARK CLERK VERIFIED
-            # =========================
-            # instance.clerk_verified = True
-            # instance.clerk_verified_at = timezone.now()
-            # instance.save()
-
-            # =========================
-            # 2. CREATE STUDENT
+            # 1. RETRIEVE OR CREATE STUDENT
             # =========================
 
-            # Check Aadhaar uniqueness before creating student
+            student = Student.objects.filter(admission=instance).first()
+            if not student and school:
+                student = Student.objects.filter(admission=instance, school=school).first()
+
+            # Check Aadhaar uniqueness before creating/updating student (excluding this student)
             for fv in instance.field_values.all():
                 if fv.field and (fv.field.map_to_student_field == "aadhar_number" or is_aadhaar_field(fv.field)):
                     val = re.sub(r"[\s-]", "", str(fv.value or "").strip())
-                    if val and Student.objects.filter(aadhar_number=val).exists():
-                        raise serializers.ValidationError(
-                            {"message": "A student with this Aadhaar number already exists."}
-                        )
+                    if val:
+                        existing_aadhaar = Student.objects.filter(aadhar_number=val)
+                        if student:
+                            existing_aadhaar = existing_aadhaar.exclude(id=student.id)
+                        if existing_aadhaar.exists():
+                            raise serializers.ValidationError(
+                                {"message": "A student with this Aadhaar number already exists."}
+                            )
 
-            # Generate GR number
-            if StudentVerify.objects.filter(
-                admission_number=instance.admission_number
-            ).exists():
-                raise serializers.ValidationError(
-                    {"message":"This Student already created"}
+            if not student:
+                student = Student.objects.create(
+                    school=school,
+                    academic_year=instance.form.academic_year if instance.form else None,
+                    admission=instance,
+                    gr_no=gr_no,
+                    is_rte=instance.is_rte,
+                )
+            else:
+                if gr_no:
+                    student.gr_no = gr_no
+                if instance.is_rte is not None:
+                    student.is_rte = instance.is_rte
+
+            if gr_no:
+                StudentVerify.objects.update_or_create(
+                    admission_number=instance.admission_number,
+                    defaults={
+                        "gr_no": gr_no,
+                        "student": student,
+                        "clerk_verify": True,
+                    },
                 )
 
-            student = Student.objects.create(
-                school=school,
-                # form=instance.form,
-                # temp_user=instance.temp_user,
-                # division=instance.division,
-                academic_year = instance.form.academic_year if instance.form else None,
-                admission=instance,
-                gr_no=gr_no,
-                is_rte=instance.is_rte,
-                # details_done=True,
-            )
+            # Class and Division placement
+            school_class = None
+            if school_class_id:
+                school_class = SchoolClass.objects.filter(id=school_class_id, school=student.school).first()
+            if not school_class and student.school_class:
+                school_class = student.school_class
+            if not school_class:
+                for field_value in instance.field_values.select_related("field"):
+                    field = field_value.field
+                    if not field:
+                        continue
+                    lbl = (field.label or "").lower()
+                    if field.map_to_student_field == "school_class" or any(key in lbl for key in ["applying for class", "class", "standard", "grade"]):
+                        val_str = str(field_value.value or "").strip()
+                        if val_str.isdigit():
+                            school_class = SchoolClass.objects.filter(id=int(val_str), school=student.school).first()
+                        if not school_class and val_str:
+                            school_class = SchoolClass.objects.filter(school=student.school, school_class__iexact=val_str).first()
+                        if school_class:
+                            break
 
+            if school_class:
+                student.school_class = school_class
+            if division:
+                student.division = division
+            elif not student.division:
+                for fv in instance.field_values.select_related("field"):
+                    if fv.field and any(k in (fv.field.label or "").lower() for k in ["division", "section", "sec"]):
+                        student.division = str(fv.value or "").strip()
+                        break
 
-
-            StudentVerify.objects.create(
-                admission_number=instance.admission_number,
-                gr_no=gr_no,
-                student=student,
-                clerk_verify=True,
-            )
             # =========================
-            # 3. MAP FIXED FIELDS
+            # 2. MAP FIXED FIELDS
             # =========================
 
             for field_value in instance.field_values.all():
                 field = field_value.field
                 value = field_value.value
+                if not field:
+                    continue
                 mapping = field.map_to_student_field
                 lbl = (field.label or "").lower().strip()
 
@@ -3063,7 +3293,7 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
                     elif "surname" in lbl or "last name" in lbl:
                         mapping = "surname"
 
-                if not mapping:
+                if not mapping or mapping == "school_class":
                     continue
 
                 if mapping in ["first_name", "student_name"]:
@@ -3072,64 +3302,53 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
                 if mapping not in ALLOWED_STUDENT_FIELD_MAPPINGS:
                     continue
 
-                if mapping == "school_class":
-                    school_class = None
-                    if value is not None:
-                        value_str = str(value).strip()
-                        if value_str.isdigit():
-                            try:
-                                school_class = SchoolClass.objects.get(
-                                    id=int(value_str), school=student.school
-                                )
-                            except SchoolClass.DoesNotExist:
-                                school_class = None
-                        if school_class is None and value_str:
-                            school_class = SchoolClass.objects.filter(
-                                school=student.school,
-                                school_class__iexact=value_str,
-                            ).first()
-
-                    if school_class:
-                        student.school_class = school_class
-                else:
-                    setattr(student, mapping, value)
+                if mapping == "date_of_birth" and value:
+                    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
+                        try:
+                            import datetime as _dt
+                            student.date_of_birth = _dt.datetime.strptime(str(value).strip(), fmt).date()
+                            break
+                        except Exception:
+                            pass
+                elif value is not None:
+                    try:
+                        setattr(student, mapping, value)
+                    except Exception:
+                        pass
 
             student.save()
 
             # =========================
-            # 4. COPY DYNAMIC FIELDS
+            # 3. SAFE COPY DYNAMIC FIELDS
             # =========================
 
-            StudentFieldValue.objects.bulk_create(
-                [
-                    StudentFieldValue(
+            for fv in instance.field_values.all():
+                if fv.field and not fv.field.map_to_student_field:
+                    StudentFieldValue.objects.update_or_create(
                         student=student,
                         field=fv.field,
-                        value=fv.value,
-                        form_id=instance.form,
-                        school=school,
+                        defaults={
+                            "value": fv.value,
+                            "form_id": instance.form,
+                            "school": school,
+                        },
                     )
-                    for fv in instance.field_values.all()
-                    if not fv.field.map_to_student_field
-                ]
-            )
 
             # =========================
-            # 5. COPY DOCUMENTS
+            # 4. SAFE COPY DOCUMENTS
             # =========================
 
-            DocumentFile.objects.bulk_create(
-                [
-                    DocumentFile(
+            for doc in instance.documents.all():
+                if doc.document_field:
+                    DocumentFile.objects.update_or_create(
                         student=student,
                         label=doc.document_field,
-                        document=doc.file,
-                        school=school,
-                        form_id=instance.form,
+                        defaults={
+                            "document": doc.file,
+                            "school": school,
+                            "form_id": instance.form,
+                        },
                     )
-                    for doc in instance.documents.all()
-                ]
-            )
 
             if instance.is_rte:
                 for rte_doc in getattr(instance, "rte_documents", []).all():
@@ -3210,7 +3429,7 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
             # =========================
 
             if not student.user:
-                student_username = str(gr_no)
+                student_username = gr_no
                 if User.objects.filter(username=student_username).exists():
                     student_username = f"{gr_no}_{student.school.id}"
                     counter = 1
@@ -3237,10 +3456,15 @@ class ClerkVerifySerializer(serializers.ModelSerializer):
                 student.user = student_user
                 student.save()
             else:
-                if student_personal_mobile and not student.user.mobile:
-                    if not User.objects.filter(mobile=student_personal_mobile).exclude(id=student.user.id).exists():
-                        student.user.mobile = student_personal_mobile
-                        student.user.save(update_fields=["mobile"])
+                student_user = student.user
+                if student_user.username != gr_no:
+                    if not User.objects.filter(username=gr_no).exclude(id=student_user.id).exists():
+                        student_user.username = gr_no
+                student_user.set_password(gr_no)
+                if student_personal_mobile and not student_user.mobile:
+                    if not User.objects.filter(mobile=student_personal_mobile).exclude(id=student_user.id).exists():
+                        student_user.mobile = student_personal_mobile
+                student_user.save()
 
             # =========================
             # 7. CREATE PARENT USER
@@ -3478,77 +3702,242 @@ class GetAdmissionDataSerializer(serializers.ModelSerializer):
     rte_documents = serializers.SerializerMethodField()
     student_id = serializers.SerializerMethodField()
     student_details = serializers.SerializerMethodField()
+    class_name = serializers.SerializerMethodField()
+    school_class = serializers.SerializerMethodField()
 
-    def get_student_id(self, obj):
-        st = getattr(obj, "student", None) or Student.objects.filter(admission=obj).first() or Student.objects.filter(admission_no=obj.admission_number).first() or (Student.objects.filter(gr_no=obj.gr_no).first() if getattr(obj, "gr_no", None) else None)
-        return st.id if st else None
+    def get_class_name(self, obj):
+        st = self._get_student(obj, select_class=True)
+        if st and getattr(st, "school_class", None):
+            return getattr(st.school_class, "school_class", "")
+        try:
+            for fv in obj.field_values.all():
+                if fv.field and any(k in fv.field.label.lower() for k in ["class", "standard", "grade", "applying for class"]):
+                    val = str(fv.value or "").strip()
+                    if val.isdigit():
+                        from .models import SchoolClass
+                        sc = SchoolClass.objects.filter(id=int(val)).first()
+                        if sc and sc.school_class:
+                            return sc.school_class
+                    return val
+        except Exception:
+            pass
+        return ""
 
-    def get_student_details(self, obj):
-        st = getattr(obj, "student", None) or Student.objects.filter(admission=obj).select_related("school_class").first() or Student.objects.filter(admission_no=obj.admission_number).select_related("school_class").first() or (Student.objects.filter(gr_no=obj.gr_no).select_related("school_class").first() if getattr(obj, "gr_no", None) else None)
-        if st:
-            return {
-                "id": st.id,
-                "surname": st.surname or "",
-                "name": st.name or "",
-                "father_name": st.father_name or "",
-                "mother_name": st.mother_name or "",
-                "date_of_birth": str(st.date_of_birth) if st.date_of_birth else "",
-                "gender": st.gender or "",
-                "mobile": st.mobile or "",
-                "school_class": st.school_class_id,
-                "school_class_name": st.school_class.school_class if st.school_class else "",
-                "division": str(st.division.division if hasattr(st.division, "division") else (st.division or "")),
-                "roll_no": st.roll_no or "",
-                "aadhar_number": st.aadhar_number or "",
-                "address": st.address or "",
-                "gr_no": st.gr_no or "",
-            }
+    def get_school_class(self, obj):
+        st = self._get_student(obj, select_class=True)
+        if st and getattr(st, "school_class_id", None):
+            return st.school_class_id
+        try:
+            for fv in obj.field_values.all():
+                if fv.field and any(k in fv.field.label.lower() for k in ["class", "standard", "grade", "applying for class"]):
+                    val = str(fv.value or "").strip()
+                    if val.isdigit():
+                        return int(val)
+                    from .models import SchoolClass
+                    sc = SchoolClass.objects.filter(school_class__iexact=val).first()
+                    if sc:
+                        return sc.id
+        except Exception:
+            pass
         return None
 
+    def _get_student(self, obj, select_class=False):
+        try:
+            st = getattr(obj, "student", None)
+            if st:
+                return st
+        except Exception:
+            pass
+        try:
+            qs = Student.objects.filter(admission=obj)
+            if select_class:
+                qs = qs.select_related("school_class")
+            st = qs.first()
+            if st:
+                return st
+        except Exception:
+            pass
+        if getattr(obj, "admission_number", None):
+            try:
+                sv_qs = StudentVerify.objects.filter(admission_number=obj.admission_number)
+                if select_class:
+                    sv_qs = sv_qs.select_related("student__school_class")
+                else:
+                    sv_qs = sv_qs.select_related("student")
+                sv = sv_qs.first()
+                if sv and sv.student:
+                    return sv.student
+            except Exception:
+                pass
+        return None
+
+    def get_student_id(self, obj):
+        st = self._get_student(obj)
+        return st.id if st else None
+
+    def _get_gender(self, obj, st):
+        if st and hasattr(st, "gender"):
+            val = getattr(st, "gender")
+            if val:
+                return str(val)
+        try:
+            for fv in obj.field_values.all():
+                if fv.field and any(k in fv.field.label.lower() for k in ["gender", "sex"]):
+                    return fv.value or ""
+        except Exception:
+            pass
+        return ""
+
+    def _get_address(self, obj, st):
+        if st and hasattr(st, "address"):
+            val = getattr(st, "address")
+            if val:
+                return str(val)
+        try:
+            for fv in obj.field_values.all():
+                if fv.field and "address" in fv.field.label.lower():
+                    return fv.value or ""
+        except Exception:
+            pass
+        return ""
+
+    def get_student_details(self, obj):
+        st = self._get_student(obj, select_class=True)
+        if st:
+            c_name = ""
+            if getattr(st, "school_class", None):
+                c_name = getattr(st.school_class, "school_class", "")
+
+            div_val = getattr(st, "division", "")
+            if hasattr(div_val, "division"):
+                div_val = div_val.division
+
+            return {
+                "id": st.id,
+                "surname": getattr(st, "surname", "") or "",
+                "name": getattr(st, "name", "") or "",
+                "father_name": getattr(st, "father_name", "") or "",
+                "mother_name": getattr(st, "mother_name", "") or "",
+                "date_of_birth": str(getattr(st, "date_of_birth", "")) if getattr(st, "date_of_birth", None) else "",
+                "gender": self._get_gender(obj, st),
+                "mobile": getattr(st, "mobile", "") or "",
+                "school_class": getattr(st, "school_class_id", None),
+                "school_class_name": c_name or self.get_class_name(obj),
+                "division": str(div_val or ""),
+                "roll_no": getattr(st, "roll_no", "") or "",
+                "aadhar_number": getattr(st, "aadhar_number", "") or "",
+                "address": self._get_address(obj, st),
+                "gr_no": getattr(st, "gr_no", "") or "",
+            }
+
+        c_name = self.get_class_name(obj)
+        c_id = self.get_school_class(obj)
+        div = self.get_division(obj) or ""
+        name_val, surname_val, father_val, mother_val, dob_val, mob_val, aadhar_val, roll_val = "", "", "", "", "", "", "", ""
+        try:
+            for fv in obj.field_values.all():
+                lbl = (fv.field.label if fv.field else "").lower()
+                v = fv.value or ""
+                if any(k in lbl for k in ["surname", "last name", "lastname"]):
+                    surname_val = v
+                elif any(k in lbl for k in ["first name", "firstname", "student name", "candidate name", "name"]) and not any(k in lbl for k in ["father", "mother", "guardian", "surname"]):
+                    name_val = v
+                elif any(k in lbl for k in ["father", "guardian", "middle name"]):
+                    father_val = v
+                elif "mother" in lbl:
+                    mother_val = v
+                elif any(k in lbl for k in ["dob", "birth"]):
+                    dob_val = v
+                elif any(k in lbl for k in ["mobile", "phone", "contact"]):
+                    mob_val = v
+                elif any(k in lbl for k in ["aadhaar", "aadhar"]):
+                    aadhar_val = v
+                elif "roll" in lbl:
+                    roll_val = v
+        except Exception:
+            pass
+
+        return {
+            "id": None,
+            "surname": surname_val,
+            "name": name_val,
+            "father_name": father_val,
+            "mother_name": mother_val,
+            "date_of_birth": dob_val,
+            "gender": self._get_gender(obj, None),
+            "mobile": mob_val,
+            "school_class": c_id,
+            "school_class_name": c_name,
+            "division": div,
+            "roll_no": roll_val,
+            "aadhar_number": aadhar_val,
+            "address": self._get_address(obj, None),
+            "gr_no": "",
+        }
+
     def get_gr_no(self, obj):
-        sv = StudentVerify.objects.filter(admission_number=obj.admission_number).first()
-        if sv and sv.gr_no:
-            return sv.gr_no
-        st = getattr(obj, "student", None) or Student.objects.filter(admission=obj).first() or Student.objects.filter(admission_no=obj.admission_number).first()
+        try:
+            if getattr(obj, "admission_number", None):
+                sv = StudentVerify.objects.filter(admission_number=obj.admission_number).first()
+                if sv and sv.gr_no:
+                    return sv.gr_no
+        except Exception:
+            pass
+        st = self._get_student(obj)
         if st and st.gr_no:
             return st.gr_no
         return getattr(obj, "gr_no", None)
 
     def get_division(self, obj):
-        st = getattr(obj, "student", None) or Student.objects.filter(admission=obj).first() or Student.objects.filter(admission_no=obj.admission_number).first() or (Student.objects.filter(gr_no=obj.gr_no).first() if getattr(obj, "gr_no", None) else None)
+        st = self._get_student(obj)
         if st and st.division:
             return st.division.division if hasattr(st.division, "division") else str(st.division)
-        for fv in obj.field_values.all():
-            if fv.field and any(k in fv.field.label.lower() for k in ["division", "section", "sec"]):
-                return fv.value
+        try:
+            for fv in obj.field_values.all():
+                if fv.field and any(k in fv.field.label.lower() for k in ["division", "section", "sec"]):
+                    return fv.value
+        except Exception:
+            pass
         return None
 
     def get_rte_documents(self, obj):
         request = self.context.get("request")
         docs = []
-        for doc in obj.rte_documents.all():
-            file_url = doc.document_file.url if doc.document_file else None
-            if request and file_url:
-                file_url = request.build_absolute_uri(file_url)
-            docs.append(
-                {
-                    "id": doc.id,
-                    "document_name": doc.document_name,
-                    "document_file": file_url,
-                    "is_verified": doc.is_verified,
-                }
-            )
+        try:
+            for doc in obj.rte_documents.all():
+                file_url = None
+                try:
+                    if doc.document_file:
+                        file_url = doc.document_file.url
+                except Exception:
+                    file_url = None
+                if request and file_url and not file_url.startswith("http"):
+                    file_url = request.build_absolute_uri(file_url)
+                docs.append(
+                    {
+                        "id": doc.id,
+                        "document_name": doc.document_name,
+                        "document_file": file_url,
+                        "is_verified": doc.is_verified,
+                    }
+                )
+        except Exception:
+            pass
         return docs
 
     class Meta:
         model = Admission
-        fields = ["created_at", "id",
+        fields = [
+            "created_at",
+            "id",
             "admission_number",
             "status",
             "gr_no",
             "division",
             "student_id",
             "student_details",
+            "class_name",
+            "school_class",
             "submitted_at",
             "is_rte",
             "field_values",
@@ -6701,6 +7090,9 @@ class StudentAttendanceSerializer(serializers.ModelSerializer):
             "created_at",
         ]
         validators = []
+
+    def get_validators(self):
+        return []
 
     def validate(self, attrs):  # pyrefly: ignore[bad-override-param-name]
 

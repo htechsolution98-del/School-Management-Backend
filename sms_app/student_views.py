@@ -858,14 +858,36 @@ class AdmissionReadOnlyViewSet(ReadOnlyModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
+        school = getattr(user, "school", None)
+        if not school:
+            from .models import Staff
+            staff = Staff.objects.filter(user=user).first()
+            if staff and staff.school:
+                school = staff.school
+        if not school:
+            return Admission.objects.none()
         return (
-            Admission.objects.filter(school=user.school)
+            Admission.objects.filter(school=school)
             .prefetch_related(
                 "field_values__field",
                 "documents__document_field",
                 "rte_documents",
             )
+            .order_by("-id")
         )
+
+    def list(self, request, *args, **kwargs):
+        try:
+            return super().list(request, *args, **kwargs)
+        except Exception as e:
+            import traceback
+            tb = traceback.format_exc()
+            print("=== ERROR IN AdmissionReadOnlyViewSet.list ===")
+            print(tb)
+            return Response(
+                {"detail": f"Error loading admissions: {str(e)}", "error": str(e), "traceback": tb},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
 
 
@@ -956,7 +978,17 @@ class AdmissionDocumentViewSet(ModelViewSet):
     parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def get_queryset(self):
-        return Admission.objects.filter(school=self.request.user.school)
+        user = getattr(self.request, "user", None)
+        school = getattr(user, "school", None) if user else None
+        if not school and user:
+            staff = getattr(user, "staff", None)
+            if staff and staff.school:
+                school = staff.school
+        if school:
+            return Admission.objects.filter(school=school)
+        if getattr(user, "is_superuser", False) or getattr(user, "is_staff", False):
+            return Admission.objects.all()
+        return Admission.objects.none()
 
     def get_serializer_class(self):
 
@@ -966,29 +998,33 @@ class AdmissionDocumentViewSet(ModelViewSet):
         return AdmissionDocumentUpdateSerializer
 
     def update(self, request, *args, **kwargs):
+        try:
+            partial = kwargs.pop("partial", False)
+            instance = self.get_object()
 
-        partial = kwargs.pop("partial", False)
+            serializer = self.get_serializer(
+                instance,
+                data=request.data,
+                partial=partial,
+                context={"request": request},
+            )
 
-        instance = self.get_object()
+            serializer.is_valid(raise_exception=True)
+            self.perform_update(serializer)
 
-        serializer = self.get_serializer(
-            instance,
-            data=request.data,
-            partial=partial,
-            context={"request": request},
-        )
-
-        serializer.is_valid(raise_exception=True)
-
-        self.perform_update(serializer)
-
-        return Response(
-            {
-                "message": "Admission documents updated successfully",
-                "admission_number": instance.admission_number,
-            },
-            status=status.HTTP_200_OK,
-        )
+            return Response(
+                {
+                    "message": "Admission documents updated successfully",
+                    "admission_number": instance.admission_number,
+                },
+                status=status.HTTP_200_OK,
+            )
+        except Exception as e:
+            logger.exception("Failed to update admission documents: %s", e)
+            return Response(
+                {"error": str(e), "message": f"Failed to update documents: {str(e)}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
     def partial_update(self, request, *args, **kwargs):
 
@@ -1003,8 +1039,22 @@ class AdmissionDocumentViewSet(ModelViewSet):
         admission_number = request.data.get("admission_number")
         doc_field_id = request.data.get("document_field_id")
 
+        def clean_nested_url(u: str) -> str:
+            if not u:
+                return ""
+            u = str(u).strip()
+            # If there's an embedded http/https inside media or another URL, extract the outermost valid target
+            last_https = u.rfind("https://")
+            last_http = u.rfind("http://")
+            idx = max(last_https, last_http)
+            if idx > 0:
+                return u[idx:]
+            return u
+
         doc = None
         user_school = getattr(request.user, "school", None)
+        if not user_school and getattr(request.user, "staff", None):
+            user_school = getattr(request.user.staff, "school", None)
 
         if doc_id:
             qs = AdmissionDocument.objects.filter(id=doc_id)
@@ -1021,14 +1071,40 @@ class AdmissionDocumentViewSet(ModelViewSet):
                 qs = qs.filter(school=user_school)
             doc = qs.first()
 
+        # Check existing candidates
+        candidate_urls = []
+        if doc and doc.file:
+            doc_file_str = getattr(doc.file, "name", "") or str(doc.file)
+            cleaned = clean_nested_url(doc_file_str)
+            if cleaned:
+                candidate_urls.append(cleaned)
+            try:
+                cleaned_url = clean_nested_url(doc.file.url)
+                if cleaned_url:
+                    candidate_urls.append(cleaned_url)
+            except Exception:
+                pass
+        if file_url:
+            cleaned_input = clean_nested_url(file_url)
+            if cleaned_input:
+                candidate_urls.append(cleaned_input)
+
+        # If any candidate is already a valid Cloudinary/HTTP URL, return it immediately!
+        for cand in candidate_urls:
+            if cand.startswith("http://") or cand.startswith("https://"):
+                if "cloudinary.com" in cand or "res.cloudinary.com" in cand:
+                    # Clean up database record if it stored a corrupted nested string
+                    if doc and getattr(doc.file, "name", "") != cand:
+                        try:
+                            AdmissionDocument.objects.filter(id=doc.id).update(file=cand)
+                        except Exception:
+                            pass
+                    return Response({"cloudinary_url": cand, "url": cand})
+
         if not doc and not file_url:
             return Response({"error": "Document not found"}, status=status.HTTP_404_NOT_FOUND)
 
-        current_file_str = str(doc.file) if doc and doc.file else (file_url or "")
-
-        # If it is already a Cloudinary URL, return it immediately
-        if "cloudinary.com" in current_file_str or "res.cloudinary.com" in current_file_str:
-            return Response({"cloudinary_url": current_file_str, "url": current_file_str})
+        current_file_str = candidate_urls[0] if candidate_urls else (file_url or "")
 
         # Otherwise upload to Cloudinary and store in DB
         try:
@@ -1043,10 +1119,16 @@ class AdmissionDocumentViewSet(ModelViewSet):
                     source = doc.file
 
             if not source and file_url:
-                source = file_url
+                source = clean_nested_url(file_url)
 
             if not source and doc and doc.file:
-                source = doc.file.url
+                try:
+                    source = clean_nested_url(doc.file.url)
+                except Exception:
+                    source = None
+
+            if not source:
+                return Response({"error": "Cannot access source file for upload"}, status=status.HTTP_400_BAD_REQUEST)
 
             upload_res = cloudinary.uploader.upload(
                 source,
@@ -1057,13 +1139,12 @@ class AdmissionDocumentViewSet(ModelViewSet):
             c_url = upload_res.get("secure_url") or upload_res.get("url")
 
             if doc and c_url:
-                doc.file = c_url
-                doc.save(update_fields=["file"])
+                AdmissionDocument.objects.filter(id=doc.id).update(file=c_url)
 
             return Response({"cloudinary_url": c_url, "url": c_url})
         except Exception as e:
             logger.exception("Failed to upload document to Cloudinary in resolve_view_url: %s", e)
-            fallback = doc.file.url if doc and doc.file else (file_url or current_file_str)
+            fallback = candidate_urls[0] if candidate_urls else (file_url or current_file_str)
             return Response({"cloudinary_url": fallback, "url": fallback})
 
 
