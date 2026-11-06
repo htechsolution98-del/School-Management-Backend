@@ -1,4 +1,4 @@
-from rest_framework.views import APIView
+from decimal import Decimal
 from rest_framework.views import APIView
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
@@ -341,6 +341,60 @@ class FormSubmissionViewSet(ModelViewSet):
                 return Response({"documents": error}, status=status.HTTP_400_BAD_REQUEST)
         admission = serializer.save()
 
+        # Process Admission Fee collection if submitted by clerk / desk
+        form = getattr(admission, "form", None)
+        fee_amount = Decimal("0.00")
+        is_rte_applicant = bool(getattr(admission, "is_rte", False) or str(data_dict.get("is_rte", "")).lower() in ["true", "1"])
+
+        if not is_rte_applicant and form and getattr(form, "fees_enable", False):
+            if form.fee_type == "general":
+                fee_amount = Decimal(str(form.fees or 0))
+            elif form.fee_type == "individual":
+                school_class = serializer._get_school_class(admission)
+                if school_class:
+                    structure = form.fee_structures.filter(class_name=school_class).first()
+                    if structure and structure.fee_amount is not None:
+                        fee_amount = Decimal(str(structure.fee_amount))
+
+        payment_mode_input = str(data_dict.get("payment_mode") or "").strip().lower()
+        payment_note = str(data_dict.get("payment_note") or "").strip()
+        auth_user = request.user if request.user and request.user.is_authenticated else None
+
+        if payment_mode_input in ["cash", "online"] and fee_amount > 0:
+            admission.fee_amount = fee_amount
+            admission.pay_process = True
+            admission.fee_verified = True
+            admission.fee_verified_at = timezone.now()
+            admission.fee_verified_by = auth_user
+            admission.save(update_fields=["fee_amount", "pay_process", "fee_verified", "fee_verified_at", "fee_verified_by"])
+
+            # Create verified AdmissionFee payment record
+            order_ref = payment_note or f"Manual Clerk Admission ({payment_mode_input.upper()})"
+            payment_ref = (
+                f"MANUAL-CASH-{timezone.now().strftime('%Y%m%d%H%M%S')}-{random.randint(100, 999)}"
+                if payment_mode_input == "cash"
+                else (data_dict.get("transaction_id") or f"MANUAL-ONLINE-{timezone.now().strftime('%Y%m%d%H%M%S')}-{random.randint(100, 999)}")
+            )
+
+            AdmissionFee.objects.create(
+                school=admission.school,
+                admission_number=admission.admission_number,
+                amount=int(fee_amount),
+                currency="INR",
+                payment_mode="cash" if payment_mode_input == "cash" else "online",
+                fee_verify=True,
+                paid_at=timezone.now(),
+                razorpay_order_id=order_ref,
+                razorpay_payment_id=payment_ref,
+            )
+        elif is_rte_applicant or (form and not getattr(form, "fees_enable", False)) or fee_amount <= 0:
+            admission.fee_amount = Decimal("0.00")
+            admission.pay_process = True
+            admission.fee_verified = True
+            admission.fee_verified_at = timezone.now()
+            admission.fee_verified_by = auth_user
+            admission.save(update_fields=["fee_amount", "pay_process", "fee_verified", "fee_verified_at", "fee_verified_by"])
+
         form = getattr(admission, "form", None)
         uploaded_docs, doc_fields_lookup = self._extract_uploaded_documents(request, form)
 
@@ -448,6 +502,13 @@ class FormSubmissionViewSet(ModelViewSet):
 
         response_data = dict(serializer.data)
         response_data["documents"] = documents_response
+        if fee_amount > 0 and payment_mode_input in ["cash", "online"]:
+            response_data["fee_amount"] = int(fee_amount)
+            response_data["payment_status"] = "paid"
+            response_data["payment_mode"] = payment_mode_input
+        elif is_rte_applicant or (form and not getattr(form, "fees_enable", False)) or fee_amount <= 0:
+            response_data["fee_amount"] = 0
+            response_data["payment_status"] = "exempt"
         if upload_warnings:
             response_data["upload_warnings"] = upload_warnings
 
