@@ -1640,6 +1640,9 @@ class StudentAttendanceSerializer(serializers.ModelSerializer):
         ]
         validators = []
 
+    def get_validators(self):
+        return []
+
     def validate(self, attrs):
 
         is_present = attrs.get("is_present", False)

@@ -1471,6 +1471,10 @@ class StudentAttendanceListSerializer(serializers.ModelSerializer):
     class Meta:
         model = StudentAttendance
         fields = '__all__'
+        validators = []
+
+    def get_validators(self):
+        return []
         
         
 class SyllabusListSerializer(serializers.ModelSerializer):

@@ -1494,12 +1494,13 @@ class AdmissionDocumentUpdateSerializer(serializers.ModelSerializer):
 
                 # documents[0][document_field]
                 document_field = request.data.get(f"documents[{i}][document_field]")
+                doc_id = request.data.get(f"documents[{i}][id]") or request.data.get(f"documents[{i}][document_id]")
 
                 # documents[0][file]
                 file = request.FILES.get(f"documents[{i}][file]") or request.data.get(f"documents[{i}][file]")
 
                 # stop loop when no more documents
-                if not document_field:
+                if not document_field and not doc_id:
                     break
 
                 # skip if file missing
@@ -1514,24 +1515,58 @@ class AdmissionDocumentUpdateSerializer(serializers.ModelSerializer):
                     upload_res = None
                     if hasattr(file, "read"):
                         upload_res = cloudinary.uploader.upload(
-                        file,
-                        folder="admission_documents",
-                        resource_type="auto",
-                    )
+                            file,
+                            folder="admission_documents",
+                            resource_type="auto",
+                        )
+                        if hasattr(file, "seek"):
+                            try:
+                                file.seek(0)
+                            except Exception:
+                                pass
                     c_url = (upload_res.get("secure_url") or upload_res.get("url")) if upload_res else None
                     if c_url:
                         saved_target = c_url
                 except Exception as c_err:
                     logger.warning("Direct Cloudinary upload failed during document update: %s", c_err)
+                    if hasattr(file, "seek"):
+                        try:
+                            file.seek(0)
+                        except Exception:
+                            pass
 
-                AdmissionDocument.objects.update_or_create(
-                    admission=instance,
-                    document_field_id=document_field,
-                    defaults={
-                        "file": saved_target,
-                        "school": instance.school,
-                    },
-                )
+                target_field_id = None
+                if document_field:
+                    try:
+                        target_field_id = int(document_field)
+                    except (ValueError, TypeError):
+                        target_field_id = document_field
+
+                existing_doc = None
+                if doc_id:
+                    existing_doc = AdmissionDocument.objects.filter(id=doc_id, admission=instance).first()
+                if not existing_doc and target_field_id:
+                    existing_doc = AdmissionDocument.objects.filter(admission=instance, document_field_id=target_field_id).first()
+
+                if existing_doc:
+                    existing_doc.file = saved_target
+                    if instance.school:
+                        existing_doc.school = instance.school
+                    if target_field_id:
+                        existing_doc.document_field_id = target_field_id
+                    existing_doc.save()
+                    if target_field_id:
+                        AdmissionDocument.objects.filter(
+                            admission=instance,
+                            document_field_id=target_field_id
+                        ).exclude(id=existing_doc.id).delete()
+                else:
+                    AdmissionDocument.objects.create(
+                        admission=instance,
+                        document_field_id=target_field_id,
+                        file=saved_target,
+                        school=instance.school,
+                    )
 
                 i += 1
 
@@ -1659,9 +1694,41 @@ class FormSubmissionReadSerializer(serializers.ModelSerializer):
 
 
 class AdmissionDocumentReadSerializer(serializers.ModelSerializer):
-    document_label = serializers.CharField(
-        source="document_field.label", read_only=True
-    )
+    document_label = serializers.SerializerMethodField()
+    file = serializers.SerializerMethodField()
+
+    def get_document_label(self, obj):
+        try:
+            if obj.document_field:
+                return obj.document_field.label or ""
+        except Exception:
+            pass
+        return ""
+
+    def get_file(self, obj):
+        try:
+            if obj.file:
+                raw_val = str(getattr(obj.file, "name", "") or obj.file).strip()
+                last_https = raw_val.rfind("https://")
+                last_http = raw_val.rfind("http://")
+                idx = max(last_https, last_http)
+                if idx >= 0:
+                    return raw_val[idx:]
+
+                url = str(obj.file.url).strip()
+                last_https = url.rfind("https://")
+                last_http = url.rfind("http://")
+                idx = max(last_https, last_http)
+                if idx > 0:
+                    return url[idx:]
+
+                request = self.context.get("request")
+                if request and url and not url.startswith("http"):
+                    return request.build_absolute_uri(url)
+                return url
+        except Exception:
+            pass
+        return None
 
     class Meta:
         model = AdmissionDocument
@@ -2091,63 +2158,142 @@ class GetAdmissionDataSerializer(serializers.ModelSerializer):
     student_id = serializers.SerializerMethodField()
     student_details = serializers.SerializerMethodField()
 
+    def _get_student(self, obj, select_class=False):
+        try:
+            st = getattr(obj, "student", None)
+            if st:
+                return st
+        except Exception:
+            pass
+        try:
+            qs = Student.objects.filter(admission=obj)
+            if select_class:
+                qs = qs.select_related("school_class")
+            st = qs.first()
+            if st:
+                return st
+        except Exception:
+            pass
+        if getattr(obj, "admission_number", None):
+            try:
+                sv_qs = StudentVerify.objects.filter(admission_number=obj.admission_number)
+                if select_class:
+                    sv_qs = sv_qs.select_related("student__school_class")
+                else:
+                    sv_qs = sv_qs.select_related("student")
+                sv = sv_qs.first()
+                if sv and sv.student:
+                    return sv.student
+            except Exception:
+                pass
+        return None
+
     def get_student_id(self, obj):
-        st = getattr(obj, "student", None) or Student.objects.filter(admission=obj).first() or Student.objects.filter(admission_no=obj.admission_number).first() or (Student.objects.filter(gr_no=obj.gr_no).first() if getattr(obj, "gr_no", None) else None)
+        st = self._get_student(obj)
         return st.id if st else None
 
+    def _get_gender(self, obj, st):
+        if st and hasattr(st, "gender"):
+            val = getattr(st, "gender")
+            if val:
+                return str(val)
+        try:
+            for fv in obj.field_values.all():
+                if fv.field and any(k in fv.field.label.lower() for k in ["gender", "sex"]):
+                    return fv.value or ""
+        except Exception:
+            pass
+        return ""
+
+    def _get_address(self, obj, st):
+        if st and hasattr(st, "address"):
+            val = getattr(st, "address")
+            if val:
+                return str(val)
+        try:
+            for fv in obj.field_values.all():
+                if fv.field and "address" in fv.field.label.lower():
+                    return fv.value or ""
+        except Exception:
+            pass
+        return ""
+
     def get_student_details(self, obj):
-        st = getattr(obj, "student", None) or Student.objects.filter(admission=obj).select_related("school_class").first() or Student.objects.filter(admission_no=obj.admission_number).select_related("school_class").first() or (Student.objects.filter(gr_no=obj.gr_no).select_related("school_class").first() if getattr(obj, "gr_no", None) else None)
+        st = self._get_student(obj, select_class=True)
         if st:
+            c_name = ""
+            if getattr(st, "school_class", None):
+                c_name = getattr(st.school_class, "school_class", "")
+
+            div_val = getattr(st, "division", "")
+            if hasattr(div_val, "division"):
+                div_val = div_val.division
+
             return {
                 "id": st.id,
-                "surname": st.surname or "",
-                "name": st.name or "",
-                "father_name": st.father_name or "",
-                "mother_name": st.mother_name or "",
-                "date_of_birth": str(st.date_of_birth) if st.date_of_birth else "",
-                "gender": st.gender or "",
-                "mobile": st.mobile or "",
-                "school_class": st.school_class_id,
-                "school_class_name": st.school_class.school_class if st.school_class else "",
-                "division": str(st.division.division if hasattr(st.division, "division") else (st.division or "")),
-                "roll_no": st.roll_no or "",
-                "aadhar_number": st.aadhar_number or "",
-                "address": st.address or "",
-                "gr_no": st.gr_no or "",
+                "surname": getattr(st, "surname", "") or "",
+                "name": getattr(st, "name", "") or "",
+                "father_name": getattr(st, "father_name", "") or "",
+                "mother_name": getattr(st, "mother_name", "") or "",
+                "date_of_birth": str(getattr(st, "date_of_birth", "")) if getattr(st, "date_of_birth", None) else "",
+                "gender": self._get_gender(obj, st),
+                "mobile": getattr(st, "mobile", "") or "",
+                "school_class": getattr(st, "school_class_id", None),
+                "school_class_name": c_name or "",
+                "division": str(div_val or ""),
+                "roll_no": getattr(st, "roll_no", "") or "",
+                "aadhar_number": getattr(st, "aadhar_number", "") or "",
+                "address": self._get_address(obj, st),
+                "gr_no": getattr(st, "gr_no", "") or "",
             }
         return None
 
     def get_gr_no(self, obj):
-        sv = StudentVerify.objects.filter(admission_number=obj.admission_number).first()
-        if sv and sv.gr_no:
-            return sv.gr_no
-        st = getattr(obj, "student", None) or Student.objects.filter(admission=obj).first() or Student.objects.filter(admission_no=obj.admission_number).first()
+        try:
+            if getattr(obj, "admission_number", None):
+                sv = StudentVerify.objects.filter(admission_number=obj.admission_number).first()
+                if sv and sv.gr_no:
+                    return sv.gr_no
+        except Exception:
+            pass
+        st = self._get_student(obj)
         if st and st.gr_no:
             return st.gr_no
         return getattr(obj, "gr_no", None)
 
     def get_division(self, obj):
-        st = getattr(obj, "student", None) or Student.objects.filter(admission=obj).first() or Student.objects.filter(admission_no=obj.admission_number).first() or (Student.objects.filter(gr_no=obj.gr_no).first() if getattr(obj, "gr_no", None) else None)
+        st = self._get_student(obj)
         if st and st.division:
             return st.division.division if hasattr(st.division, "division") else str(st.division)
-        for fv in obj.field_values.all():
-            if fv.field and any(k in fv.field.label.lower() for k in ["division", "section", "sec"]):
-                return fv.value
+        try:
+            for fv in obj.field_values.all():
+                if fv.field and any(k in fv.field.label.lower() for k in ["division", "section", "sec"]):
+                    return fv.value
+        except Exception:
+            pass
         return None
 
     def get_rte_documents(self, obj):
         request = self.context.get('request')
         docs = []
-        for doc in obj.rte_documents.all():
-            file_url = doc.document_file.url if doc.document_file else None
-            if request and file_url:
-                file_url = request.build_absolute_uri(file_url)
-            docs.append({
-                "id": doc.id,
-                "document_name": doc.document_name,
-                "document_file": file_url,
-                "is_verified": doc.is_verified,
-            })
+        try:
+            for doc in obj.rte_documents.all():
+                file_url = None
+                try:
+                    if doc.document_file:
+                        file_url = doc.document_file.url
+                except Exception:
+                    file_url = None
+                if request and file_url and not file_url.startswith("http"):
+                    file_url = request.build_absolute_uri(file_url)
+                docs.append({
+                    "id": doc.id,
+                    "document_name": doc.document_name,
+                    "document_file": file_url,
+                    "is_verified": doc.is_verified,
+                })
+        except Exception:
+            pass
         return docs
 
     class Meta:
