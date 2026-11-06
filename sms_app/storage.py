@@ -44,6 +44,19 @@ try:
             return cloudinary.uploader.upload(content, **options)
 
         def _get_url(self, name):
+            if not name:
+                return ""
+            name_str = str(name).strip()
+            # If already an absolute URL (http:// or https://), return it cleanly without prepending
+            if name_str.startswith("http://") or name_str.startswith("https://"):
+                return name_str
+            # If a nested URL was saved (e.g., media/https://res.cloudinary.com/...)
+            if "https://" in name_str or "http://" in name_str:
+                idx = name_str.rfind("https://")
+                if idx == -1:
+                    idx = name_str.rfind("http://")
+                return name_str[idx:]
+
             name = self._prepend_prefix(name)
             res_type = self._get_resource_type(name)
             url_options = {}
@@ -60,6 +73,17 @@ try:
         RESOURCE_TYPE = 'raw'
 
         def _get_url(self, name):
+            if not name:
+                return ""
+            name_str = str(name).strip()
+            if name_str.startswith("http://") or name_str.startswith("https://"):
+                return name_str
+            if "https://" in name_str or "http://" in name_str:
+                idx = name_str.rfind("https://")
+                if idx == -1:
+                    idx = name_str.rfind("http://")
+                return name_str[idx:]
+
             name = self._prepend_prefix(name)
             cloudinary_resource = cloudinary.CloudinaryResource(
                 name,

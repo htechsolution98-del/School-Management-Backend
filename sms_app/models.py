@@ -588,7 +588,7 @@ class AdmissionDocument(models.Model):
 
     document_field = models.ForeignKey(DocumentField, on_delete=models.CASCADE)
 
-    file = models.FileField(upload_to="admission_documents/")
+    file = models.FileField(upload_to="admission_documents/", max_length=500)
 
     is_verified = models.BooleanField(default=False)
     verified_at = models.DateTimeField(null=True, blank=True)
