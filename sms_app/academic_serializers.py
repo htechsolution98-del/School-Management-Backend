@@ -2227,11 +2227,48 @@ class MonthlyProgressReportSerializer(serializers.ModelSerializer):
 
 
 class StudyMaterialSerializer(serializers.ModelSerializer):
+    file_url = serializers.SerializerMethodField()
+    display_subject = serializers.SerializerMethodField()
+    display_class = serializers.SerializerMethodField()
+
     class Meta:
-        model=StudyMaterial
-        fields=["subject","student_class","material_type","title","description","file",
-            "created_at"
+        model = StudyMaterial
+        fields = [
+            "id",
+            "subject",
+            "student_class",
+            "division",
+            "class_name",
+            "subject_name",
+            "display_subject",
+            "display_class",
+            "material_type",
+            "title",
+            "description",
+            "file",
+            "file_url",
+            "file_name",
+            "file_size",
+            "created_at",
         ]
+        read_only_fields = ["id", "created_at"]
+
+    def get_file_url(self, obj):
+        if not obj.file:
+            return None
+        request = self.context.get("request")
+        if request:
+            try:
+                return request.build_absolute_uri(obj.file.url)
+            except Exception:
+                return obj.file.url
+        return obj.file.url
+
+    def get_display_subject(self, obj):
+        return obj.subject_name or (obj.subject.name if obj.subject else "")
+
+    def get_display_class(self, obj):
+        return obj.class_name or (obj.student_class.school_class if obj.student_class else "")
         
 
 

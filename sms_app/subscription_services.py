@@ -19,33 +19,61 @@ from dateutil.relativedelta import relativedelta
 
 
 class SubscriptionBillingService:
-    @staticmethod
-    def calculate_renewal_period(subscription: Optional[SchoolSubscription], months_count: int = 1):
+    @classmethod
+    def get_furthest_coverage_date(cls, school: Optional[School] = None, subscription: Optional[SchoolSubscription] = None):
         """
-        Calculates renewal start and end dates:
-        - If subscription is overdue (due_date in the past), renewal counts from the expiration date (due_date),
-          effectively deducting the overdue days.
-        - If subscription is active, renewal extends from due_date.
-        - If no previous subscription / due_date, renewal starts from today.
+        Determines the renewal/stacking base date:
+        1. If the school has an active subscription with a future due_date (due_date >= today),
+           renewals stack directly on top of that due_date.
+        2. If subscription is expired or overdue (due_date < today) or missing, renewal starts fresh from today.
+        3. If there is no active subscription due_date set, check the most recent PAID invoice
+           (ordered by paid_at / created_at desc) and use its billing_period_end if >= today.
+        """
+        today = timezone.now().date()
+        if not school and subscription and hasattr(subscription, "school"):
+            school = subscription.school
+        if not subscription and school:
+            subscription = getattr(school, "subscription", None)
+            if not subscription:
+                subscription = SchoolSubscription.objects.filter(school=school).first()
+
+        # 1. Primary: If school has a valid active subscription due date
+        if subscription and subscription.due_date:
+            if subscription.due_date >= today:
+                return subscription.due_date
+            else:
+                return today
+
+        # 2. Fallback: If no subscription due_date, check the single most recent PAID invoice
+        if school:
+            latest_paid_inv = SchoolInvoice.objects.filter(
+                school=school,
+                status="PAID"
+            ).exclude(billing_period_end__isnull=True).order_by("-paid_at", "-created_at").first()
+
+            if latest_paid_inv and latest_paid_inv.billing_period_end:
+                if latest_paid_inv.billing_period_end >= today:
+                    return latest_paid_inv.billing_period_end
+
+        return today
+
+    @classmethod
+    def calculate_renewal_period(cls, subscription: Optional[SchoolSubscription], months_count: int = 1, school: Optional[School] = None):
+        """
+        Calculates renewal start and end dates with stacking support:
+        - If the school already has active subscription coverage (via subscription or paid invoices),
+          the new subscription stacks on top of the furthest active coverage date.
+        - If the subscription is expired / overdue, renewal starts from today.
         Returns: (base_date, next_due, overdue_days)
         """
         today = timezone.now().date()
         effective_months = max(1, int(months_count or 1))
 
-        if subscription and subscription.due_date:
-            base_date = subscription.due_date
-            candidate_due = base_date + relativedelta(months=effective_months)
-            overdue_days = max(0, (today - base_date).days) if base_date < today else 0
+        effective_school = school or (subscription.school if subscription else None)
+        base_date = cls.get_furthest_coverage_date(effective_school, subscription)
 
-            # If overdue period exceeds the renewed months, ensure it remains active until at least tomorrow
-            if candidate_due <= today:
-                next_due = today + relativedelta(days=1)
-            else:
-                next_due = candidate_due
-        else:
-            base_date = today
-            next_due = base_date + relativedelta(months=effective_months)
-            overdue_days = 0
+        next_due = base_date + relativedelta(months=effective_months)
+        overdue_days = 0
 
         return base_date, next_due, overdue_days
 
@@ -112,14 +140,14 @@ class SubscriptionBillingService:
         elif per_student_override is not None and pricing_model == "PER_STUDENT":
             unit_rate = Decimal(str(per_student_override))
         elif plan:
-            if billing_cycle == "QUARTERLY" and effective_months == 3:
-                unit_rate = plan.quarterly_price
-            elif billing_cycle == "HALF_YEARLY" and effective_months == 6:
-                unit_rate = plan.half_yearly_price
-            elif billing_cycle == "YEARLY" and effective_months == 12:
-                unit_rate = plan.yearly_price
+            if (billing_cycle == "YEARLY" or effective_months == 12) and plan.yearly_price is not None:
+                unit_rate = Decimal(str(plan.yearly_price))
+            elif (billing_cycle == "HALF_YEARLY" or effective_months == 6) and plan.half_yearly_price is not None:
+                unit_rate = Decimal(str(plan.half_yearly_price))
+            elif (billing_cycle == "QUARTERLY" or effective_months == 3) and plan.quarterly_price is not None:
+                unit_rate = Decimal(str(plan.quarterly_price))
             else:  # MONTHLY or multi-month custom
-                unit_rate = plan.monthly_price
+                unit_rate = Decimal(str(plan.monthly_price or 0))
         else:
             unit_rate = Decimal("0.00")
 
@@ -128,29 +156,38 @@ class SubscriptionBillingService:
             # For per-student pricing, subtotal = student_count * per_student_rate * months
             subtotal = Decimal(str(student_count)) * unit_rate * Decimal(str(effective_months))
         else:
-            # Flat pricing: if cycle matches preset (Quarterly/Half/Yearly) and months match preset, unit_rate is cycle total.
+            # Flat pricing: if cycle matches preset (Quarterly/Half/Yearly) or months match preset, unit_rate is tier total.
             # Otherwise (e.g. 2 months, 4 months), subtotal is monthly_price * effective_months.
-            if billing_cycle == "MONTHLY" and effective_months > 1:
+            if effective_months in (3, 6, 12) or billing_cycle in ("QUARTERLY", "HALF_YEARLY", "YEARLY"):
+                subtotal = unit_rate
+            elif billing_cycle == "MONTHLY" and effective_months > 1:
                 subtotal = unit_rate * Decimal(str(effective_months))
             else:
                 subtotal = unit_rate
+
+        if unit_rate == Decimal("0.00"):
+            subtotal = Decimal("0.00")
 
         disc = Decimal(str(discount_amount))
         net_subtotal = max(Decimal("0.00"), subtotal - disc)
 
         # Determine GST tax percentage from plan or global settings
-        if plan and hasattr(plan, "gst_included"):
-            tax_pct = Decimal(str(plan.gst_percentage)) if plan.gst_included else Decimal("0.00")
+        if net_subtotal == Decimal("0.00"):
+            tax_pct = Decimal("0.00")
+            tax_amt = Decimal("0.00")
+            total_amt = Decimal("0.00")
         else:
-            tax_pct = cls.get_tax_percentage()
-
-        tax_amt = round(net_subtotal * (tax_pct / Decimal("100.0")), 2)
-        total_amt = round(net_subtotal + tax_amt, 2)
+            if plan and hasattr(plan, "gst_included"):
+                tax_pct = Decimal(str(plan.gst_percentage)) if plan.gst_included else Decimal("0.00")
+            else:
+                tax_pct = cls.get_tax_percentage()
+            tax_amt = round(net_subtotal * (tax_pct / Decimal("100.0")), 2)
+            total_amt = round(net_subtotal + tax_amt, 2)
 
         # Calculate days expansion & future due date
         today = timezone.now().date()
         sub = getattr(school, "subscription", None)
-        base_date, new_due_date, overdue_days = cls.calculate_renewal_period(sub, effective_months)
+        base_date, new_due_date, overdue_days = cls.calculate_renewal_period(sub, effective_months, school=school)
         expanded_days = max(1, (new_due_date - today).days)
 
         snapshot = {

@@ -64,9 +64,29 @@ class SubscriptionPlanViewSet(viewsets.ModelViewSet):
         plans = list(SubscriptionPlan.objects.filter(is_active=True).prefetch_related("plan_modules__module"))
         if school:
             sub = SchoolSubscription.objects.filter(school=school).first()
-            if sub and sub.plan and sub.plan in plans:
-                plans.remove(sub.plan)
-                plans.insert(0, sub.plan)
+            if sub and not sub.plan:
+                plan_name = f"{school.name} ({school.code}) Plan"
+                plan = SubscriptionPlan.objects.filter(name=plan_name).first()
+                if not plan:
+                    plan = SubscriptionPlan.objects.create(
+                        name=plan_name,
+                        description=f"Subscription plan configured for {school.name} ({school.code})",
+                        pricing_model=sub.billing_model or "FLAT",
+                        monthly_price=sub.flat_amount or 0,
+                        quarterly_price=(sub.flat_amount or 0) * 3,
+                        half_yearly_price=(sub.flat_amount or 0) * 6,
+                        yearly_price=(sub.flat_amount or 0) * 12,
+                        is_active=True,
+                    )
+                sub.plan = plan
+                sub.save(update_fields=["plan"])
+
+            if sub and sub.plan:
+                if sub.plan not in plans:
+                    plans.insert(0, sub.plan)
+                else:
+                    plans.remove(sub.plan)
+                    plans.insert(0, sub.plan)
 
         serializer = SubscriptionPlanSerializer(plans, many=True)
         return Response(serializer.data)
@@ -328,9 +348,9 @@ class SchoolSubscriptionViewSet(viewsets.ModelViewSet):
 
             subscription.plan_type = "PAID"
             subscription.status = "ACTIVE"
-            subscription.subscription_start_date = base_date
+            subscription.subscription_start_date = subscription.subscription_start_date or subscription.start_date or base_date
             subscription.subscription_end_date = next_due
-            subscription.start_date = base_date
+            subscription.start_date = subscription.start_date or base_date
             subscription.due_date = next_due
             subscription.billing_cycle = billing_cycle
             subscription.student_count_at_purchase = bill_calc["student_count"]
@@ -807,6 +827,78 @@ class SubscriptionPaymentViewSet(viewsets.ModelViewSet):
             billing_cycle=billing_cycle,
             months_count=months_count,
         )
+
+        today = timezone.now().date()
+        base_date, next_due, overdue_days = SubscriptionBillingService.calculate_renewal_period(sub, months_count, school=school)
+        cycle_display = f"{months_count}_MONTHS" if months_count not in [1, 3, 6, 12] else billing_cycle
+
+        # Handle ₹0 Free Plan (Bypass Razorpay gateway entirely)
+        if calc["final_amount"] <= 0:
+            with transaction.atomic():
+                inv_no = PaymentService.generate_invoice_number(school)
+                invoice = SchoolInvoice.objects.create(
+                    school=school,
+                    subscription=sub,
+                    invoice_number=inv_no,
+                    billing_model=calc["pricing_model"],
+                    billing_cycle=cycle_display,
+                    student_count=calc["student_count"],
+                    unit_rate=Decimal("0.00"),
+                    subtotal=Decimal("0.00"),
+                    tax_percentage=Decimal("0.00"),
+                    tax_amount=Decimal("0.00"),
+                    discount_amount=Decimal("0.00"),
+                    total_amount=Decimal("0.00"),
+                    billing_period_start=base_date,
+                    billing_period_end=next_due,
+                    due_date=today,
+                    status="PAID",
+                    paid_at=timezone.now(),
+                    payment_method="ONLINE",
+                    payment_reference="FREE_SUBSCRIPTION",
+                    notes=f"Complimentary / ₹0 renewal for {months_count} month(s) - {plan.name if plan else 'Subscription'}",
+                )
+
+                sub.plan = plan
+                sub.plan_type = "PAID"
+                sub.status = "ACTIVE"
+                sub.billing_cycle = billing_cycle
+                sub.subscription_start_date = sub.subscription_start_date or sub.start_date or base_date
+                sub.start_date = sub.start_date or base_date
+                sub.subscription_end_date = next_due
+                sub.due_date = next_due
+                sub.save()
+
+                school.is_active = True
+                school.save(update_fields=["is_active"])
+
+                AuditLogService.log(
+                    action="FREE_SUBSCRIPTION_ACTIVATED",
+                    school=school,
+                    user=request.user,
+                    new_values={
+                        "plan": plan.name if plan else "Free Plan",
+                        "months_added": months_count,
+                        "new_due_date": str(next_due),
+                    },
+                    notes=f"Free 0-cost subscription activated. Validity extended to {next_due}.",
+                )
+
+            return Response({
+                "free_activation": True,
+                "message": f"Free subscription activated successfully! Valid until {next_due}.",
+                "order_id": f"free_{inv_no}",
+                "amount": 0,
+                "currency": "INR",
+                "key": "",
+                "payment_id": f"free_pmt_{inv_no}",
+                "invoice_number": invoice.invoice_number,
+                "months_count": months_count,
+                "current_due_date": str(base_date),
+                "new_due_date": str(next_due),
+                "expanded_days": (next_due - today).days,
+            })
+
         amount_paisa = max(100, int(round(calc["final_amount"] * 100)))
 
         order_data = {
@@ -829,10 +921,7 @@ class SubscriptionPaymentViewSet(viewsets.ModelViewSet):
         except Exception as e:
             return Response({"error": f"Failed to create Razorpay order: {str(e)}"}, status=500)
 
-        # Calculate expanded period
-        today = timezone.now().date()
-        base_date, next_due, overdue_days = SubscriptionBillingService.calculate_renewal_period(sub, months_count)
-        cycle_display = f"{months_count}_MONTHS" if months_count not in [1, 3, 6, 12] else billing_cycle
+        # Calculate expanded period (base_date and next_due already calculated above)
 
         # Check if any pending invoice already exists for this school (do not create multiple pending)
         existing_pending = SchoolInvoice.objects.filter(school=school, status="PENDING").order_by("-created_at")
@@ -980,9 +1069,9 @@ class SubscriptionPaymentViewSet(viewsets.ModelViewSet):
                 sub.plan_type = "PAID"
                 sub.status = "ACTIVE"
                 sub.billing_cycle = billing_cycle
-                sub.subscription_start_date = base_date
+                sub.subscription_start_date = sub.subscription_start_date or sub.start_date or base_date
                 sub.subscription_end_date = next_due
-                sub.start_date = base_date
+                sub.start_date = sub.start_date or base_date
                 sub.due_date = next_due
                 sub.save()
 

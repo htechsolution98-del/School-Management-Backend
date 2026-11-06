@@ -34,6 +34,13 @@ class SubscriptionPlanSerializer(serializers.ModelSerializer):
         child=serializers.IntegerField(), write_only=True, required=False
     )
     subscribed_schools_count = serializers.SerializerMethodField()
+    enabled_tiers = serializers.SerializerMethodField()
+
+    def get_enabled_tiers(self, obj):
+        sub = obj.school_subscriptions.first()
+        if sub and isinstance(sub.price_snapshot, dict) and "enabled_tiers" in sub.price_snapshot:
+            return sub.price_snapshot["enabled_tiers"]
+        return ["1", "3", "6", "12"]
 
     class Meta:
         model = SubscriptionPlan
@@ -59,6 +66,7 @@ class SubscriptionPlanSerializer(serializers.ModelSerializer):
             "plan_modules",
             "enabled_module_ids",
             "subscribed_schools_count",
+            "enabled_tiers",
             "created_at",
             "updated_at",
         ]
@@ -110,6 +118,12 @@ class SchoolSubscriptionSerializer(serializers.ModelSerializer):
     calculated_amount = serializers.SerializerMethodField()
     days_left = serializers.SerializerMethodField()
     is_valid = serializers.SerializerMethodField()
+    enabled_tiers = serializers.SerializerMethodField()
+
+    def get_enabled_tiers(self, obj):
+        if isinstance(obj.price_snapshot, dict) and "enabled_tiers" in obj.price_snapshot:
+            return obj.price_snapshot["enabled_tiers"]
+        return ["1", "3", "6", "12"]
 
     class Meta:
         model = SchoolSubscription
@@ -145,6 +159,7 @@ class SchoolSubscriptionSerializer(serializers.ModelSerializer):
             "live_student_count",
             "calculated_amount",
             "days_left",
+            "enabled_tiers",
             "is_valid",
             "created_at",
             "updated_at",
