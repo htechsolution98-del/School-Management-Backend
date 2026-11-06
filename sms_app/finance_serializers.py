@@ -212,6 +212,11 @@ class SalaryComponentSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Component name cannot be empty.")
         return value
 
+    def validate_value(self, value):
+        if value is not None and value < 0:
+            raise serializers.ValidationError("Salary component value cannot be negative.")
+        return value
+
     def validate(self, attrs):
         request = self.context.get("request")
         school = getattr(request.user, "school", None) if request else None
@@ -266,6 +271,11 @@ class StaffSalaryComponentSerializer(serializers.ModelSerializer):
             "created_at",
         ]
         read_only_fields = ["created_at"]
+
+    def validate_value(self, value):
+        if value is not None and value < 0:
+            raise serializers.ValidationError("Staff salary component value cannot be negative.")
+        return value
 
     def validate(self, attrs):
         request = self.context.get("request")
@@ -451,9 +461,13 @@ class StaffSalaryPaymentSerializer(serializers.ModelSerializer):
                 {"paid_amount": "Paid amount cannot be greater than net salary."}
             )
 
-        if payment_mode == "online" and not transaction_id:
+        if payment_mode in ["online", "bank_transfer"] and not transaction_id:
             raise serializers.ValidationError(
-                {"transaction_id": "Transaction ID is required for online payment."}
+                {"transaction_id": "Transaction ID / Reference is required."}
+            )
+        if payment_mode == "cheque" and not transaction_id:
+            raise serializers.ValidationError(
+                {"transaction_id": "Cheque Number is required for cheque payment."}
             )
 
         existing = StaffSalaryPayment.objects.filter(
@@ -545,16 +559,33 @@ class GenerateStaffSalaryPaymentSerializer(serializers.ModelSerializer):
                 {"staff": "Invalid staff for this school."}
             )
 
-        if payment_mode == "online" and not transaction_id:
+        if payment_mode in ["online", "bank_transfer"] and not transaction_id:
             raise serializers.ValidationError(
-                {"transaction_id": "Transaction ID is required for online payment."}
+                {"transaction_id": "Transaction ID / Reference is required."}
+            )
+        if payment_mode == "cheque" and not transaction_id:
+            raise serializers.ValidationError(
+                {"transaction_id": "Cheque Number is required for cheque payment."}
             )
 
         salary_month = attrs.get("salary_month") or getattr(self.instance, "salary_month", None)
         if salary_month:
             try:
                 parts = str(salary_month).split("-")
-                month_start = date(int(parts[0]), int(parts[1]), 1)
+                month_year = int(parts[0])
+                month_num = int(parts[1])
+                month_start = date(month_year, month_num, 1)
+
+                # Enforce Joining Date Rule: staff cannot receive salary for months before their joining date
+                if staff and staff.joining_date:
+                    import calendar
+                    last_day = calendar.monthrange(month_year, month_num)[1]
+                    month_end = date(month_year, month_num, last_day)
+                    if staff.joining_date > month_end:
+                        raise serializers.ValidationError({
+                            "message": f"Cannot generate salary: {staff.name} joined on {staff.joining_date.strftime('%d-%m-%Y')}. Salary cannot be generated for months prior to joining date."
+                        })
+
                 payroll_run = PayrollRun.objects.filter(school=school, salary_month=month_start).first()
                 if payroll_run and payroll_run.status == "Locked":
                     raise serializers.ValidationError(
@@ -585,13 +616,17 @@ class GenerateStaffSalaryPaymentSerializer(serializers.ModelSerializer):
         from sms_app.services.payroll_service import generate_payslip, MissingPunchError
 
         try:
-            generate_payslip(
+            res = generate_payslip(
                 staff=staff,
                 month=month,
                 year=year,
                 payment_data=validated_data,
                 raise_on_missing_punch=True
             )
+            if isinstance(res, dict) and res.get("status") == "skipped":
+                raise serializers.ValidationError({
+                    "message": res.get("reason") or f"Cannot generate salary: {staff.name} is not eligible for {salary_month}."
+                })
         except MissingPunchError as e:
             missing_dates_str = ", ".join(d.strftime("%Y-%m-%d") for d in e.dates)
             raise serializers.ValidationError({

@@ -1,4 +1,5 @@
 from decimal import Decimal
+from typing import Any, cast
 from django.utils import timezone
 from django.core.exceptions import ValidationError as DjangoValidationError, PermissionDenied as DjangoPermissionDenied
 from django.db import IntegrityError, transaction
@@ -1243,7 +1244,7 @@ class LeaveTypeViewSet(ModelViewSet):
 
                         if matched_rec and matched_rec.pk and matched_rec.id not in updated_record_ids:
                             lt_rec = matched_rec
-                            lt_rec.category = cat_obj or lt_rec.category
+                            lt_rec.category = cast(Any, cat_obj) if cat_obj else lt_rec.category
                             lt_rec.name = name
                             lt_rec.leave_type = leave_type_val
                             lt_rec.code = code
@@ -1308,7 +1309,7 @@ class LeaveTypeViewSet(ModelViewSet):
                                 Q(category__feature__name__iexact=target_role) ).first()
 
                         if existing:
-                            existing.category = cat_obj or existing.category
+                            existing.category = cast(Any, cat_obj) if cat_obj else existing.category
                             existing.name = name
                             existing.code = code
                             existing.leave_num = leave_num
@@ -1351,14 +1352,33 @@ class LeaveTypeViewSet(ModelViewSet):
         
         
         
+def _resolve_staff_for_user(user):
+    if not user or not getattr(user, "is_authenticated", False):
+        return None
+    staff = Staff.objects.filter(user=user).select_related("school", "leave_template").first()
+    if not staff:
+        try:
+            staff = getattr(user, "staff", None)
+        except Exception:
+            staff = None
+    if not staff and getattr(user, "email", None):
+        staff = Staff.objects.filter(email=user.email).select_related("school", "leave_template").first()
+    if not staff and getattr(user, "mobile", None):
+        staff = Staff.objects.filter(mobile=user.mobile).select_related("school", "leave_template").first()
+    return staff
+
+
 class LeaveRequestView(TrusteeStaffReadOnlyMixin, ModelViewSet): #for requesting leave
     serializer_class = LeaveRequestSerializer
     permission_classes = [IsAuthenticated]
     
     def get_queryset(self):
         user = self.request.user
-        staff = Staff.objects.filter(user=user).first()
-        school = user.school or (staff.school if staff else None)
+        staff = _resolve_staff_for_user(user)
+        school = getattr(user, "school", None) or (staff.school if staff else None)
+        if not school:
+            from sms_app.models import School
+            school = School.objects.filter(login_id=user).first()
         
         show_all = self.request.query_params.get("all") == "true"
         role_str = str(getattr(user, "role", "") or "").upper()
@@ -1368,41 +1388,47 @@ class LeaveRequestView(TrusteeStaffReadOnlyMixin, ModelViewSet): #for requesting
             or role_str in ["PRINCIPAL", "VICE PRINCIPAL", "TRUSTEE", "ADMIN", "SUPERADMIN", "ADMIN(TRUSTEE)"]
             or staff_cat in ["PRINCIPAL", "VICE PRINCIPAL", "TRUSTEE"]
         )
-        if show_all and is_admin_approver and school:
-            qs = LeaveRequest.objects.filter(school=school)
-            is_trustee_user = (
-                role_str in ["TRUSTEE", "ADMIN(TRUSTEE)"]
-                or staff_cat == "TRUSTEE"
-                or user.groups.filter(name__in=["TRUSTEE", "trustee", "admin(trustee)"]).exists()
-            ) and not user.is_superuser
-            is_principal_user = (
-                role_str in ["PRINCIPAL", "VICE PRINCIPAL"]
-                or staff_cat in ["PRINCIPAL", "VICE PRINCIPAL"]
-            ) and not user.is_superuser
+        current_action = getattr(self, "action", None)
+        is_approver_action = current_action in [
+            "approve", "reject", "approve_cancellation", "reject_cancellation"
+        ]
 
-            if is_trustee_user:
-                qs = qs.filter(
-                    Q(staff__category__iexact="PRINCIPAL") | Q(staff__user__role__iexact="PRINCIPAL")
-                )
-            elif is_principal_user:
-                qs = qs.exclude(
-                    Q(staff__user=user)
-                    | Q(staff__category__iexact="PRINCIPAL")
-                    | Q(staff__user__role__iexact="PRINCIPAL")
-                )
-        elif staff and staff.school:
-            qs = LeaveRequest.objects.filter(staff=staff, school=staff.school)
+        if (show_all or is_approver_action) and is_admin_approver:
+            qs = LeaveRequest.objects.filter(school=school) if school else LeaveRequest.objects.all()
+            if not is_approver_action:
+                is_trustee_user = (
+                    role_str in ["TRUSTEE", "ADMIN(TRUSTEE)"]
+                    or staff_cat == "TRUSTEE"
+                    or user.groups.filter(name__in=["TRUSTEE", "trustee", "admin(trustee)"]).exists()
+                ) and not user.is_superuser
+                is_principal_user = (
+                    role_str in ["PRINCIPAL", "VICE PRINCIPAL"]
+                    or staff_cat in ["PRINCIPAL", "VICE PRINCIPAL"]
+                ) and not user.is_superuser
+
+                if is_trustee_user:
+                    qs = qs.filter(
+                        Q(staff__category__iexact="PRINCIPAL") | Q(staff__user__role__iexact="PRINCIPAL")
+                    )
+                elif is_principal_user:
+                    qs = qs.exclude(
+                        Q(staff__user=user)
+                        | Q(staff__category__iexact="PRINCIPAL")
+                        | Q(staff__user__role__iexact="PRINCIPAL")
+                    )
+        elif staff:
+            qs = LeaveRequest.objects.filter(staff=staff)
         elif school:
             qs = LeaveRequest.objects.filter(school=school)
         else:
             qs = LeaveRequest.objects.none()
 
         status_param = self.request.query_params.get("status")
-        if status_param:
+        if status_param and not is_approver_action and current_action not in ["request_cancellation", "withdraw"]:
             qs = qs.filter(status=status_param.upper())
 
         cancellation_status = self.request.query_params.get("cancellation_status")
-        if cancellation_status:
+        if cancellation_status and not is_approver_action:
             qs = qs.filter(cancellation_status=cancellation_status.upper())
 
         return qs.order_by("-id")
@@ -1450,7 +1476,7 @@ class LeaveRequestView(TrusteeStaffReadOnlyMixin, ModelViewSet): #for requesting
     @action(detail=True, methods=["post"], url_path="withdraw")
     def withdraw(self, request, pk=None):
         leave_req = self.get_object()
-        user_staff = Staff.objects.filter(user=request.user).first()
+        user_staff = _resolve_staff_for_user(request.user)
         if leave_req.staff != user_staff and not request.user.is_superuser:
             return Response({"error": "You can only withdraw your own leave request."}, status=403)
         try:
@@ -1463,8 +1489,9 @@ class LeaveRequestView(TrusteeStaffReadOnlyMixin, ModelViewSet): #for requesting
     def approve(self, request, pk=None):
         leave_req = self.get_object()
         school = request.user.school or leave_req.school
+        remarks = request.data.get("remarks") or request.data.get("reason", "")
         try:
-            LeaveWorkflowService.approve_leave_request(leave_req, request.user, school)
+            LeaveWorkflowService.approve_leave_request(leave_req, request.user, school, remarks=remarks)
             return Response({"message": "Leave request approved successfully."})
         except (DjangoPermissionDenied, PermissionDenied) as e:
             return Response({"error": str(e)}, status=403)
@@ -1474,7 +1501,7 @@ class LeaveRequestView(TrusteeStaffReadOnlyMixin, ModelViewSet): #for requesting
     @action(detail=True, methods=["post"], permission_classes=[IsAuthenticated, IsPrincipalOrTrustee], url_path="reject")
     def reject(self, request, pk=None):
         leave_req = self.get_object()
-        reason = request.data.get("reason", "Rejected by approver")
+        reason = request.data.get("reason") or request.data.get("remarks", "Rejected by approver")
         school = request.user.school or leave_req.school
         try:
             LeaveWorkflowService.reject_leave_request(leave_req, request.user, reason, school)
@@ -1487,7 +1514,7 @@ class LeaveRequestView(TrusteeStaffReadOnlyMixin, ModelViewSet): #for requesting
     @action(detail=True, methods=["post"], url_path="request_cancellation")
     def request_cancellation(self, request, pk=None):
         leave_req = self.get_object()
-        user_staff = Staff.objects.filter(user=request.user).first()
+        user_staff = _resolve_staff_for_user(request.user)
         if leave_req.staff != user_staff and not request.user.is_superuser:
             return Response({"error": "You can only cancel your own leave request."}, status=403)
         reason = request.data.get("reason", "")
@@ -2010,9 +2037,10 @@ class ChangeAllLeaveView(APIView): # for APPROVE all day leave — principal/tru
         school = request.user.school or leave_request.school
         try:
             if new_status == "APPROVED":
-                LeaveWorkflowService.approve_leave_request(leave_request, request.user, school)
+                remarks = request.data.get("remarks") or request.data.get("reason", "")
+                LeaveWorkflowService.approve_leave_request(leave_request, request.user, school, remarks=remarks)
             elif new_status == "REJECTED":
-                reason = request.data.get("reason", "Rejected by approver")
+                reason = request.data.get("reason") or request.data.get("remarks", "Rejected by approver")
                 LeaveWorkflowService.reject_leave_request(leave_request, request.user, reason, school)
             elif new_status == "CANCELLED":
                 if leave_request.cancellation_status == "REQUESTED":

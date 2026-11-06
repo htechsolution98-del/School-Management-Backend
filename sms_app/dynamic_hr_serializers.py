@@ -47,7 +47,7 @@ class AttendanceRegularizationSerializer(serializers.ModelSerializer):
     original_check_in = serializers.SerializerMethodField()
     original_check_out = serializers.SerializerMethodField()
     attendance_date = serializers.DateField(
-        input_formats=["%Y-%m-%d", "%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%S.%f%z", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S.%fZ", "iso-8601"]
+        input_formats=["%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%Y/%m/%d", "%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%S.%f%z", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S.%fZ", "iso-8601"]
     )
     requested_check_in = serializers.TimeField(
         required=False, allow_null=True, input_formats=["%H:%M:%S", "%H:%M", "%I:%M %p", "%I:%M:%S %p", "iso-8601"]
@@ -299,6 +299,11 @@ class DynamicSalaryComponentSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         read_only_fields = ["id", "school", "created_at", "updated_at"]
+
+    def validate_value(self, value):
+        if value is not None and value < 0:
+            raise serializers.ValidationError("Salary component value cannot be negative.")
+        return value
 
 
 class SalaryStructureSerializer(serializers.ModelSerializer):

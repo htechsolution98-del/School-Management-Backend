@@ -39,6 +39,7 @@ from sms_app.finance_views import (
     AddDailyExpenseView,
     BankDepositView,
     AddMiscIncomeView,
+    SetInitialCashView,
     AccountLedgerView,
 )
 from sms_app.library_leave_views import *
@@ -399,6 +400,8 @@ urlpatterns = [
     path('finance/bank-deposit/', BankDepositView.as_view()),
     path('api/finance/add-income/', AddMiscIncomeView.as_view(), name='add-misc-income'),
     path('finance/add-income/', AddMiscIncomeView.as_view()),
+    path('api/finance/set-initial-cash/', SetInitialCashView.as_view(), name='set-initial-cash'),
+    path('finance/set-initial-cash/', SetInitialCashView.as_view()),
     path('api/finance/account-ledger/', AccountLedgerView.as_view(), name='account-ledger'),
     path('finance/account-ledger/', AccountLedgerView.as_view()),
     path('api/fees/account-ledger/', AccountLedgerView.as_view()),
