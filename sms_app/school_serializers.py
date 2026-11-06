@@ -1,287 +1,571 @@
-from rest_framework import serializers
-from django.contrib.auth import get_user_model
-from .models import *
-from .validators import validate_mobile
-import re
-
-User = get_user_model()
-
-class FeatureSerialzer(serializers.ModelSerializer):
-    class Meta:
-        model = Feature
-        fields = "__all__"
-
-    def validate_name(self, value):
-        value = value.strip()
-        if len(value) < 2:
-            raise serializers.ValidationError("Feature name must contain at least 2 characters.")
-        if Feature.objects.filter(name__iexact=value).exclude(pk=getattr(self.instance, "pk", None)).exists():
-            raise serializers.ValidationError("This feature already exists.")
-        return value
-
-
-# -----------FOR SET WHICH FEATURE SCHOOL HAS-----------
-
-
-class SchoolFeatureSerializer(serializers.ModelSerializer):
-    feature_name = serializers.CharField(source="feature.name", read_only=True)
-
-    class Meta:
-        model = SchoolFeature
-        fields = ["id", "school", "feature", "feature_name", "is_enabled",
-            "created_at"
-        ]
-        read_only_fields = ["is_enabled", "feature_name"]
-
-    def validate(self, data):
-        school = data.get("school")
-        feature = data.get("feature")
-
-        if SchoolFeature.objects.filter(school=school, feature=feature).exists():
-            raise serializers.ValidationError(
-                {"message": "This Feature already have to this school"}
-            )
-        return data
-
-
-# -----------TO GET FEATURE FRO DROP DOWN IN STAFF CREATE---------------
-
-
-class GetFeatureSerializer(serializers.ModelSerializer):
-
-    feature_name = serializers.CharField(source="feature.name", read_only=True)
-    feature_id = serializers.CharField(source="feature.id", read_only=True)
-
-    class Meta:
-        model = SchoolFeature
-        fields = ["id", "feature_id", "feature_name",
-            "created_at"
-        ]
-
-
-from rest_framework import serializers
-
-
-
-
-class ChangeFeatureStatusSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = SchoolFeature
-        fields = ["is_enabled",
-            "created_at"
-        ]
-
-
-
-
-class SchoolSerializer(serializers.ModelSerializer):
-    phone = serializers.CharField(max_length=25, error_messages={"blank": "Phone number is required.", "required": "Phone number is required."})
-    feature_ids = serializers.PrimaryKeyRelatedField(
-        queryset=Feature.objects.all(), many=True, write_only=True, allow_empty=False,
-        error_messages={"empty": "Select at least one feature.", "required": "Select at least one feature."},
-    )
-    school_features = SchoolFeatureSerializer(
-        source="schoolfeature_set", many=True, read_only=True
-    )
-    # 🌟 Subscription & Trial Fields
-    trial_start_date = serializers.DateField(write_only=True, required=False, allow_null=True)
-    trial_end_date = serializers.DateField(write_only=True, required=False, allow_null=True)
-    pricing_model = serializers.ChoiceField(choices=["PER_STUDENT", "FLAT"], default="FLAT", write_only=True, required=False)
-    monthly_price = serializers.DecimalField(max_digits=10, decimal_places=2, default=0, write_only=True, required=False)
-    quarterly_price = serializers.DecimalField(max_digits=10, decimal_places=2, default=0, write_only=True, required=False)
-    half_yearly_price = serializers.DecimalField(max_digits=10, decimal_places=2, default=0, write_only=True, required=False)
-    yearly_price = serializers.DecimalField(max_digits=10, decimal_places=2, default=0, write_only=True, required=False)
-    gst_included = serializers.BooleanField(default=False, write_only=True, required=False)
-    gst_percentage = serializers.DecimalField(max_digits=5, decimal_places=2, default=18.00, write_only=True, required=False)
-    subscription_details = serializers.SerializerMethodField(read_only=True)
-    staff_count = serializers.SerializerMethodField(read_only=True)
-    student_count = serializers.SerializerMethodField(read_only=True)
-
-    def get_staff_count(self, obj):
-        try:
-            return Staff.objects.filter(school=obj).count()
-        except Exception:
-            return 0
-
-    def get_student_count(self, obj):
-        try:
-            from .models import Student
-            return Student.objects.filter(school=obj).count()
-        except Exception:
-            return 0
-
-    def get_subscription_details(self, obj):
-        sub = SchoolSubscription.objects.filter(school=obj).first()
-        if not sub:
-            return None
-        plan = sub.plan
-        days = getattr(sub, "days_left", 0)
-        if callable(days):
-            days = days()
-        elif not isinstance(days, int):
-            try:
-                days = sub.days_remaining()
-            except Exception:
-                days = 0
-
-        plan_name = plan.name if plan else f"{obj.name} Plan"
-        pricing_model = plan.pricing_model if plan else getattr(sub, "billing_model", "FLAT")
-        monthly = str(plan.monthly_price) if plan else str(getattr(sub, "flat_amount", 0))
-        quarterly = str(plan.quarterly_price) if plan else str(float(getattr(sub, "flat_amount", 0) or 0) * 3)
-        half_yearly = str(plan.half_yearly_price) if plan else str(float(getattr(sub, "flat_amount", 0) or 0) * 6)
-        yearly = str(plan.yearly_price) if plan else str(float(getattr(sub, "flat_amount", 0) or 0) * 12)
-        gst_inc = bool(getattr(plan, "gst_included", False)) if plan else False
-        gst_pct = str(getattr(plan, "gst_percentage", 18.00)) if plan else "18.00"
-
-        return {
-            "id": sub.id,
-            "status": sub.status,
-            "trial_start_date": str(sub.trial_start_date) if sub.trial_start_date else None,
-            "trial_end_date": str(sub.trial_end_date) if sub.trial_end_date else None,
-            "days_left": days,
-            "plan_name": plan_name,
-            "pricing_model": pricing_model,
-            "monthly_price": monthly,
-            "quarterly_price": quarterly,
-            "half_yearly_price": half_yearly,
-            "yearly_price": yearly,
-            "gst_included": gst_inc,
-            "gst_percentage": gst_pct,
-        }
-
-    class Meta:
-        model = School
-        fields = [
-            "id",
-            "name",
-            "email",
-            "phone",
-            "slug",
-            "code",
-            "feature_ids",
-            "address",
-            "city",
-            "state",
-            "country",
-            "pincode",
-            "logo",
-            "index_no",
-            "is_active",
-            "school_features",
-            "trial_start_date",
-            "trial_end_date",
-            "pricing_model",
-            "monthly_price",
-            "quarterly_price",
-            "half_yearly_price",
-            "yearly_price",
-            "gst_included",
-            "gst_percentage",
-                        "subscription_details",
-            "staff_count",
-            "student_count",
-            "created_at"
-        ]
-        read_only_fields = ["slug", "code", "subscription_details", "staff_count", "student_count"]
-        extra_kwargs = {
-            field: {"required": True, "allow_blank": False, "allow_null": False,
-                    "error_messages": {"required": f"{label} is required.", "blank": f"{label} is required.", "null": f"{label} is required."}}
-            for field, label in [("name", "School name"), ("email", "Email"), ("address", "Address"),
-                                 ("city", "City"), ("state", "State"), ("country", "Country"), ("pincode", "Postal code")]
-        }
-        extra_kwargs["email"]["error_messages"]["invalid"] = "Enter a valid email address."
-        extra_kwargs["is_active"] = {"allow_null": False, "default": True}
-
-    def validate_name(self, value):
-        if len(value.strip()) < 2:
-            raise serializers.ValidationError("School name must contain at least 2 characters.")
-        return value.strip()
-
-    def validate_email(self, value):
-        value = value.strip().lower()
-        users = User.objects.filter(email__iexact=value)
-        schools = School.objects.filter(email__iexact=value)
-        if self.instance:
-            users = users.exclude(pk=self.instance.login_id_id)
-            schools = schools.exclude(pk=self.instance.pk)
-        if users.exists() or schools.exists():
-            raise serializers.ValidationError("This email is already used by another account or school.")
-        return value
-
-    def validate_phone(self, value):
-        value = validate_mobile(value, required=True)
-        # The school phone doubles as the login user's mobile number, so it has
-        # to stay unique across accounts (CustomUser.mobile is UNIQUE and School.phone is unique).
-        users = User.objects.filter(mobile=value)
-        schools = School.objects.filter(phone=value)
-        if self.instance and self.instance.login_id_id:
-            users = users.exclude(pk=self.instance.login_id_id)
-        if self.instance:
-            schools = schools.exclude(pk=self.instance.pk)
-        if users.exists() or schools.exists():
-            raise serializers.ValidationError(
-                "This phone number is already used by another school or account."
-            )
-        return value
-
-    def validate_address(self, value):
-        if len(value.strip()) < 5:
-            raise serializers.ValidationError("Address must contain at least 5 characters.")
-        return value.strip()
-
-    def validate_index_no(self, value):
-        if not value:
-            return value
-        val = value.strip()
-        if not re.fullmatch(r"^[0-9.]+$", val) or not any(c.isdigit() for c in val):
-            raise serializers.ValidationError("Index number must only contain digits and dots (no letters or special characters).")
-        qs = School.objects.filter(index_no__iexact=val)
-        if self.instance:
-            qs = qs.exclude(pk=self.instance.pk)
-        if qs.exists():
-            raise serializers.ValidationError("This index number is already registered by another school.")
-        return val
-
-    def validate_logo(self, value):
-        if value and value.size > 2 * 1024 * 1024:
-            raise serializers.ValidationError("Logo must be 2 MB or smaller.")
-        if value and getattr(value.image, "format", None) not in {"PNG", "JPEG", "WEBP"}:
-            raise serializers.ValidationError("Upload a valid PNG, JPEG or WebP image.")
-        return value
-
-    def validate(self, data):
-        errors = {}
-        for field in ("city", "state", "country"):
-            if field in data and len(data[field].strip()) < 2:
-                errors[field] = f"{field.title()} must contain at least 2 characters."
-        pincode = data.get("pincode", getattr(self.instance, "pincode", None))
-        country = data.get("country", getattr(self.instance, "country", "")) or ""
-        if "pincode" in data or "country" in data:
-            if country.strip().lower() in {"india", "in", "bharat"}:
-                if not pincode or not re.fullmatch(r"[1-9][0-9]{5}", pincode):
-                    errors["pincode"] = "Enter a valid 6-digit Indian PIN code."
-            elif not pincode or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 -]{1,9}", pincode):
-                errors["pincode"] = "Enter a postal code of 2 to 10 letters or numbers."
-        if errors:
-            raise serializers.ValidationError(errors)
-        return data
-
-    def validate_feature_ids(self, value):
-        ids = [f.id for f in value]
-
-        if len(ids) != len(set(ids)):
-            raise serializers.ValidationError("Duplicate features are not allowed.")
-
-        return value
-
-
-
-
-class SchoolListSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = School
-        fields = ["id", "name", "logo", "index_no",
-            "created_at"
-        ]
-
-
+from rest_framework import serializers
+
+from django.contrib.auth import get_user_model
+
+from .models import *
+
+from .validators import validate_mobile
+
+import re
+
+
+
+User = get_user_model()
+
+
+
+class FeatureSerialzer(serializers.ModelSerializer):
+
+    class Meta:
+
+        model = Feature
+
+        fields = "__all__"
+
+
+
+    def validate_name(self, value):
+
+        value = value.strip()
+
+        if len(value) < 2:
+
+            raise serializers.ValidationError("Feature name must contain at least 2 characters.")
+
+        if Feature.objects.filter(name__iexact=value).exclude(pk=getattr(self.instance, "pk", None)).exists():
+
+            raise serializers.ValidationError("This feature already exists.")
+
+        return value
+
+
+
+
+
+# -----------FOR SET WHICH FEATURE SCHOOL HAS-----------
+
+
+
+
+
+class SchoolFeatureSerializer(serializers.ModelSerializer):
+
+    feature_name = serializers.CharField(source="feature.name", read_only=True)
+
+
+
+    class Meta:
+
+        model = SchoolFeature
+
+        fields = ["id", "school", "feature", "feature_name", "is_enabled",
+
+            "created_at"
+
+        ]
+
+        read_only_fields = ["is_enabled", "feature_name"]
+
+
+
+    def validate(self, data):
+
+        school = data.get("school")
+
+        feature = data.get("feature")
+
+
+
+        if SchoolFeature.objects.filter(school=school, feature=feature).exists():
+
+            raise serializers.ValidationError(
+
+                {"message": "This Feature already have to this school"}
+
+            )
+
+        return data
+
+
+
+
+
+# -----------TO GET FEATURE FRO DROP DOWN IN STAFF CREATE---------------
+
+
+
+
+
+class GetFeatureSerializer(serializers.ModelSerializer):
+
+
+
+    feature_name = serializers.CharField(source="feature.name", read_only=True)
+
+    feature_id = serializers.CharField(source="feature.id", read_only=True)
+
+
+
+    class Meta:
+
+        model = SchoolFeature
+
+        fields = ["id", "feature_id", "feature_name",
+
+            "created_at"
+
+        ]
+
+
+
+
+
+from rest_framework import serializers
+
+
+
+
+
+
+
+
+
+class ChangeFeatureStatusSerializer(serializers.ModelSerializer):
+
+    class Meta:
+
+        model = SchoolFeature
+
+        fields = ["is_enabled",
+
+            "created_at"
+
+        ]
+
+
+
+
+
+
+
+
+
+class SchoolSerializer(serializers.ModelSerializer):
+
+    phone = serializers.CharField(max_length=25, error_messages={"blank": "Phone number is required.", "required": "Phone number is required."})
+
+    feature_ids = serializers.PrimaryKeyRelatedField(
+
+        queryset=Feature.objects.all(), many=True, write_only=True, allow_empty=False,
+
+        error_messages={"empty": "Select at least one feature.", "required": "Select at least one feature."},
+
+    )
+
+    school_features = SchoolFeatureSerializer(
+
+        source="schoolfeature_set", many=True, read_only=True
+
+    )
+
+    # 🌟 Subscription & Trial Fields
+
+    trial_start_date = serializers.DateField(write_only=True, required=False, allow_null=True)
+
+    trial_end_date = serializers.DateField(write_only=True, required=False, allow_null=True)
+
+    pricing_model = serializers.ChoiceField(choices=["PER_STUDENT", "FLAT"], default="FLAT", write_only=True, required=False)
+    plan_name = serializers.CharField(max_length=150, write_only=True, required=False, allow_blank=True, allow_null=True)
+
+    monthly_price = serializers.DecimalField(max_digits=10, decimal_places=2, default=0, write_only=True, required=False)
+
+    quarterly_price = serializers.DecimalField(max_digits=10, decimal_places=2, default=0, write_only=True, required=False)
+
+    half_yearly_price = serializers.DecimalField(max_digits=10, decimal_places=2, default=0, write_only=True, required=False)
+
+    yearly_price = serializers.DecimalField(max_digits=10, decimal_places=2, default=0, write_only=True, required=False)
+
+    gst_included = serializers.BooleanField(default=False, write_only=True, required=False)
+
+    gst_percentage = serializers.DecimalField(max_digits=5, decimal_places=2, default=18.00, write_only=True, required=False)
+
+    enabled_tiers = serializers.ListField(child=serializers.CharField(), write_only=True, required=False)
+    subscription_details = serializers.SerializerMethodField(read_only=True)
+
+    staff_count = serializers.SerializerMethodField(read_only=True)
+
+    student_count = serializers.SerializerMethodField(read_only=True)
+
+
+
+    def get_staff_count(self, obj):
+
+        try:
+
+            return Staff.objects.filter(school=obj).count()
+
+        except Exception:
+
+            return 0
+
+
+
+    def get_student_count(self, obj):
+
+        try:
+
+            from .models import Student
+
+            return Student.objects.filter(school=obj).count()
+
+        except Exception:
+
+            return 0
+
+
+
+    def get_subscription_details(self, obj):
+        try:
+            sub = SchoolSubscription.objects.filter(school=obj).first()
+            if not sub:
+                return None
+            plan = sub.plan
+            days = 0
+            try:
+                days = sub.days_remaining()
+            except Exception:
+                days = 0
+
+            plan_name = (plan.name if plan else f"{obj.name or 'School'} Plan") or "School Plan"
+            pricing_model = getattr(plan, "pricing_model", getattr(sub, "billing_model", "FLAT")) or "FLAT"
+
+            try:
+                monthly = str(plan.monthly_price if plan and plan.monthly_price is not None else getattr(sub, "flat_amount", 0) or 0)
+            except Exception:
+                monthly = "0"
+
+            try:
+                quarterly = str(plan.quarterly_price if plan and plan.quarterly_price is not None else float(monthly or 0) * 3)
+            except Exception:
+                quarterly = "0"
+
+            try:
+                half_yearly = str(plan.half_yearly_price if plan and plan.half_yearly_price is not None else float(monthly or 0) * 6)
+            except Exception:
+                half_yearly = "0"
+
+            try:
+                yearly = str(plan.yearly_price if plan and plan.yearly_price is not None else float(monthly or 0) * 12)
+            except Exception:
+                yearly = "0"
+
+            gst_inc = bool(getattr(plan, "gst_included", False)) if plan else False
+            gst_pct = str(getattr(plan, "gst_percentage", 18.00) or 18.00) if plan else "18.00"
+
+            tiers = ["1", "3", "6", "12"]
+            try:
+                if isinstance(sub.price_snapshot, dict) and "enabled_tiers" in sub.price_snapshot:
+                    tiers = [str(x) for x in sub.price_snapshot["enabled_tiers"]]
+                elif isinstance(sub.price_snapshot, str):
+                    import json
+                    parsed = json.loads(sub.price_snapshot)
+                    if isinstance(parsed, dict) and "enabled_tiers" in parsed:
+                        tiers = [str(x) for x in parsed["enabled_tiers"]]
+            except Exception:
+                tiers = ["1", "3", "6", "12"]
+
+            return {
+                "id": sub.id,
+                "status": getattr(sub, "status", "TRIAL"),
+                "trial_start_date": str(sub.trial_start_date) if sub.trial_start_date else None,
+                "trial_end_date": str(sub.trial_end_date) if sub.trial_end_date else None,
+                "days_left": int(days) if isinstance(days, (int, float)) else 0,
+                "plan_name": plan_name,
+                "pricing_model": pricing_model,
+                "monthly_price": monthly,
+                "quarterly_price": quarterly,
+                "half_yearly_price": half_yearly,
+                "yearly_price": yearly,
+                "gst_included": gst_inc,
+                "gst_percentage": gst_pct,
+                "enabled_tiers": tiers,
+            }
+        except Exception:
+            return None
+
+
+
+    class Meta:
+
+        model = School
+
+        fields = [
+
+            "id",
+
+            "name",
+
+            "email",
+
+            "phone",
+
+            "slug",
+
+            "code",
+
+            "feature_ids",
+
+            "address",
+
+            "city",
+
+            "state",
+
+            "country",
+
+            "pincode",
+
+            "logo",
+
+            "index_no",
+
+            "is_active",
+
+            "school_features",
+
+            "trial_start_date",
+
+            "trial_end_date",
+
+            "pricing_model",
+            "plan_name",
+
+            "monthly_price",
+
+            "quarterly_price",
+
+            "half_yearly_price",
+
+            "yearly_price",
+
+            "gst_included",
+
+            "gst_percentage",
+            "enabled_tiers",
+
+                        "subscription_details",
+
+            "staff_count",
+
+            "student_count",
+
+            "created_at"
+
+        ]
+
+        read_only_fields = ["slug", "code", "subscription_details", "staff_count", "student_count"]
+
+        extra_kwargs = {
+
+            field: {"required": True, "allow_blank": False, "allow_null": False,
+
+                    "error_messages": {"required": f"{label} is required.", "blank": f"{label} is required.", "null": f"{label} is required."}}
+
+            for field, label in [("name", "School name"), ("email", "Email"), ("address", "Address"),
+
+                                 ("city", "City"), ("state", "State"), ("country", "Country"), ("pincode", "Postal code")]
+
+        }
+
+        extra_kwargs["email"]["error_messages"]["invalid"] = "Enter a valid email address."
+
+        extra_kwargs["is_active"] = {"allow_null": False, "default": True}
+
+
+
+    def validate_name(self, value):
+
+        if len(value.strip()) < 2:
+
+            raise serializers.ValidationError("School name must contain at least 2 characters.")
+
+        return value.strip()
+
+
+
+    def validate_email(self, value):
+
+        value = value.strip().lower()
+
+        users = User.objects.filter(email__iexact=value)
+
+        schools = School.objects.filter(email__iexact=value)
+
+        if self.instance:
+
+            users = users.exclude(pk=self.instance.login_id_id)
+
+            schools = schools.exclude(pk=self.instance.pk)
+
+        if users.exists() or schools.exists():
+
+            raise serializers.ValidationError("This email is already used by another account or school.")
+
+        return value
+
+
+
+    def validate_phone(self, value):
+
+        value = validate_mobile(value, required=True)
+
+        # The school phone doubles as the login user's mobile number, so it has
+
+        # to stay unique across accounts (CustomUser.mobile is UNIQUE and School.phone is unique).
+
+        users = User.objects.filter(mobile=value)
+
+        schools = School.objects.filter(phone=value)
+
+        if self.instance and self.instance.login_id_id:
+
+            users = users.exclude(pk=self.instance.login_id_id)
+
+        if self.instance:
+
+            schools = schools.exclude(pk=self.instance.pk)
+
+        if users.exists() or schools.exists():
+
+            raise serializers.ValidationError(
+
+                "This phone number is already used by another school or account."
+
+            )
+
+        return value
+
+
+
+    def validate_address(self, value):
+
+        if len(value.strip()) < 5:
+
+            raise serializers.ValidationError("Address must contain at least 5 characters.")
+
+        return value.strip()
+
+
+
+    def validate_index_no(self, value):
+
+        if not value:
+
+            return value
+
+        val = value.strip()
+
+        if not re.fullmatch(r"^[0-9.]+$", val) or not any(c.isdigit() for c in val):
+
+            raise serializers.ValidationError("Index number must only contain digits and dots (no letters or special characters).")
+
+        qs = School.objects.filter(index_no__iexact=val)
+
+        if self.instance:
+
+            qs = qs.exclude(pk=self.instance.pk)
+
+        if qs.exists():
+
+            raise serializers.ValidationError("This index number is already registered by another school.")
+
+        return val
+
+
+
+    def validate_logo(self, value):
+
+        if value and value.size > 2 * 1024 * 1024:
+
+            raise serializers.ValidationError("Logo must be 2 MB or smaller.")
+
+        if value and getattr(value.image, "format", None) not in {"PNG", "JPEG", "WEBP"}:
+
+            raise serializers.ValidationError("Upload a valid PNG, JPEG or WebP image.")
+
+        return value
+
+
+
+    def validate(self, data):
+
+        errors = {}
+
+        for field in ("city", "state", "country"):
+
+            if field in data and len(data[field].strip()) < 2:
+
+                errors[field] = f"{field.title()} must contain at least 2 characters."
+
+        pincode = data.get("pincode", getattr(self.instance, "pincode", None))
+
+        country = data.get("country", getattr(self.instance, "country", "")) or ""
+
+        if "pincode" in data or "country" in data:
+
+            if country.strip().lower() in {"india", "in", "bharat"}:
+
+                if not pincode or not re.fullmatch(r"[1-9][0-9]{5}", pincode):
+
+                    errors["pincode"] = "Enter a valid 6-digit Indian PIN code."
+
+            elif not pincode or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 -]{1,9}", pincode):
+
+                errors["pincode"] = "Enter a postal code of 2 to 10 letters or numbers."
+
+        if errors:
+
+            raise serializers.ValidationError(errors)
+
+        return data
+
+
+
+    def validate_feature_ids(self, value):
+
+        ids = [f.id for f in value]
+
+
+
+        if len(ids) != len(set(ids)):
+
+            raise serializers.ValidationError("Duplicate features are not allowed.")
+
+
+
+        return value
+
+
+
+
+
+
+
+
+
+class SchoolListSerializer(serializers.ModelSerializer):
+
+    class Meta:
+
+        model = School
+
+        fields = ["id", "name", "logo", "index_no",
+
+            "created_at"
+
+        ]
+
+
+
+
+

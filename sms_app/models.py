@@ -3634,15 +3634,20 @@ class StudyMaterial(models.Model):
         ("worksheet", "Worksheet"),
         ("other", "Other"),
     ]
-    school=models.ForeignKey(School,on_delete=models.CASCADE)
-    staff=models.ForeignKey(Staff,on_delete=models.CASCADE)
-    subject=models.ForeignKey(Subject,on_delete=models.CASCADE)
-    student_class=models.ForeignKey(SchoolClass,on_delete=models.CASCADE)
-    material_type = models.CharField(max_length=20,choices=MATERIAL_TYPE_CHOICES,default="notes")
-    title=models.CharField(max_length=50)
-    description=models.CharField(max_length=50)
-    file=models.FileField(upload_to="studymaterial/")
-    created_at=models.DateTimeField(auto_now_add=True)
+    school = models.ForeignKey(School, on_delete=models.CASCADE)
+    staff = models.ForeignKey(Staff, on_delete=models.SET_NULL, null=True, blank=True)
+    subject = models.ForeignKey(Subject, on_delete=models.SET_NULL, null=True, blank=True)
+    student_class = models.ForeignKey(SchoolClass, on_delete=models.SET_NULL, null=True, blank=True)
+    division = models.CharField(max_length=50, null=True, blank=True)
+    class_name = models.CharField(max_length=100, null=True, blank=True)
+    subject_name = models.CharField(max_length=100, null=True, blank=True)
+    material_type = models.CharField(max_length=50, choices=MATERIAL_TYPE_CHOICES, default="notes")
+    title = models.CharField(max_length=255)
+    description = models.TextField(blank=True, null=True)
+    file = models.FileField(upload_to="studymaterial/")
+    file_name = models.CharField(max_length=255, null=True, blank=True)
+    file_size = models.CharField(max_length=50, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
     class Meta:
         db_table = "study_material"
         ordering = ["-created_at"]
@@ -4462,9 +4467,28 @@ class SchoolSubscription(models.Model):
 
     def days_remaining(self):
         today = timezone.now().date()
-        if not self.due_date:
+        target_date = self.due_date
+
+        # Auto-recover / sync with furthest paid invoice if existing so stacked purchases are never lost
+        if hasattr(self, "school") and self.school:
+            try:
+                latest_paid = SchoolInvoice.objects.filter(
+                    school=self.school,
+                    status="PAID"
+                ).exclude(billing_period_end__isnull=True).order_by("-billing_period_end").first()
+                if latest_paid and latest_paid.billing_period_end:
+                    if not target_date or latest_paid.billing_period_end > target_date:
+                        target_date = latest_paid.billing_period_end
+                        if self.due_date != target_date:
+                            self.due_date = target_date
+                            self.subscription_end_date = target_date
+                            self.save(update_fields=["due_date", "subscription_end_date"])
+            except Exception:
+                pass
+
+        if not target_date:
             return 0
-        return (self.due_date - today).days
+        return (target_date - today).days
 
     @property
     def days_left(self):

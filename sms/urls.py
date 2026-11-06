@@ -377,6 +377,10 @@ urlpatterns = [
     path('student-fee-payment/bulk-collect/', BulkCollectStudentFeePaymentView.as_view()),
     path('api/student-ledger/schedule/', StudentLedgerScheduleView.as_view()),
     path('api/student-ledger/generate-fee/', GenerateSingleStudentFeeView.as_view()),
+    path('api/student/study-materials/', StudentStudyMaterialView.as_view()),
+    path('api/student-study-materials/', StudentStudyMaterialView.as_view()),
+    path('api/studymaterial-student/', StudentStudyMaterialView.as_view()),
+    path('studymaterial-student/', StudentStudyMaterialView.as_view()),
     path('api/',include(router.urls)),
 
     path('api/dashboard-count/', DashboardCountAPIView.as_view(), name='dashboard-count'),
@@ -542,6 +546,7 @@ urlpatterns = [
     path('api/verify-payment/',VerifypaymentView.as_view()),
     path('api/studymaterial/',StudyMaterialView.as_view()),
     path('api/studymaterial/<int:id>/', StudyMaterialView.as_view()),
+    path('api/student/study-materials/', StudentStudyMaterialView.as_view()),
     path("api/teacher-assignments/", TeacherAssignmentView.as_view()),
     path("api/teacher/classes/",TeacherClassesView.as_view()),
     

@@ -185,6 +185,21 @@ class SchoolView(ModelViewSet):
         yearly_p = serializer.validated_data.pop("yearly_price", 0)
         gst_inc = serializer.validated_data.pop("gst_included", False)
         gst_pct = serializer.validated_data.pop("gst_percentage", 18.00)
+        custom_plan_name = serializer.validated_data.pop("plan_name", None)
+        if custom_plan_name is None and "plan_name" in self.request.data:
+            custom_plan_name = self.request.data.get("plan_name")
+        enabled_tiers = serializer.validated_data.pop("enabled_tiers", None)
+        if enabled_tiers is None and "enabled_tiers" in self.request.data:
+            enabled_tiers = self.request.data.get("enabled_tiers")
+        if isinstance(enabled_tiers, str):
+            import json
+            try:
+                enabled_tiers = json.loads(enabled_tiers)
+            except Exception:
+                enabled_tiers = [x.strip() for x in enabled_tiers.split(",") if x.strip()]
+        if enabled_tiers is None:
+            enabled_tiers = ["1", "3", "6", "12"]
+        enabled_tiers = [str(x) for x in enabled_tiers]
 
         name = serializer.validated_data.get("name")
         email = serializer.validated_data.get("email")
@@ -229,24 +244,59 @@ class SchoolView(ModelViewSet):
             user.school = school  # if field exists
             user.save()
 
-                        # 🌟 Create dedicated SubscriptionPlan for this School (unique per school code even with same school name)
-            plan_name = f"{school.name} ({school.code}) Plan"
-            plan, _ = SubscriptionPlan.objects.get_or_create(
-                name=plan_name,
-                defaults={
-                    "description": f"Subscription plan configured for {school.name} ({school.code})",
-                    "pricing_model": pricing_model or "FLAT",
-                    "monthly_price": monthly_p or 0,
-                    "quarterly_price": quarterly_p or 0,
-                    "half_yearly_price": half_yearly_p or 0,
-                    "yearly_price": yearly_p or 0,
-                    "gst_included": gst_inc,
-                    "gst_percentage": gst_pct,
-                    "trial_available": True,
-                    "trial_duration_days": 14,
-                    "is_active": True,
-                }
-            )
+                        # 🌟 Create or link dedicated SubscriptionPlan for this School
+            # custom_plan_name extracted above
+            default_plan_name = f"{school.name} ({school.code}) Plan"
+            target_plan_name = custom_plan_name.strip() if (custom_plan_name and custom_plan_name.strip()) else default_plan_name
+
+            plan = SubscriptionPlan.objects.filter(name__iexact=target_plan_name).first()
+            if not plan:
+                plan = SubscriptionPlan.objects.filter(name__icontains=f"({school.code})").first()
+            if not plan:
+                try:
+                    plan = SubscriptionPlan.objects.create(
+                        name=target_plan_name,
+                        description=f"Subscription plan configured for {school.name} ({school.code})",
+                        pricing_model=pricing_model or "FLAT",
+                        monthly_price=monthly_p or 0,
+                        quarterly_price=quarterly_p or 0,
+                        half_yearly_price=half_yearly_p or 0,
+                        yearly_price=yearly_p or 0,
+                        gst_included=gst_inc if gst_inc is not None else False,
+                        gst_percentage=gst_pct if gst_pct is not None else 18.00,
+                        trial_available=True,
+                        trial_duration_days=14,
+                        is_active=True,
+                    )
+                except Exception:
+                    plan = SubscriptionPlan.objects.filter(name__iexact=target_plan_name).first()
+                    if not plan:
+                        plan = SubscriptionPlan.objects.filter(name__icontains=school.code).first()
+                    if not plan:
+                        plan = SubscriptionPlan.objects.create(
+                            name=f"{target_plan_name} #{school.id or school.code}",
+                            description=f"Subscription plan configured for {school.name} ({school.code})",
+                            pricing_model=pricing_model or "FLAT",
+                            monthly_price=monthly_p or 0,
+                            quarterly_price=quarterly_p or 0,
+                            half_yearly_price=half_yearly_p or 0,
+                            yearly_price=yearly_p or 0,
+                            gst_included=gst_inc if gst_inc is not None else False,
+                            gst_percentage=gst_pct if gst_pct is not None else 18.00,
+                            trial_available=True,
+                            trial_duration_days=14,
+                            is_active=True,
+                        )
+            else:
+                if pricing_model: plan.pricing_model = pricing_model
+                if monthly_p is not None: plan.monthly_price = monthly_p
+                if quarterly_p is not None: plan.quarterly_price = quarterly_p
+                if half_yearly_p is not None: plan.half_yearly_price = half_yearly_p
+                if yearly_p is not None: plan.yearly_price = yearly_p
+                if gst_inc is not None: plan.gst_included = gst_inc
+                if gst_pct is not None: plan.gst_percentage = gst_pct
+                plan.is_active = True
+                plan.save()
 
             # 🌟 Create SchoolSubscription with trial dates
             today = timezone.now().date()
@@ -268,6 +318,7 @@ class SchoolView(ModelViewSet):
                 status="TRIAL",
                 grace_period_days=3,
                 auto_lock_on_due=True,
+                price_snapshot={"enabled_tiers": enabled_tiers},
             )
 
         #  Clear cache after create
@@ -285,6 +336,18 @@ class SchoolView(ModelViewSet):
         yearly_p = serializer.validated_data.pop("yearly_price", None)
         gst_inc = serializer.validated_data.pop("gst_included", None)
         gst_pct = serializer.validated_data.pop("gst_percentage", None)
+        custom_plan_name = serializer.validated_data.pop("plan_name", None)
+        if custom_plan_name is None and "plan_name" in self.request.data:
+            custom_plan_name = self.request.data.get("plan_name")
+        enabled_tiers = serializer.validated_data.pop("enabled_tiers", None)
+        if enabled_tiers is None and "enabled_tiers" in self.request.data:
+            enabled_tiers = self.request.data.get("enabled_tiers")
+        if isinstance(enabled_tiers, str):
+            import json
+            try:
+                enabled_tiers = json.loads(enabled_tiers)
+            except Exception:
+                enabled_tiers = [x.strip() for x in enabled_tiers.split(",") if x.strip()]
 
         is_being_deactivated = serializer.validated_data.get("is_active") is False
         with transaction.atomic():
@@ -323,16 +386,95 @@ class SchoolView(ModelViewSet):
 
             # 🌟 Update or create school's Subscription and Plan if pricing/trial fields passed
             sub = SchoolSubscription.objects.filter(school=school).first()
-            if sub and sub.plan:
-                plan = sub.plan
-                if pricing_model: plan.pricing_model = pricing_model
-                if monthly_p is not None: plan.monthly_price = monthly_p
-                if quarterly_p is not None: plan.quarterly_price = quarterly_p
-                if half_yearly_p is not None: plan.half_yearly_price = half_yearly_p
-                if yearly_p is not None: plan.yearly_price = yearly_p
-                if gst_inc is not None: plan.gst_included = gst_inc
-                if gst_pct is not None: plan.gst_percentage = gst_pct
-                plan.save()
+            if not sub:
+                today = timezone.now().date()
+                sub = SchoolSubscription.objects.create(
+                    school=school,
+                    plan_type="TRIAL",
+                    billing_model=pricing_model or "FLAT",
+                    billing_cycle="MONTHLY",
+                    flat_amount=monthly_p if monthly_p is not None else 0,
+                    per_student_rate=monthly_p if monthly_p is not None else 0,
+                    trial_start_date=trial_start or today,
+                    trial_end_date=trial_end or (today + datetime.timedelta(days=14)),
+                    start_date=trial_start or today,
+                    due_date=trial_end or (today + datetime.timedelta(days=14)),
+                    status="TRIAL",
+                )
+
+            # custom_plan_name extracted above
+            default_plan_name = f"{school.name} ({school.code}) Plan"
+            target_plan_name = custom_plan_name.strip() if (custom_plan_name and custom_plan_name.strip()) else default_plan_name
+
+            plan = sub.plan
+            if not plan:
+                plan = SubscriptionPlan.objects.filter(name__iexact=target_plan_name).first()
+                if not plan:
+                    plan = SubscriptionPlan.objects.filter(name__icontains=f"({school.code})").first()
+
+            if not plan:
+                try:
+                    plan = SubscriptionPlan.objects.create(
+                        name=target_plan_name,
+                        description=f"Subscription plan configured for {school.name} ({school.code})",
+                        pricing_model=pricing_model or "FLAT",
+                        monthly_price=monthly_p if monthly_p is not None else 0,
+                        quarterly_price=quarterly_p if quarterly_p is not None else 0,
+                        half_yearly_price=half_yearly_p if half_yearly_p is not None else 0,
+                        yearly_price=yearly_p if yearly_p is not None else 0,
+                        gst_included=gst_inc if gst_inc is not None else False,
+                        gst_percentage=gst_pct if gst_pct is not None else 18.00,
+                        trial_available=True,
+                        trial_duration_days=14,
+                        is_active=True,
+                    )
+                except Exception:
+                    plan = SubscriptionPlan.objects.filter(name__iexact=target_plan_name).first()
+                    if not plan:
+                        plan = SubscriptionPlan.objects.filter(name__icontains=school.code).first()
+                    if not plan:
+                        plan = SubscriptionPlan.objects.create(
+                            name=f"{target_plan_name} #{school.id or school.code}",
+                            description=f"Subscription plan configured for {school.name} ({school.code})",
+                            pricing_model=pricing_model or "FLAT",
+                            monthly_price=monthly_p if monthly_p is not None else 0,
+                            quarterly_price=quarterly_p if quarterly_p is not None else 0,
+                            half_yearly_price=half_yearly_p if half_yearly_p is not None else 0,
+                            yearly_price=yearly_p if yearly_p is not None else 0,
+                            gst_included=gst_inc if gst_inc is not None else False,
+                            gst_percentage=gst_pct if gst_pct is not None else 18.00,
+                            trial_available=True,
+                            trial_duration_days=14,
+                            is_active=True,
+                        )
+
+            # If user specified a custom plan name, update plan name if unique
+            if custom_plan_name and custom_plan_name.strip():
+                desired_name = custom_plan_name.strip()
+                if plan.name != desired_name:
+                    clash = SubscriptionPlan.objects.filter(name__iexact=desired_name).exclude(id=plan.id).first()
+                    if not clash:
+                        plan.name = desired_name
+                    elif clash and sub.plan != clash:
+                        plan = clash
+
+            sub.plan = plan
+            sub.plan_name = plan.name
+
+            if pricing_model: plan.pricing_model = pricing_model
+            if monthly_p is not None: plan.monthly_price = monthly_p
+            if quarterly_p is not None: plan.quarterly_price = quarterly_p
+            if half_yearly_p is not None: plan.half_yearly_price = half_yearly_p
+            if yearly_p is not None: plan.yearly_price = yearly_p
+            if gst_inc is not None: plan.gst_included = gst_inc
+            if gst_pct is not None: plan.gst_percentage = gst_pct
+            plan.is_active = True
+            plan.save()
+
+            if enabled_tiers is not None:
+                snapshot = sub.price_snapshot or {}
+                snapshot["enabled_tiers"] = [str(x) for x in enabled_tiers]
+                sub.price_snapshot = snapshot
 
             if sub:
                 if trial_start: sub.trial_start_date = trial_start
@@ -1561,14 +1703,23 @@ class HolidayCalendarView(APIView):
             serializer = HolidaySerializer(events, many=True, context={"request": request})
             return Response({"message": f"Successfully seeded {count} public holidays.", "events": serializer.data}, status=status.HTTP_200_OK)
 
-        serializer = HolidaySerializer(data=request.data, context={"request": request})
+        payload = request.data.copy() if hasattr(request.data, "copy") else dict(request.data)
+        payload["target_audience"] = "ALL"
+
+        serializer = HolidaySerializer(data=payload, context={"request": request})
         if serializer.is_valid():
-            inst = serializer.save(school=school, created_by=user)
+            start_date = serializer.validated_data.get("start_date")
+            end_date = serializer.validated_data.get("end_date")
+            if end_date and start_date and end_date < start_date:
+                return Response(
+                    {"error": "End date cannot be earlier than start date."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            inst = serializer.save(school=school, created_by=user, target_audience="ALL")
 
             # Auto-create announcement notification for the scheduled event
             try:
-                target_aud = (request.data.get("target_audience") or "ALL").strip()
-                is_all = target_aud.upper() in ["ALL", "EVERYONE"]
                 event_ann = Announcement.objects.create(
                     school=school,
                     title=f"New {inst.event_type.title()}: {inst.name}",
@@ -1578,8 +1729,8 @@ class HolidayCalendarView(APIView):
                         + (f". Location: {inst.location}" if getattr(inst, "location", None) else "")
                         + (f". {inst.description}" if getattr(inst, "description", None) else "")
                     ).strip(),
-                    announcement_for=target_aud if not is_all else "ALL",
-                    is_everyone=is_all,
+                    announcement_for="ALL",
+                    is_everyone=True,
                     priority="IMPORTANT" if inst.is_holiday else "NORMAL",
                     created_by=user,
                     created_by_role=str(getattr(user, "role", "") or "MANAGEMENT").upper(),
@@ -1625,9 +1776,21 @@ class HolidayCalendarView(APIView):
         except Holiday.DoesNotExist:
             return Response({"error": "Event not found"}, status=status.HTTP_404_NOT_FOUND)
 
-        serializer = HolidaySerializer(event, data=request.data, partial=True, context={"request": request})
+        payload = request.data.copy() if hasattr(request.data, "copy") else dict(request.data)
+        if "target_audience" in payload:
+            payload["target_audience"] = "ALL"
+
+        serializer = HolidaySerializer(event, data=payload, partial=True, context={"request": request})
         if serializer.is_valid():
-            inst = serializer.save()
+            start_date = serializer.validated_data.get("start_date") or event.start_date
+            end_date = serializer.validated_data.get("end_date") or event.end_date
+            if end_date and start_date and end_date < start_date:
+                return Response(
+                    {"error": "End date cannot be earlier than start date."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            inst = serializer.save(target_audience="ALL")
             try:
                 from .activity_logger import log_activity
                 log_activity(
