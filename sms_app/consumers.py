@@ -371,7 +371,68 @@ class AnnouncementConsumer(AsyncWebsocketConsumer):
             })
         )
 
+    async def leave_update(self, event):
+        await self.send(
+            text_data=json.dumps({
+                "type": "leave_update",
+                "action": event.get("action"),
+                "leave_id": event.get("leave_id"),
+                "status": event.get("status"),
+                "staff_name": event.get("staff_name"),
+                "message": event.get("message"),
+            })
+        )
+
     @database_sync_to_async
     def get_school(self,user):
         
         return user.school
+
+class LeaveConsumer(AsyncWebsocketConsumer):
+    async def connect(self):
+        user = self.scope.get("user")
+        if not user or user.is_anonymous:
+            await self.close()
+            return
+        school = await self.get_school(user)
+        if not school:
+            await self.close()
+            return
+        self.school_group = f"school_{school.id}_leaves"
+        await self.channel_layer.group_add(self.school_group, self.channel_name)
+        self.all_group = f"school_{school.id}_choice_all"
+        await self.channel_layer.group_add(self.all_group, self.channel_name)
+        self.user_group = f"school_{school.id}_user_{user.id}_leaves"
+        await self.channel_layer.group_add(self.user_group, self.channel_name)
+        await self.accept()
+
+    async def disconnect(self, close_code):
+        if hasattr(self, "school_group"):
+            await self.channel_layer.group_discard(self.school_group, self.channel_name)
+        if hasattr(self, "all_group"):
+            await self.channel_layer.group_discard(self.all_group, self.channel_name)
+        if hasattr(self, "user_group"):
+            await self.channel_layer.group_discard(self.user_group, self.channel_name)
+
+    async def leave_update(self, event):
+        await self.send(
+            text_data=json.dumps({
+                "type": "leave_update",
+                "action": event.get("action"),
+                "leave_id": event.get("leave_id"),
+                "status": event.get("status"),
+                "staff_name": event.get("staff_name"),
+                "message": event.get("message"),
+            })
+        )
+
+    @database_sync_to_async
+    def get_school(self, user):
+        from .finance_views import get_finance_school
+        school = getattr(user, "school", None)
+        if not school:
+            from .models import Staff
+            st = Staff.objects.filter(user=user).select_related("school").first()
+            if st:
+                school = st.school
+        return school

@@ -1,11 +1,13 @@
 import ast
 import calendar
+import datetime
 import operator
 import re
 from datetime import date
 from decimal import Decimal
 from typing import Any
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
@@ -116,7 +118,7 @@ def extract_formula_dependencies(expr: str) -> set[str]:
         }
     except Exception:
         return {
-            tok.lower() for tok in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", str(expr))
+            tok.lower() for tok in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", expr)
         }
 
 
@@ -485,7 +487,6 @@ def calculate_absent_days(staff, effective_start, effective_end):
         staff=staff, attendance_date__range=(effective_start, effective_end)
     )
 
-    # Approved leave dates for this staff in this period
     approved_leave_dates = set(
         LeavePerDay.objects.filter(
             leave__staff=staff,
@@ -962,6 +963,17 @@ def generate_payslip(
             "amount": str(lop_amount),
         })
 
+    if absent_deduction_amount > Decimal("0.00"):
+        deductions_list.append({
+            "component_id": None,
+            "name": f"Absent Deduction ({float(absent_days)} Days)",
+            "type": "Deduction",
+            "calc_type": "Per Day",
+            "calc_base": f"{per_day_working} * {absent_days} absent days",
+            "value": str(per_day_working),
+            "amount": str(absent_deduction_amount),
+        })
+
     # Calculate Totals
     gross_earnings = sum(
         (Decimal(e["amount"]) for e in earnings_list), Decimal("0.00")
@@ -1014,13 +1026,16 @@ def generate_payslip(
             "salary_month": f"{year}-{month:02d}",
             "working_days": total_working_days,
             "eligible_working_days": eligible_working_days,
+            "effective_start": effective_start.strftime("%Y-%m-%d"),
+            "effective_end": effective_end.strftime("%Y-%m-%d"),
+            "absent_days": float(absent_days),
+            "absent_deduction_amount": str(absent_deduction_amount),
             "present_days": float(full_day_present + (half_days * Decimal("0.5"))),
             "paid_leaves": float(paid_leaves),
             "unpaid_leaves": float(unpaid_leaves),
             "lwp_days": float(unpaid_leaves),
             "per_day_salary": str(unpaid_daily_wage),
             "lwp_deduction": str(lop_amount),
-            "absent_days": float(absent_days),
             "payable_days": float(payable_days),
             "basic_salary": str(base_salary_val),
             "gross_earnings": str(gross_earnings),

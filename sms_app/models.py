@@ -1664,12 +1664,13 @@ class LeaveRequest(models.Model):
             elif self.half_day_session and not self.half_day_period:
                 self.half_day_period = self.half_day_session
         else:
-            if self.start_date and self.end_date:
-                diff = (self.end_date - self.start_date).days + 1
-                if diff > 0:
-                    self.total_days = Decimal(str(diff))
-                    self.days_count = Decimal(str(diff))
-            elif not self.days_count and self.total_days:
+            if not self.total_days or self.total_days <= Decimal("0.0"):
+                if self.start_date and self.end_date:
+                    diff = (self.end_date - self.start_date).days + 1
+                    if diff > 0:
+                        self.total_days = Decimal(str(diff))
+                        self.days_count = Decimal(str(diff))
+            elif not self.days_count:
                 self.days_count = self.total_days
 
         if self.dynamic_leave_type and not self.leave_type:
@@ -2463,6 +2464,9 @@ class StaffSalaryPayment(models.Model):
     PAYMENT_MODE = (
         ("online", "Online"),
         ("offline", "Offline"),
+        ("cash", "Cash"),
+        ("cheque", "Cheque"),
+        ("bank_transfer", "Bank Transfer"),
     )
 
     PAYMENT_STATUS = (
@@ -2543,7 +2547,7 @@ class StaffSalaryPayment(models.Model):
     @property
     def component_breakdown(self):
         try:
-            parts = str(self.salary_month).strip().split('-')
+            parts = (self.salary_month or "").strip().split('-')
             if len(parts) == 2:
                 year, month = int(parts[0]), int(parts[1])
                 from datetime import date
